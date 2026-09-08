@@ -259,21 +259,60 @@ export class WebDAVProvider implements CloudProvider {
 
 		try {
 			const fileBuffer = await fsp.readFile(filePath);
-			const key = `${this.config.uploadPath}/${Date.now()}-${filename}`;
-			const uploadUrl = `${this.config.serverUrl}${key}`;
+			
+			let path = this.config.uploadPath || '';
+			if (path && !path.startsWith('/')) path = '/' + path;
+			if (path && path.endsWith('/')) path = path.slice(0, -1);
+			
+			const key = `${path}/${Date.now()}-${filename}`;
+			
+			let server = this.config.serverUrl;
+			if (server.endsWith('/')) server = server.slice(0, -1);
+			
+			const uploadUrl = `${server}${key}`;
 
 			const auth = btoa(`${this.config.username}:${this.config.password}`);
 
-			const response = await window.fetch(uploadUrl, {
+			let response = await requestUrl({
+				url: uploadUrl,
 				method: 'PUT',
 				headers: {
 					'Authorization': `Basic ${auth}`,
 					'Content-Type': mimeType,
 				},
-				body: fileBuffer,
+				body: new Uint8Array(fileBuffer).buffer as ArrayBuffer,
+				throw: false,
 			});
 
-			if (!response.ok && response.status !== 201 && response.status !== 204) {
+			// If the server returns 409 Conflict, the target directory likely doesn't exist.
+			// Try creating the directory using MKCOL and then retry the PUT.
+			if (response.status === 409 && path) {
+				await requestUrl({
+					url: `${server}${path}`,
+					method: 'MKCOL',
+					headers: {
+						'Authorization': `Basic ${auth}`,
+					},
+					throw: false,
+				});
+				
+				// Retry the original PUT request
+				response = await requestUrl({
+					url: uploadUrl,
+					method: 'PUT',
+					headers: {
+						'Authorization': `Basic ${auth}`,
+						'Content-Type': mimeType,
+					},
+					body: new Uint8Array(fileBuffer).buffer as ArrayBuffer,
+					throw: false,
+				});
+			}
+
+			if (response.status !== 200 && response.status !== 201 && response.status !== 204) {
+				if (response.status === 409) {
+					return { success: false, error: `WebDAV upload failed (409 Conflict). Ensure the upload path '${this.config.uploadPath}' exists on your server.` };
+				}
 				return { success: false, error: `WebDAV upload failed (${response.status})` };
 			}
 
@@ -297,12 +336,14 @@ export class WebDAVProvider implements CloudProvider {
 		}
 		try {
 			const auth = btoa(`${this.config.username}:${this.config.password}`);
-			const response = await window.fetch(this.config.serverUrl, {
+			const response = await requestUrl({
+				url: this.config.serverUrl,
 				method: 'PROPFIND',
 				headers: {
 					'Authorization': `Basic ${auth}`,
 					'Depth': '0',
 				},
+				throw: false,
 			});
 			return response.status === 207 || response.status === 200;
 		} catch {

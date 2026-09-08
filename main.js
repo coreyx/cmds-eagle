@@ -1580,18 +1580,51 @@ var WebDAVProvider = class {
     }
     try {
       const fileBuffer = await fsp.readFile(filePath);
-      const key = `${this.config.uploadPath}/${Date.now()}-${filename}`;
-      const uploadUrl = `${this.config.serverUrl}${key}`;
+      let path = this.config.uploadPath || "";
+      if (path && !path.startsWith("/"))
+        path = "/" + path;
+      if (path && path.endsWith("/"))
+        path = path.slice(0, -1);
+      const key = `${path}/${Date.now()}-${filename}`;
+      let server = this.config.serverUrl;
+      if (server.endsWith("/"))
+        server = server.slice(0, -1);
+      const uploadUrl = `${server}${key}`;
       const auth = btoa(`${this.config.username}:${this.config.password}`);
-      const response = await window.fetch(uploadUrl, {
+      let response = await (0, import_obsidian4.requestUrl)({
+        url: uploadUrl,
         method: "PUT",
         headers: {
           "Authorization": `Basic ${auth}`,
           "Content-Type": mimeType
         },
-        body: fileBuffer
+        body: new Uint8Array(fileBuffer).buffer,
+        throw: false
       });
-      if (!response.ok && response.status !== 201 && response.status !== 204) {
+      if (response.status === 409 && path) {
+        await (0, import_obsidian4.requestUrl)({
+          url: `${server}${path}`,
+          method: "MKCOL",
+          headers: {
+            "Authorization": `Basic ${auth}`
+          },
+          throw: false
+        });
+        response = await (0, import_obsidian4.requestUrl)({
+          url: uploadUrl,
+          method: "PUT",
+          headers: {
+            "Authorization": `Basic ${auth}`,
+            "Content-Type": mimeType
+          },
+          body: new Uint8Array(fileBuffer).buffer,
+          throw: false
+        });
+      }
+      if (response.status !== 200 && response.status !== 201 && response.status !== 204) {
+        if (response.status === 409) {
+          return { success: false, error: `WebDAV upload failed (409 Conflict). Ensure the upload path '${this.config.uploadPath}' exists on your server.` };
+        }
         return { success: false, error: `WebDAV upload failed (${response.status})` };
       }
       return {
@@ -1613,12 +1646,14 @@ var WebDAVProvider = class {
     }
     try {
       const auth = btoa(`${this.config.username}:${this.config.password}`);
-      const response = await window.fetch(this.config.serverUrl, {
+      const response = await (0, import_obsidian4.requestUrl)({
+        url: this.config.serverUrl,
         method: "PROPFIND",
         headers: {
           "Authorization": `Basic ${auth}`,
           "Depth": "0"
-        }
+        },
+        throw: false
       });
       return response.status === 207 || response.status === 200;
     } catch (e) {
@@ -2595,6 +2630,9 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       } else {
         targetPath = filename;
       }
+      targetPath = targetPath.replace(/\/+/g, "/");
+      if (targetPath.startsWith("/"))
+        targetPath = targetPath.substring(1);
       const folderPath = targetPath.substring(0, targetPath.lastIndexOf("/"));
       if (folderPath) {
         const folderExists = await this.app.vault.adapter.exists(folderPath);

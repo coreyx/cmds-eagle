@@ -114,6 +114,21 @@ Configure your preferred cloud provider and search defaults.
 | `Convert all images in note to cloud URLs` | Batch convert local images |
 | `Convert cross-platform image paths in current note` | Convert Mac/Windows paths |
 
+## Development & Testing
+
+When running `npm run build` or `npm run dev`, the plugin is compiled into the root of this repository. The required files are:
+- `main.js` (the compiled code)
+- `manifest.json` (metadata)
+- `styles.css` (styling, if present)
+
+### How to install and test your local build
+
+1. Find your Obsidian vault's plugins folder, usually at `<YourVault>/.obsidian/plugins/` (the `.obsidian` folder may be hidden by default).
+2. Create a new directory inside it called `cmds-eagle`.
+3. Copy `main.js`, `manifest.json`, and `styles.css` from your development directory into that new folder. *(Note: For a faster development loop, many developers create a symbolic link from their vault's plugin folder to this repository, or develop directly inside the vault).*
+4. In Obsidian, go to **Settings → Community plugins** and click the **Reload plugins** button (refresh icon).
+5. Find **CMDS Eagle** in the list and toggle it on. 
+
 ## License
 
 MIT

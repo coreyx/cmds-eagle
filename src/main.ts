@@ -984,6 +984,10 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 				targetPath = filename;
 			}
 
+			// Clean up any double slashes and strip leading slash if present
+			targetPath = targetPath.replace(/\/+/g, '/');
+			if (targetPath.startsWith('/')) targetPath = targetPath.substring(1);
+
 			const folderPath = targetPath.substring(0, targetPath.lastIndexOf('/'));
 			if (folderPath) {
 				const folderExists = await this.app.vault.adapter.exists(folderPath);
