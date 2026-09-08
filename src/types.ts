@@ -187,6 +187,8 @@ export interface CMDSPACEEagleSettings {
 	defaultFolderName: string;
 	enableDefaultTags: boolean;
 	defaultTags: string;
+	enableBacklinks: boolean;
+	backlinkDestination: 'url' | 'note' | 'both';
 	r2WorkerUrl: string;
 	r2ApiKey: string;
 	r2PublicUrl: string;
@@ -227,6 +229,8 @@ export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
 	defaultFolderName: '',
 	enableDefaultTags: false,
 	defaultTags: '',
+	enableBacklinks: false,
+	backlinkDestination: 'both',
 	r2WorkerUrl: '',
 	r2ApiKey: '',
 	r2PublicUrl: '',

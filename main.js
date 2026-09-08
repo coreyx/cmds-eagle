@@ -60,6 +60,8 @@ var init_types = __esm({
       defaultFolderName: "",
       enableDefaultTags: false,
       defaultTags: "",
+      enableBacklinks: false,
+      backlinkDestination: "both",
       r2WorkerUrl: "",
       r2ApiKey: "",
       r2PublicUrl: "",
@@ -1052,6 +1054,18 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian3.PluginSettingTab {
     if (this.plugin.settings.enableDefaultTags) {
       new import_obsidian3.Setting(containerEl).setName("Default Tags").setDesc("Comma-separated list of tags to add (e.g. obsidian, reference)").addText((text) => text.setPlaceholder("obsidian, reference").setValue(this.plugin.settings.defaultTags).onChange(async (value) => {
         this.plugin.settings.defaultTags = value;
+        await this.plugin.saveSettings();
+      }));
+    }
+    new import_obsidian3.Setting(containerEl).setName("Obsidian Backlinks").setHeading();
+    new import_obsidian3.Setting(containerEl).setName("Add Obsidian backlink to new Eagle attachments").setDesc("Automatically generate an Advanced URI backlink to the current note when adding images to Eagle.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableBacklinks).onChange(async (value) => {
+      this.plugin.settings.enableBacklinks = value;
+      await this.plugin.saveSettings();
+      this.display();
+    }));
+    if (this.plugin.settings.enableBacklinks) {
+      new import_obsidian3.Setting(containerEl).setName("Backlink Destination").setDesc("Where should the backlink be saved in Eagle?").addDropdown((dropdown) => dropdown.addOption("url", "URL/Link Field").addOption("note", "Note/Annotation Field").addOption("both", "Both").setValue(this.plugin.settings.backlinkDestination).onChange(async (value) => {
+        this.plugin.settings.backlinkDestination = value;
         await this.plugin.saveSettings();
       }));
     }
@@ -2253,11 +2267,13 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       return;
     }
     const name = `Captured from Obsidian - ${new Date().toISOString()}`;
+    const backlinkData = await this.getEagleBacklinkPayload();
     const success = await this.api.addFromUrl({
       url: clipboardText,
       name,
       tags: this.getDefaultTags(),
-      folderId: this.settings.enableDefaultFolder ? this.settings.defaultFolder || void 0 : void 0
+      folderId: this.settings.enableDefaultFolder ? this.settings.defaultFolder || void 0 : void 0,
+      ...backlinkData
     });
     if (success) {
       new import_obsidian5.Notice("URL captured to Eagle");
@@ -2906,11 +2922,13 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       }
       const absolutePath = this.getAbsolutePath(file.path);
       const filenameWithoutExt = file.basename;
+      const backlinkData = await this.getEagleBacklinkPayload();
       const result = await this.api.addFromPath({
         path: absolutePath,
         name: filenameWithoutExt,
         tags: this.getDefaultTags(),
-        folderId: this.settings.enableDefaultFolder ? this.settings.defaultFolder || void 0 : void 0
+        folderId: this.settings.enableDefaultFolder ? this.settings.defaultFolder || void 0 : void 0,
+        ...backlinkData
       });
       if (!result.success || !result.itemId) {
         throw new Error("Failed to add image to Eagle");
@@ -3186,11 +3204,13 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
         const tempPath = await this.saveToTempLocation(file);
         let eagleNote = "";
         if (this.settings.excalidrawImportToEagle) {
+          const backlinkData = await this.getEagleBacklinkPayload();
           const added = await this.api.addFromPath({
             path: tempPath,
             name: file.name.replace(/\.[^.]+$/, ""),
             tags: this.getDefaultTags(),
-            folderId: this.settings.enableDefaultFolder ? this.settings.defaultFolder || void 0 : void 0
+            folderId: this.settings.enableDefaultFolder ? this.settings.defaultFolder || void 0 : void 0,
+            ...backlinkData
           });
           if (added.success)
             eagleNote = " + Eagle";
@@ -3317,6 +3337,45 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     const parsedTags = this.settings.defaultTags.split(",").map((tag) => tag.trim()).filter((tag) => tag.length > 0);
     return parsedTags.length > 0 ? parsedTags : void 0;
   }
+  async getEagleBacklinkPayload() {
+    var _a, _b;
+    if (!this.settings.enableBacklinks) {
+      return {};
+    }
+    const activeFile = this.app.workspace.getActiveFile();
+    if (!activeFile) {
+      return {};
+    }
+    const vaultName = encodeURIComponent(this.app.vault.getName());
+    const filePath = encodeURIComponent(activeFile.path);
+    const basename = activeFile.basename;
+    let uid = "";
+    const cache = this.app.metadataCache.getFileCache(activeFile);
+    if ((_a = cache == null ? void 0 : cache.frontmatter) == null ? void 0 : _a.uid) {
+      uid = String(cache.frontmatter.uid);
+    } else if ((_b = cache == null ? void 0 : cache.frontmatter) == null ? void 0 : _b.id) {
+      uid = String(cache.frontmatter.id);
+    } else {
+      uid = crypto.randomUUID();
+      try {
+        await this.app.fileManager.processFrontMatter(activeFile, (frontmatter) => {
+          frontmatter.uid = uid;
+        });
+      } catch (err) {
+        console.error("[CMDS Eagle] Failed to write frontmatter uid:", err);
+      }
+    }
+    const advancedUri = `obsidian://adv-uri?vault=${vaultName}&uid=${uid}&filepath=${filePath}`;
+    const result = {};
+    const dest = this.settings.backlinkDestination;
+    if (dest === "url" || dest === "both") {
+      result.website = advancedUri;
+    }
+    if (dest === "note" || dest === "both") {
+      result.annotation = `Linked From Obsidian: [${basename}](${advancedUri})`;
+    }
+    return result;
+  }
   async uploadImageToEagle(file) {
     const tempPath = await this.saveToTempLocation(file);
     const connected = await this.api.isConnected();
@@ -3324,11 +3383,13 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       throw new Error("Eagle is not running");
     }
     const filenameWithoutExt = file.name.replace(/\.[^.]+$/, "");
+    const backlinkData = await this.getEagleBacklinkPayload();
     const result = await this.api.addFromPath({
       path: tempPath,
       name: filenameWithoutExt,
       tags: this.getDefaultTags(),
-      folderId: this.settings.enableDefaultFolder ? this.settings.defaultFolder || void 0 : void 0
+      folderId: this.settings.enableDefaultFolder ? this.settings.defaultFolder || void 0 : void 0,
+      ...backlinkData
     });
     if (!result.success || !result.itemId) {
       throw new Error("Failed to add image to Eagle");

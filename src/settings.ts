@@ -163,6 +163,34 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 					}));
 		}
 
+		new Setting(containerEl).setName('Obsidian Backlinks').setHeading();
+
+		new Setting(containerEl)
+			.setName('Add Obsidian backlink to new Eagle attachments')
+			.setDesc('Automatically generate an Advanced URI backlink to the current note when adding images to Eagle.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.enableBacklinks)
+				.onChange(async (value) => {
+					this.plugin.settings.enableBacklinks = value;
+					await this.plugin.saveSettings();
+					this.display();
+				}));
+
+		if (this.plugin.settings.enableBacklinks) {
+			new Setting(containerEl)
+				.setName('Backlink Destination')
+				.setDesc('Where should the backlink be saved in Eagle?')
+				.addDropdown(dropdown => dropdown
+					.addOption('url', 'URL/Link Field')
+					.addOption('note', 'Note/Annotation Field')
+					.addOption('both', 'Both')
+					.setValue(this.plugin.settings.backlinkDestination)
+					.onChange(async (value: 'url' | 'note' | 'both') => {
+						this.plugin.settings.backlinkDestination = value;
+						await this.plugin.saveSettings();
+					}));
+		}
+
 		new Setting(containerEl).setName('Excalidraw integration').setHeading();
 
 		new Setting(containerEl)
