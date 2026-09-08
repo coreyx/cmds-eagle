@@ -7,6 +7,9 @@ var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+};
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
@@ -21,421 +24,115 @@ var __copyProps = (to, from, except, desc) => {
 };
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// src/main.ts
-var main_exports = {};
-__export(main_exports, {
-  default: () => CMDSPACELinkEagle
-});
-module.exports = __toCommonJS(main_exports);
-var import_obsidian5 = require("obsidian");
-
 // src/types.ts
-var SUPPORTED_IMAGE_EXTENSIONS = [
-  "jpg",
-  "jpeg",
-  "png",
-  "gif",
-  "webp",
-  "bmp",
-  "svg",
-  "tiff",
-  "tif",
-  "heic",
-  "heif",
-  "avif",
-  "ico"
-];
-var SUPPORTED_VIDEO_EXTENSIONS = ["mp4", "mov", "webm", "avi", "mkv"];
-var SUPPORTED_DOCUMENT_EXTENSIONS = ["pdf", "psd", "ai", "sketch"];
-var DEFAULT_SETTINGS = {
-  eagleApiBaseUrl: "http://localhost:41595",
-  connectionTimeout: 5e3,
-  thumbnailCacheTTL: 36e5,
-  autoSyncOnOpen: false,
-  tagPrefix: "",
-  tagNormalization: "lowercase",
-  linkFormat: "markdown",
-  insertThumbnail: true,
-  thumbnailSize: "medium",
-  defaultFolder: "",
-  r2WorkerUrl: "",
-  r2ApiKey: "",
-  r2PublicUrl: "",
-  imageDisplayMode: "cloud",
-  embedImageInCard: true,
-  insertAsEmbed: true,
-  imagePasteBehavior: "ask",
-  excalidrawIntegration: true,
-  excalidrawImportToEagle: true,
-  activeCloudProvider: "imghippo",
-  searchScope: ["name", "tags"],
-  searchFileTypes: [...SUPPORTED_IMAGE_EXTENSIONS],
-  cloudProviders: {
-    r2: {
-      type: "r2",
-      enabled: false,
-      name: "Cloudflare R2",
-      workerUrl: "",
-      apiKey: "",
-      publicUrl: ""
-    },
-    s3: {
-      type: "s3",
-      enabled: false,
-      name: "Amazon S3",
-      endpoint: "",
-      region: "us-east-1",
-      bucket: "",
-      accessKeyId: "",
-      secretAccessKey: "",
-      publicUrl: ""
-    },
-    webdav: {
-      type: "webdav",
-      enabled: false,
-      name: "WebDAV (Synology/NAS)",
-      serverUrl: "",
-      username: "",
-      password: "",
-      uploadPath: "/eagle-uploads",
-      publicUrl: ""
-    },
-    imghippo: {
-      type: "imghippo",
-      enabled: false,
-      name: "ImgHippo",
-      apiKey: ""
-    },
-    custom: {
-      type: "custom",
-      enabled: false,
-      name: "Custom Server",
-      uploadUrl: "",
-      headers: {},
-      publicUrl: ""
-    }
-  },
-  enableCrossPlatform: false,
-  autoConvertCrossPlatformPaths: false,
-  crossPlatformConversionMode: "modify-source",
-  computers: []
-};
-
-// src/api.ts
-var import_obsidian = require("obsidian");
+var SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS, SUPPORTED_DOCUMENT_EXTENSIONS, DEFAULT_SETTINGS;
+var init_types = __esm({
+  "src/types.ts"() {
+    SUPPORTED_IMAGE_EXTENSIONS = [
+      "jpg",
+      "jpeg",
+      "png",
+      "gif",
+      "webp",
+      "bmp",
+      "svg",
+      "tiff",
+      "tif",
+      "heic",
+      "heif",
+      "avif",
+      "ico"
+    ];
+    SUPPORTED_VIDEO_EXTENSIONS = ["mp4", "mov", "webm", "avi", "mkv"];
+    SUPPORTED_DOCUMENT_EXTENSIONS = ["pdf", "psd", "ai", "sketch"];
+    DEFAULT_SETTINGS = {
+      eagleApiBaseUrl: "http://localhost:41595",
+      connectionTimeout: 5e3,
+      thumbnailCacheTTL: 36e5,
+      autoSyncOnOpen: false,
+      tagPrefix: "",
+      tagNormalization: "lowercase",
+      linkFormat: "markdown",
+      insertThumbnail: true,
+      thumbnailSize: "medium",
+      enableDefaultFolder: false,
+      defaultFolder: "",
+      defaultFolderName: "",
+      r2WorkerUrl: "",
+      r2ApiKey: "",
+      r2PublicUrl: "",
+      imageDisplayMode: "cloud",
+      embedImageInCard: true,
+      insertAsEmbed: true,
+      imagePasteBehavior: "ask",
+      excalidrawIntegration: true,
+      excalidrawImportToEagle: true,
+      activeCloudProvider: "imghippo",
+      searchScope: ["name", "tags"],
+      searchFileTypes: [...SUPPORTED_IMAGE_EXTENSIONS],
+      cloudProviders: {
+        r2: {
+          type: "r2",
+          enabled: false,
+          name: "Cloudflare R2",
+          workerUrl: "",
+          apiKey: "",
+          publicUrl: ""
+        },
+        s3: {
+          type: "s3",
+          enabled: false,
+          name: "Amazon S3",
+          endpoint: "",
+          region: "us-east-1",
+          bucket: "",
+          accessKeyId: "",
+          secretAccessKey: "",
+          publicUrl: ""
+        },
+        webdav: {
+          type: "webdav",
+          enabled: false,
+          name: "WebDAV (Synology/NAS)",
+          serverUrl: "",
+          username: "",
+          password: "",
+          uploadPath: "/eagle-uploads",
+          publicUrl: ""
+        },
+        imghippo: {
+          type: "imghippo",
+          enabled: false,
+          name: "ImgHippo",
+          apiKey: ""
+        },
+        custom: {
+          type: "custom",
+          enabled: false,
+          name: "Custom Server",
+          uploadUrl: "",
+          headers: {},
+          publicUrl: ""
+        }
+      },
+      enableCrossPlatform: false,
+      autoConvertCrossPlatformPaths: false,
+      crossPlatformConversionMode: "modify-source",
+      computers: []
+    };
+  }
+});
 
 // src/fs-utils.ts
-var import_fs = require("fs");
-var fsp = import_fs.promises;
+var import_fs, fsp;
+var init_fs_utils = __esm({
+  "src/fs-utils.ts"() {
+    import_fs = require("fs");
+    fsp = import_fs.promises;
+  }
+});
 
 // src/api.ts
-var EagleApiService = class {
-  constructor(settings) {
-    this.baseUrl = settings.eagleApiBaseUrl;
-    this.timeout = settings.connectionTimeout;
-    this.r2WorkerUrl = settings.r2WorkerUrl;
-    this.r2ApiKey = settings.r2ApiKey;
-    this.r2PublicUrl = settings.r2PublicUrl;
-  }
-  updateSettings(settings) {
-    this.baseUrl = settings.eagleApiBaseUrl;
-    this.timeout = settings.connectionTimeout;
-    this.r2WorkerUrl = settings.r2WorkerUrl;
-    this.r2ApiKey = settings.r2ApiKey;
-    this.r2PublicUrl = settings.r2PublicUrl;
-  }
-  async isConnected() {
-    try {
-      const info = await this.getApplicationInfo();
-      return info !== null;
-    } catch (e) {
-      return false;
-    }
-  }
-  async getApplicationInfo() {
-    var _a;
-    try {
-      const response = await this.get("/api/application/info");
-      return (_a = response.data) != null ? _a : null;
-    } catch (e) {
-      return null;
-    }
-  }
-  async listItems(options) {
-    var _a, _b, _c;
-    const params = new URLSearchParams();
-    if (options == null ? void 0 : options.keyword)
-      params.append("keyword", options.keyword);
-    if ((_a = options == null ? void 0 : options.tags) == null ? void 0 : _a.length)
-      params.append("tags", options.tags.join(","));
-    if ((_b = options == null ? void 0 : options.folders) == null ? void 0 : _b.length)
-      params.append("folders", options.folders.join(","));
-    if (options == null ? void 0 : options.ext)
-      params.append("ext", options.ext);
-    if (options == null ? void 0 : options.limit)
-      params.append("limit", options.limit.toString());
-    if (options == null ? void 0 : options.offset)
-      params.append("offset", options.offset.toString());
-    if (options == null ? void 0 : options.orderBy)
-      params.append("orderBy", options.orderBy);
-    const queryString = params.toString();
-    const endpoint = queryString ? `/api/item/list?${queryString}` : "/api/item/list";
-    const response = await this.get(endpoint);
-    return (_c = response.data) != null ? _c : [];
-  }
-  async getItemInfo(id) {
-    var _a;
-    try {
-      const response = await this.get(`/api/item/info?id=${id}`);
-      return (_a = response.data) != null ? _a : null;
-    } catch (e) {
-      return null;
-    }
-  }
-  async getThumbnailPath(id) {
-    var _a;
-    try {
-      const response = await this.get(`/api/item/thumbnail?id=${id}`);
-      return (_a = response.data) != null ? _a : null;
-    } catch (e) {
-      return null;
-    }
-  }
-  async updateItem(id, updates) {
-    try {
-      const response = await this.post("/api/item/update", {
-        id,
-        ...updates
-      });
-      return response.status === "success";
-    } catch (e) {
-      return false;
-    }
-  }
-  async addFromUrl(options) {
-    try {
-      const response = await this.post("/api/item/addFromURL", options);
-      return response.status === "success";
-    } catch (e) {
-      return false;
-    }
-  }
-  async addFromPath(options) {
-    try {
-      const response = await this.post("/api/item/addFromPath", options);
-      if (response.status === "success" && response.data) {
-        return { success: true, itemId: response.data };
-      }
-      return { success: false };
-    } catch (e) {
-      return { success: false };
-    }
-  }
-  async listFolders() {
-    var _a;
-    try {
-      const response = await this.get("/api/folder/list");
-      return (_a = response.data) != null ? _a : [];
-    } catch (e) {
-      return [];
-    }
-  }
-  async getLibraryInfo() {
-    var _a;
-    try {
-      const response = await this.get("/api/library/info");
-      return (_a = response.data) != null ? _a : null;
-    } catch (e) {
-      return null;
-    }
-  }
-  async getLibraryPath() {
-    var _a;
-    try {
-      const response = await (0, import_obsidian.requestUrl)({
-        url: `${this.baseUrl}/api/library/info`,
-        method: "GET"
-      });
-      const json = response.json;
-      if ((json == null ? void 0 : json.status) === "success" && (json == null ? void 0 : json.data)) {
-        const data = json.data;
-        if (typeof data.library === "string") {
-          return data.library;
-        }
-        if (typeof ((_a = data.library) == null ? void 0 : _a.path) === "string") {
-          return data.library.path;
-        }
-        if (typeof data.path === "string") {
-          return data.path;
-        }
-      }
-      return null;
-    } catch (e) {
-      console.error("[CMDS Eagle] getLibraryPath error:", e);
-      return null;
-    }
-  }
-  async getLibraryName() {
-    var _a;
-    const path = await this.getLibraryPath();
-    if (!path)
-      return null;
-    const match = path.match(/([^/]+)\.library\/?$/i);
-    if (match) {
-      return match[1];
-    }
-    return ((_a = path.split("/").pop()) == null ? void 0 : _a.replace(".library", "")) || null;
-  }
-  async refreshThumbnail(id) {
-    try {
-      const response = await this.post("/api/item/refreshThumbnail", { id });
-      return response.status === "success";
-    } catch (e) {
-      return false;
-    }
-  }
-  async testR2Connection() {
-    if (!this.r2WorkerUrl || !this.r2ApiKey) {
-      return false;
-    }
-    try {
-      const response = await (0, import_obsidian.requestUrl)({
-        url: `${this.r2WorkerUrl}/health`,
-        method: "GET",
-        headers: {
-          "Authorization": `Bearer ${this.r2ApiKey}`
-        }
-      });
-      return response.status === 200;
-    } catch (e) {
-      return false;
-    }
-  }
-  async getOriginalFilePath(item) {
-    const thumbnailPath = await this.getThumbnailPath(item.id);
-    if (thumbnailPath) {
-      console.log("[CMDS Eagle] thumbnailPath:", thumbnailPath);
-      const decodedPath = this.safeDecodeUri(thumbnailPath);
-      const folderPath = decodedPath.substring(0, decodedPath.lastIndexOf("/"));
-      const originalPath = `${folderPath}/${item.name}.${item.ext}`;
-      console.log("[CMDS Eagle] originalPath:", originalPath);
-      return originalPath;
-    }
-    const libraryPath = await this.getLibraryPath();
-    if (libraryPath && typeof libraryPath === "string") {
-      const originalPath = `${libraryPath}/images/${item.id}.info/${item.name}.${item.ext}`;
-      console.log("[CMDS Eagle] originalPath (from library):", originalPath);
-      return originalPath;
-    }
-    console.log("[CMDS Eagle] Could not get file path for item:", item.id);
-    return null;
-  }
-  safeDecodeUri(str) {
-    try {
-      return decodeURIComponent(str);
-    } catch (e) {
-      return str;
-    }
-  }
-  async uploadToR2(item) {
-    if (!this.r2WorkerUrl || !this.r2ApiKey || !this.r2PublicUrl) {
-      return { success: false, error: "R2 settings not configured" };
-    }
-    const existingKey = getR2KeyFromItem(item);
-    if (existingKey) {
-      return {
-        success: true,
-        key: existingKey,
-        filename: item.name
-      };
-    }
-    try {
-      const filePath = await this.getOriginalFilePath(item);
-      if (!filePath) {
-        return { success: false, error: "Could not get file path from Eagle" };
-      }
-      let fileBuffer;
-      try {
-        fileBuffer = await fsp.readFile(filePath);
-      } catch (e) {
-        return {
-          success: false,
-          error: `Could not read file: ${filePath}`
-        };
-      }
-      const mimeType = getMimeType(item.ext);
-      const blob = new Blob([fileBuffer], { type: mimeType });
-      const filename = `${item.name}.${item.ext}`;
-      const formData = new FormData();
-      formData.append("file", blob, filename);
-      formData.append("filename", filename);
-      formData.append("content_type", mimeType);
-      formData.append("eagle_id", item.id);
-      const response = await window.fetch(`${this.r2WorkerUrl}/upload`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${this.r2ApiKey}`
-        },
-        body: formData
-      });
-      if (!response.ok) {
-        const errorText = await response.text();
-        return { success: false, error: `Upload failed (${response.status}): ${errorText}` };
-      }
-      const result = await response.json();
-      const r2Tag = `r2:${result.key}`;
-      const newTags = [...item.tags];
-      if (!newTags.includes(r2Tag)) {
-        newTags.push(r2Tag);
-      }
-      if (!newTags.includes("r2-cloud")) {
-        newTags.push("r2-cloud");
-      }
-      await this.updateItem(item.id, { tags: newTags });
-      return {
-        success: true,
-        key: result.key,
-        filename: result.filename
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "Unknown error"
-      };
-    }
-  }
-  getCloudUrl(item) {
-    const key = getR2KeyFromItem(item);
-    if (!key || !this.r2PublicUrl) {
-      return null;
-    }
-    return `${this.r2PublicUrl}/${key}`;
-  }
-  getLocalThumbnailUrl(id) {
-    return `${this.baseUrl}/api/item/thumbnail?id=${id}`;
-  }
-  async get(endpoint) {
-    const response = await (0, import_obsidian.requestUrl)({
-      url: `${this.baseUrl}${endpoint}`,
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json"
-      }
-    });
-    return response.json;
-  }
-  async post(endpoint, body) {
-    const response = await (0, import_obsidian.requestUrl)({
-      url: `${this.baseUrl}${endpoint}`,
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(body)
-    });
-    return response.json;
-  }
-};
 function buildEagleItemUrl(itemId) {
   return `eagle://item/${itemId}`;
 }
@@ -470,362 +167,687 @@ function getR2KeyFromItem(item) {
 function hasR2Upload(item) {
   return item.tags.some((t) => t.startsWith("r2:"));
 }
-var MIME_TYPES = {
-  "jpg": "image/jpeg",
-  "jpeg": "image/jpeg",
-  "png": "image/png",
-  "gif": "image/gif",
-  "webp": "image/webp",
-  "svg": "image/svg+xml",
-  "bmp": "image/bmp",
-  "ico": "image/x-icon",
-  "tiff": "image/tiff",
-  "tif": "image/tiff",
-  "heic": "image/heic",
-  "heif": "image/heif",
-  "avif": "image/avif"
-};
 function getMimeType(ext) {
   return MIME_TYPES[ext.toLowerCase()] || "application/octet-stream";
 }
+var import_obsidian, EagleApiService, MIME_TYPES;
+var init_api = __esm({
+  "src/api.ts"() {
+    import_obsidian = require("obsidian");
+    init_fs_utils();
+    EagleApiService = class {
+      constructor(settings) {
+        this.baseUrl = settings.eagleApiBaseUrl;
+        this.timeout = settings.connectionTimeout;
+        this.r2WorkerUrl = settings.r2WorkerUrl;
+        this.r2ApiKey = settings.r2ApiKey;
+        this.r2PublicUrl = settings.r2PublicUrl;
+      }
+      updateSettings(settings) {
+        this.baseUrl = settings.eagleApiBaseUrl;
+        this.timeout = settings.connectionTimeout;
+        this.r2WorkerUrl = settings.r2WorkerUrl;
+        this.r2ApiKey = settings.r2ApiKey;
+        this.r2PublicUrl = settings.r2PublicUrl;
+      }
+      async isConnected() {
+        try {
+          const info = await this.getApplicationInfo();
+          return info !== null;
+        } catch (e) {
+          return false;
+        }
+      }
+      async getApplicationInfo() {
+        var _a;
+        try {
+          const response = await this.get("/api/application/info");
+          return (_a = response.data) != null ? _a : null;
+        } catch (e) {
+          return null;
+        }
+      }
+      async listItems(options) {
+        var _a, _b, _c;
+        const params = new URLSearchParams();
+        if (options == null ? void 0 : options.keyword)
+          params.append("keyword", options.keyword);
+        if ((_a = options == null ? void 0 : options.tags) == null ? void 0 : _a.length)
+          params.append("tags", options.tags.join(","));
+        if ((_b = options == null ? void 0 : options.folders) == null ? void 0 : _b.length)
+          params.append("folders", options.folders.join(","));
+        if (options == null ? void 0 : options.ext)
+          params.append("ext", options.ext);
+        if (options == null ? void 0 : options.limit)
+          params.append("limit", options.limit.toString());
+        if (options == null ? void 0 : options.offset)
+          params.append("offset", options.offset.toString());
+        if (options == null ? void 0 : options.orderBy)
+          params.append("orderBy", options.orderBy);
+        const queryString = params.toString();
+        const endpoint = queryString ? `/api/item/list?${queryString}` : "/api/item/list";
+        const response = await this.get(endpoint);
+        return (_c = response.data) != null ? _c : [];
+      }
+      async getItemInfo(id) {
+        var _a;
+        try {
+          const response = await this.get(`/api/item/info?id=${id}`);
+          return (_a = response.data) != null ? _a : null;
+        } catch (e) {
+          return null;
+        }
+      }
+      async getThumbnailPath(id) {
+        var _a;
+        try {
+          const response = await this.get(`/api/item/thumbnail?id=${id}`);
+          return (_a = response.data) != null ? _a : null;
+        } catch (e) {
+          return null;
+        }
+      }
+      async updateItem(id, updates) {
+        try {
+          const response = await this.post("/api/item/update", {
+            id,
+            ...updates
+          });
+          return response.status === "success";
+        } catch (e) {
+          return false;
+        }
+      }
+      async addFromUrl(options) {
+        try {
+          const response = await this.post("/api/item/addFromURL", options);
+          return response.status === "success";
+        } catch (e) {
+          return false;
+        }
+      }
+      async addFromPath(options) {
+        try {
+          const response = await this.post("/api/item/addFromPath", options);
+          if (response.status === "success" && response.data) {
+            return { success: true, itemId: response.data };
+          }
+          return { success: false };
+        } catch (e) {
+          return { success: false };
+        }
+      }
+      async listFolders() {
+        var _a;
+        try {
+          const response = await this.get("/api/folder/list");
+          return (_a = response.data) != null ? _a : [];
+        } catch (e) {
+          return [];
+        }
+      }
+      async getLibraryInfo() {
+        var _a;
+        try {
+          const response = await this.get("/api/library/info");
+          return (_a = response.data) != null ? _a : null;
+        } catch (e) {
+          return null;
+        }
+      }
+      async getLibraryPath() {
+        var _a;
+        try {
+          const response = await (0, import_obsidian.requestUrl)({
+            url: `${this.baseUrl}/api/library/info`,
+            method: "GET"
+          });
+          const json = response.json;
+          if ((json == null ? void 0 : json.status) === "success" && (json == null ? void 0 : json.data)) {
+            const data = json.data;
+            if (typeof data.library === "string") {
+              return data.library;
+            }
+            if (typeof ((_a = data.library) == null ? void 0 : _a.path) === "string") {
+              return data.library.path;
+            }
+            if (typeof data.path === "string") {
+              return data.path;
+            }
+          }
+          return null;
+        } catch (e) {
+          console.error("[CMDS Eagle] getLibraryPath error:", e);
+          return null;
+        }
+      }
+      async getLibraryName() {
+        var _a;
+        const path = await this.getLibraryPath();
+        if (!path)
+          return null;
+        const match = path.match(/([^/]+)\.library\/?$/i);
+        if (match) {
+          return match[1];
+        }
+        return ((_a = path.split("/").pop()) == null ? void 0 : _a.replace(".library", "")) || null;
+      }
+      async refreshThumbnail(id) {
+        try {
+          const response = await this.post("/api/item/refreshThumbnail", { id });
+          return response.status === "success";
+        } catch (e) {
+          return false;
+        }
+      }
+      async testR2Connection() {
+        if (!this.r2WorkerUrl || !this.r2ApiKey) {
+          return false;
+        }
+        try {
+          const response = await (0, import_obsidian.requestUrl)({
+            url: `${this.r2WorkerUrl}/health`,
+            method: "GET",
+            headers: {
+              "Authorization": `Bearer ${this.r2ApiKey}`
+            }
+          });
+          return response.status === 200;
+        } catch (e) {
+          return false;
+        }
+      }
+      async getOriginalFilePath(item) {
+        const thumbnailPath = await this.getThumbnailPath(item.id);
+        if (thumbnailPath) {
+          console.log("[CMDS Eagle] thumbnailPath:", thumbnailPath);
+          const decodedPath = this.safeDecodeUri(thumbnailPath);
+          const folderPath = decodedPath.substring(0, decodedPath.lastIndexOf("/"));
+          const originalPath = `${folderPath}/${item.name}.${item.ext}`;
+          console.log("[CMDS Eagle] originalPath:", originalPath);
+          return originalPath;
+        }
+        const libraryPath = await this.getLibraryPath();
+        if (libraryPath && typeof libraryPath === "string") {
+          const originalPath = `${libraryPath}/images/${item.id}.info/${item.name}.${item.ext}`;
+          console.log("[CMDS Eagle] originalPath (from library):", originalPath);
+          return originalPath;
+        }
+        console.log("[CMDS Eagle] Could not get file path for item:", item.id);
+        return null;
+      }
+      safeDecodeUri(str) {
+        try {
+          return decodeURIComponent(str);
+        } catch (e) {
+          return str;
+        }
+      }
+      async uploadToR2(item) {
+        if (!this.r2WorkerUrl || !this.r2ApiKey || !this.r2PublicUrl) {
+          return { success: false, error: "R2 settings not configured" };
+        }
+        const existingKey = getR2KeyFromItem(item);
+        if (existingKey) {
+          return {
+            success: true,
+            key: existingKey,
+            filename: item.name
+          };
+        }
+        try {
+          const filePath = await this.getOriginalFilePath(item);
+          if (!filePath) {
+            return { success: false, error: "Could not get file path from Eagle" };
+          }
+          let fileBuffer;
+          try {
+            fileBuffer = await fsp.readFile(filePath);
+          } catch (e) {
+            return {
+              success: false,
+              error: `Could not read file: ${filePath}`
+            };
+          }
+          const mimeType = getMimeType(item.ext);
+          const blob = new Blob([fileBuffer], { type: mimeType });
+          const filename = `${item.name}.${item.ext}`;
+          const formData = new FormData();
+          formData.append("file", blob, filename);
+          formData.append("filename", filename);
+          formData.append("content_type", mimeType);
+          formData.append("eagle_id", item.id);
+          const response = await window.fetch(`${this.r2WorkerUrl}/upload`, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${this.r2ApiKey}`
+            },
+            body: formData
+          });
+          if (!response.ok) {
+            const errorText = await response.text();
+            return { success: false, error: `Upload failed (${response.status}): ${errorText}` };
+          }
+          const result = await response.json();
+          const r2Tag = `r2:${result.key}`;
+          const newTags = [...item.tags];
+          if (!newTags.includes(r2Tag)) {
+            newTags.push(r2Tag);
+          }
+          if (!newTags.includes("r2-cloud")) {
+            newTags.push("r2-cloud");
+          }
+          await this.updateItem(item.id, { tags: newTags });
+          return {
+            success: true,
+            key: result.key,
+            filename: result.filename
+          };
+        } catch (error) {
+          return {
+            success: false,
+            error: error instanceof Error ? error.message : "Unknown error"
+          };
+        }
+      }
+      getCloudUrl(item) {
+        const key = getR2KeyFromItem(item);
+        if (!key || !this.r2PublicUrl) {
+          return null;
+        }
+        return `${this.r2PublicUrl}/${key}`;
+      }
+      getLocalThumbnailUrl(id) {
+        return `${this.baseUrl}/api/item/thumbnail?id=${id}`;
+      }
+      async get(endpoint) {
+        const response = await (0, import_obsidian.requestUrl)({
+          url: `${this.baseUrl}${endpoint}`,
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json"
+          }
+        });
+        return response.json;
+      }
+      async post(endpoint, body) {
+        const response = await (0, import_obsidian.requestUrl)({
+          url: `${this.baseUrl}${endpoint}`,
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(body)
+        });
+        return response.json;
+      }
+    };
+    MIME_TYPES = {
+      "jpg": "image/jpeg",
+      "jpeg": "image/jpeg",
+      "png": "image/png",
+      "gif": "image/gif",
+      "webp": "image/webp",
+      "svg": "image/svg+xml",
+      "bmp": "image/bmp",
+      "ico": "image/x-icon",
+      "tiff": "image/tiff",
+      "tif": "image/tiff",
+      "heic": "image/heic",
+      "heif": "image/heif",
+      "avif": "image/avif"
+    };
+  }
+});
 
 // src/modals.ts
-var import_obsidian2 = require("obsidian");
-var EagleSearchModal = class extends import_obsidian2.FuzzySuggestModal {
-  constructor(app, api, settings) {
-    super(app);
-    this.allItems = [];
-    this.isLoading = false;
-    this.filterContainer = null;
-    this.libraryNameEl = null;
-    this.api = api;
-    this.settings = settings;
-    this.activeScopes = new Set(settings.searchScope);
-    this.activeFileTypes = new Set(settings.searchFileTypes);
-    this.setPlaceholder("Search Eagle items...");
-    this.setInstructions([
-      { command: "\u2191\u2193", purpose: "navigate" },
-      { command: "\u21B5", purpose: "insert link" },
-      { command: "esc", purpose: "dismiss" }
-    ]);
-  }
-  async onOpen() {
-    void super.onOpen();
-    this.buildFilterUI();
-    await this.loadItems();
-  }
-  buildFilterUI() {
-    const promptEl = this.modalEl.querySelector(".prompt");
-    if (!promptEl)
-      return;
-    this.filterContainer = createDiv({ cls: "cmdspace-eagle-filters" });
-    promptEl.insertBefore(this.filterContainer, promptEl.firstChild);
-    const headerRow = this.filterContainer.createDiv({ cls: "cmdspace-eagle-filter-header" });
-    this.libraryNameEl = headerRow.createSpan({ cls: "cmdspace-eagle-library-name", text: "Loading..." });
-    const scopeRow = this.filterContainer.createDiv({ cls: "cmdspace-eagle-filter-row" });
-    scopeRow.createSpan({ text: "Search in:", cls: "cmdspace-eagle-filter-label" });
-    const scopeButtons = scopeRow.createDiv({ cls: "cmdspace-eagle-filter-buttons" });
-    this.createScopeButton(scopeButtons, "name", "Name");
-    this.createScopeButton(scopeButtons, "tags", "Tags");
-    this.createScopeButton(scopeButtons, "annotation", "Notes");
-    this.createScopeButton(scopeButtons, "folders", "Folders");
-    const typeRow = this.filterContainer.createDiv({ cls: "cmdspace-eagle-filter-row" });
-    typeRow.createSpan({ text: "File types:", cls: "cmdspace-eagle-filter-label" });
-    const typeButtons = typeRow.createDiv({ cls: "cmdspace-eagle-filter-buttons" });
-    this.createTypeButton(typeButtons, "images", "Images");
-    this.createTypeButton(typeButtons, "videos", "Videos");
-    this.createTypeButton(typeButtons, "documents", "Docs");
-    this.createTypeButton(typeButtons, "all", "All");
-  }
-  createScopeButton(container, scope, label) {
-    const btn = container.createEl("button", {
-      text: label,
-      cls: `cmdspace-eagle-filter-btn ${this.activeScopes.has(scope) ? "is-active" : ""}`
-    });
-    btn.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (this.activeScopes.has(scope)) {
-        if (this.activeScopes.size > 1) {
-          this.activeScopes.delete(scope);
-          btn.removeClass("is-active");
-        }
-      } else {
-        this.activeScopes.add(scope);
-        btn.addClass("is-active");
-      }
-      this.inputEl.dispatchEvent(new Event("input"));
-    });
-  }
-  createTypeButton(container, category, label) {
-    const isActive = this.isTypeCategoryActive(category);
-    const btn = container.createEl("button", {
-      text: label,
-      cls: `cmdspace-eagle-filter-btn ${isActive ? "is-active" : ""}`
-    });
-    btn.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      this.toggleTypeCategory(category);
-      this.updateTypeButtonStates(container.parentElement);
-      this.inputEl.dispatchEvent(new Event("input"));
-    });
-  }
-  isTypeCategoryActive(category) {
-    const extensions = this.getExtensionsForCategory(category);
-    return extensions.some((ext) => this.activeFileTypes.has(ext));
-  }
-  getExtensionsForCategory(category) {
-    switch (category) {
-      case "images":
-        return SUPPORTED_IMAGE_EXTENSIONS;
-      case "videos":
-        return SUPPORTED_VIDEO_EXTENSIONS;
-      case "documents":
-        return SUPPORTED_DOCUMENT_EXTENSIONS;
-      case "all":
-        return [...SUPPORTED_IMAGE_EXTENSIONS, ...SUPPORTED_VIDEO_EXTENSIONS, ...SUPPORTED_DOCUMENT_EXTENSIONS];
-    }
-  }
-  toggleTypeCategory(category) {
-    const extensions = this.getExtensionsForCategory(category);
-    const isCurrentlyActive = this.isTypeCategoryActive(category);
-    if (category === "all") {
-      if (isCurrentlyActive) {
-        this.activeFileTypes = new Set(SUPPORTED_IMAGE_EXTENSIONS);
-      } else {
-        this.activeFileTypes = /* @__PURE__ */ new Set([
-          ...SUPPORTED_IMAGE_EXTENSIONS,
-          ...SUPPORTED_VIDEO_EXTENSIONS,
-          ...SUPPORTED_DOCUMENT_EXTENSIONS
+var modals_exports = {};
+__export(modals_exports, {
+  EagleFolderModal: () => EagleFolderModal,
+  EagleSearchModal: () => EagleSearchModal,
+  ImagePasteChoiceModal: () => ImagePasteChoiceModal
+});
+var import_obsidian2, EagleSearchModal, EagleFolderModal, ImagePasteChoiceModal;
+var init_modals = __esm({
+  "src/modals.ts"() {
+    import_obsidian2 = require("obsidian");
+    init_types();
+    init_api();
+    EagleSearchModal = class extends import_obsidian2.FuzzySuggestModal {
+      constructor(app, api, settings) {
+        super(app);
+        this.allItems = [];
+        this.isLoading = false;
+        this.filterContainer = null;
+        this.libraryNameEl = null;
+        this.api = api;
+        this.settings = settings;
+        this.activeScopes = new Set(settings.searchScope);
+        this.activeFileTypes = new Set(settings.searchFileTypes);
+        this.setPlaceholder("Search Eagle items...");
+        this.setInstructions([
+          { command: "\u2191\u2193", purpose: "navigate" },
+          { command: "\u21B5", purpose: "insert link" },
+          { command: "esc", purpose: "dismiss" }
         ]);
       }
-    } else {
-      if (isCurrentlyActive) {
-        extensions.forEach((ext) => this.activeFileTypes.delete(ext));
-        if (this.activeFileTypes.size === 0) {
-          SUPPORTED_IMAGE_EXTENSIONS.forEach((ext) => this.activeFileTypes.add(ext));
+      async onOpen() {
+        void super.onOpen();
+        this.buildFilterUI();
+        await this.loadItems();
+      }
+      buildFilterUI() {
+        const promptEl = this.modalEl.querySelector(".prompt");
+        if (!promptEl)
+          return;
+        this.filterContainer = createDiv({ cls: "cmdspace-eagle-filters" });
+        promptEl.insertBefore(this.filterContainer, promptEl.firstChild);
+        const headerRow = this.filterContainer.createDiv({ cls: "cmdspace-eagle-filter-header" });
+        this.libraryNameEl = headerRow.createSpan({ cls: "cmdspace-eagle-library-name", text: "Loading..." });
+        const scopeRow = this.filterContainer.createDiv({ cls: "cmdspace-eagle-filter-row" });
+        scopeRow.createSpan({ text: "Search in:", cls: "cmdspace-eagle-filter-label" });
+        const scopeButtons = scopeRow.createDiv({ cls: "cmdspace-eagle-filter-buttons" });
+        this.createScopeButton(scopeButtons, "name", "Name");
+        this.createScopeButton(scopeButtons, "tags", "Tags");
+        this.createScopeButton(scopeButtons, "annotation", "Notes");
+        this.createScopeButton(scopeButtons, "folders", "Folders");
+        const typeRow = this.filterContainer.createDiv({ cls: "cmdspace-eagle-filter-row" });
+        typeRow.createSpan({ text: "File types:", cls: "cmdspace-eagle-filter-label" });
+        const typeButtons = typeRow.createDiv({ cls: "cmdspace-eagle-filter-buttons" });
+        this.createTypeButton(typeButtons, "images", "Images");
+        this.createTypeButton(typeButtons, "videos", "Videos");
+        this.createTypeButton(typeButtons, "documents", "Docs");
+        this.createTypeButton(typeButtons, "all", "All");
+      }
+      createScopeButton(container, scope, label) {
+        const btn = container.createEl("button", {
+          text: label,
+          cls: `cmdspace-eagle-filter-btn ${this.activeScopes.has(scope) ? "is-active" : ""}`
+        });
+        btn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (this.activeScopes.has(scope)) {
+            if (this.activeScopes.size > 1) {
+              this.activeScopes.delete(scope);
+              btn.removeClass("is-active");
+            }
+          } else {
+            this.activeScopes.add(scope);
+            btn.addClass("is-active");
+          }
+          this.inputEl.dispatchEvent(new Event("input"));
+        });
+      }
+      createTypeButton(container, category, label) {
+        const isActive = this.isTypeCategoryActive(category);
+        const btn = container.createEl("button", {
+          text: label,
+          cls: `cmdspace-eagle-filter-btn ${isActive ? "is-active" : ""}`
+        });
+        btn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          this.toggleTypeCategory(category);
+          this.updateTypeButtonStates(container.parentElement);
+          this.inputEl.dispatchEvent(new Event("input"));
+        });
+      }
+      isTypeCategoryActive(category) {
+        const extensions = this.getExtensionsForCategory(category);
+        return extensions.some((ext) => this.activeFileTypes.has(ext));
+      }
+      getExtensionsForCategory(category) {
+        switch (category) {
+          case "images":
+            return SUPPORTED_IMAGE_EXTENSIONS;
+          case "videos":
+            return SUPPORTED_VIDEO_EXTENSIONS;
+          case "documents":
+            return SUPPORTED_DOCUMENT_EXTENSIONS;
+          case "all":
+            return [...SUPPORTED_IMAGE_EXTENSIONS, ...SUPPORTED_VIDEO_EXTENSIONS, ...SUPPORTED_DOCUMENT_EXTENSIONS];
         }
-      } else {
-        extensions.forEach((ext) => this.activeFileTypes.add(ext));
       }
-    }
-  }
-  updateTypeButtonStates(typeRow) {
-    const buttons = typeRow.querySelectorAll(".cmdspace-eagle-filter-btn");
-    const categories = ["images", "videos", "documents", "all"];
-    buttons.forEach((btn, idx) => {
-      if (this.isTypeCategoryActive(categories[idx])) {
-        btn.addClass("is-active");
-      } else {
-        btn.removeClass("is-active");
+      toggleTypeCategory(category) {
+        const extensions = this.getExtensionsForCategory(category);
+        const isCurrentlyActive = this.isTypeCategoryActive(category);
+        if (category === "all") {
+          if (isCurrentlyActive) {
+            this.activeFileTypes = new Set(SUPPORTED_IMAGE_EXTENSIONS);
+          } else {
+            this.activeFileTypes = /* @__PURE__ */ new Set([
+              ...SUPPORTED_IMAGE_EXTENSIONS,
+              ...SUPPORTED_VIDEO_EXTENSIONS,
+              ...SUPPORTED_DOCUMENT_EXTENSIONS
+            ]);
+          }
+        } else {
+          if (isCurrentlyActive) {
+            extensions.forEach((ext) => this.activeFileTypes.delete(ext));
+            if (this.activeFileTypes.size === 0) {
+              SUPPORTED_IMAGE_EXTENSIONS.forEach((ext) => this.activeFileTypes.add(ext));
+            }
+          } else {
+            extensions.forEach((ext) => this.activeFileTypes.add(ext));
+          }
+        }
       }
-    });
-  }
-  async loadItems() {
-    if (this.isLoading)
-      return;
-    this.isLoading = true;
-    try {
-      const connected = await this.api.isConnected();
-      if (!connected) {
-        new import_obsidian2.Notice("Eagle is not running. Please start Eagle and try again.");
-        this.close();
-        return;
+      updateTypeButtonStates(typeRow) {
+        const buttons = typeRow.querySelectorAll(".cmdspace-eagle-filter-btn");
+        const categories = ["images", "videos", "documents", "all"];
+        buttons.forEach((btn, idx) => {
+          if (this.isTypeCategoryActive(categories[idx])) {
+            btn.addClass("is-active");
+          } else {
+            btn.removeClass("is-active");
+          }
+        });
       }
-      const libraryName = await this.api.getLibraryName();
-      if (this.libraryNameEl && libraryName) {
-        this.libraryNameEl.setText(`\u{1F4DA} ${libraryName}`);
+      async loadItems() {
+        if (this.isLoading)
+          return;
+        this.isLoading = true;
+        try {
+          const connected = await this.api.isConnected();
+          if (!connected) {
+            new import_obsidian2.Notice("Eagle is not running. Please start Eagle and try again.");
+            this.close();
+            return;
+          }
+          const libraryName = await this.api.getLibraryName();
+          if (this.libraryNameEl && libraryName) {
+            this.libraryNameEl.setText(`\u{1F4DA} ${libraryName}`);
+          }
+          this.allItems = await this.api.listItems();
+          if (this.libraryNameEl) {
+            const count = this.allItems.length;
+            const libraryText = libraryName ? `\u{1F4DA} ${libraryName}` : "\u{1F4DA} Eagle";
+            this.libraryNameEl.setText(`${libraryText} (${count.toLocaleString()} items)`);
+          }
+          this.inputEl.dispatchEvent(new Event("input"));
+        } catch (error) {
+          console.error("Failed to load Eagle items:", error);
+          new import_obsidian2.Notice("Failed to load Eagle items. Check console for details.");
+        } finally {
+          this.isLoading = false;
+        }
       }
-      this.allItems = await this.api.listItems();
-      if (this.libraryNameEl) {
-        const count = this.allItems.length;
-        const libraryText = libraryName ? `\u{1F4DA} ${libraryName}` : "\u{1F4DA} Eagle";
-        this.libraryNameEl.setText(`${libraryText} (${count.toLocaleString()} items)`);
+      getItems() {
+        return this.allItems.filter(
+          (item) => this.activeFileTypes.has(item.ext.toLowerCase())
+        );
       }
-      this.inputEl.dispatchEvent(new Event("input"));
-    } catch (error) {
-      console.error("Failed to load Eagle items:", error);
-      new import_obsidian2.Notice("Failed to load Eagle items. Check console for details.");
-    } finally {
-      this.isLoading = false;
-    }
-  }
-  getItems() {
-    return this.allItems.filter(
-      (item) => this.activeFileTypes.has(item.ext.toLowerCase())
-    );
-  }
-  getItemText(item) {
-    const parts = [];
-    if (this.activeScopes.has("name")) {
-      parts.push(item.name);
-    }
-    if (this.activeScopes.has("tags") && item.tags.length > 0) {
-      parts.push(item.tags.join(" "));
-    }
-    if (this.activeScopes.has("annotation") && item.annotation) {
-      parts.push(item.annotation);
-    }
-    if (this.activeScopes.has("folders") && item.folders.length > 0) {
-      parts.push(item.folders.join("/"));
-    }
-    return parts.join(" ") || item.name;
-  }
-  renderSuggestion(match, el) {
-    const item = match.item;
-    const container = el.createDiv({ cls: "cmdspace-eagle-suggestion" });
-    const infoDiv = container.createDiv({ cls: "cmdspace-eagle-suggestion-info" });
-    infoDiv.createDiv({ cls: "cmdspace-eagle-suggestion-name", text: item.name });
-    const metaDiv = infoDiv.createDiv({ cls: "cmdspace-eagle-suggestion-meta" });
-    metaDiv.createSpan({ text: item.ext.toUpperCase() });
-    metaDiv.createSpan({ text: " \u2022 " });
-    metaDiv.createSpan({ text: this.formatFileSize(item.size) });
-    if (item.width && item.height) {
-      metaDiv.createSpan({ text: " \u2022 " });
-      metaDiv.createSpan({ text: `${item.width}\xD7${item.height}` });
-    }
-    if (item.tags.length > 0) {
-      const tagsDiv = infoDiv.createDiv({ cls: "cmdspace-eagle-suggestion-tags" });
-      item.tags.slice(0, 5).forEach((tag) => {
-        tagsDiv.createSpan({ cls: "cmdspace-eagle-tag", text: tag });
-      });
-      if (item.tags.length > 5) {
-        tagsDiv.createSpan({ cls: "cmdspace-eagle-tag-more", text: `+${item.tags.length - 5}` });
+      getItemText(item) {
+        const parts = [];
+        if (this.activeScopes.has("name")) {
+          parts.push(item.name);
+        }
+        if (this.activeScopes.has("tags") && item.tags.length > 0) {
+          parts.push(item.tags.join(" "));
+        }
+        if (this.activeScopes.has("annotation") && item.annotation) {
+          parts.push(item.annotation);
+        }
+        if (this.activeScopes.has("folders") && item.folders.length > 0) {
+          parts.push(item.folders.join("/"));
+        }
+        return parts.join(" ") || item.name;
       }
-    }
-  }
-  onChooseItem(item, evt) {
-    void this.insertItemLink(item);
-  }
-  async insertItemLink(item) {
-    const activeView = this.app.workspace.getActiveViewOfType(import_obsidian2.MarkdownView);
-    if (!activeView) {
-      new import_obsidian2.Notice("No active markdown editor");
-      return;
-    }
-    const editor = activeView.editor;
-    if (this.settings.insertAsEmbed) {
-      const filePath = await this.api.getOriginalFilePath(item);
-      if (filePath) {
-        const fileUrl = this.pathToFileUrl(filePath);
-        const filename = `${item.name}.${item.ext}`;
-        let output = `![${filename}](${fileUrl})`;
+      renderSuggestion(match, el) {
+        const item = match.item;
+        const container = el.createDiv({ cls: "cmdspace-eagle-suggestion" });
+        const infoDiv = container.createDiv({ cls: "cmdspace-eagle-suggestion-info" });
+        infoDiv.createDiv({ cls: "cmdspace-eagle-suggestion-name", text: item.name });
+        const metaDiv = infoDiv.createDiv({ cls: "cmdspace-eagle-suggestion-meta" });
+        metaDiv.createSpan({ text: item.ext.toUpperCase() });
+        metaDiv.createSpan({ text: " \u2022 " });
+        metaDiv.createSpan({ text: this.formatFileSize(item.size) });
+        if (item.width && item.height) {
+          metaDiv.createSpan({ text: " \u2022 " });
+          metaDiv.createSpan({ text: `${item.width}\xD7${item.height}` });
+        }
+        if (item.tags.length > 0) {
+          const tagsDiv = infoDiv.createDiv({ cls: "cmdspace-eagle-suggestion-tags" });
+          item.tags.slice(0, 5).forEach((tag) => {
+            tagsDiv.createSpan({ cls: "cmdspace-eagle-tag", text: tag });
+          });
+          if (item.tags.length > 5) {
+            tagsDiv.createSpan({ cls: "cmdspace-eagle-tag-more", text: `+${item.tags.length - 5}` });
+          }
+        }
+      }
+      onChooseItem(item, evt) {
+        void this.insertItemLink(item);
+      }
+      async insertItemLink(item) {
+        const activeView = this.app.workspace.getActiveViewOfType(import_obsidian2.MarkdownView);
+        if (!activeView) {
+          new import_obsidian2.Notice("No active markdown editor");
+          return;
+        }
+        const editor = activeView.editor;
+        if (this.settings.insertAsEmbed) {
+          const filePath = await this.api.getOriginalFilePath(item);
+          if (filePath) {
+            const fileUrl = this.pathToFileUrl(filePath);
+            const filename = `${item.name}.${item.ext}`;
+            let output = `![${filename}](${fileUrl})`;
+            if (this.settings.insertThumbnail) {
+              output += "\n\n" + this.buildMetadataLine(item);
+            }
+            editor.replaceSelection(output);
+            new import_obsidian2.Notice(`Embedded: ${item.name}`);
+            return;
+          }
+        }
+        const linkUrl = buildEagleItemUrl(item.id);
+        let linkText;
+        if (this.settings.linkFormat === "wikilink") {
+          linkText = `[[${linkUrl}|${item.name}]]`;
+        } else {
+          linkText = `[${item.name}](${linkUrl})`;
+        }
         if (this.settings.insertThumbnail) {
-          output += "\n\n" + this.buildMetadataLine(item);
+          const card = this.buildLinkCard(item);
+          editor.replaceSelection(card);
+        } else {
+          editor.replaceSelection(linkText);
         }
-        editor.replaceSelection(output);
-        new import_obsidian2.Notice(`Embedded: ${item.name}`);
-        return;
+        new import_obsidian2.Notice(`Inserted link to: ${item.name}`);
       }
-    }
-    const linkUrl = buildEagleItemUrl(item.id);
-    let linkText;
-    if (this.settings.linkFormat === "wikilink") {
-      linkText = `[[${linkUrl}|${item.name}]]`;
-    } else {
-      linkText = `[${item.name}](${linkUrl})`;
-    }
-    if (this.settings.insertThumbnail) {
-      const card = this.buildLinkCard(item);
-      editor.replaceSelection(card);
-    } else {
-      editor.replaceSelection(linkText);
-    }
-    new import_obsidian2.Notice(`Inserted link to: ${item.name}`);
-  }
-  pathToFileUrl(path) {
-    let decodedPath = path;
-    try {
-      while (decodedPath.includes("%")) {
-        const decoded = decodeURIComponent(decodedPath);
-        if (decoded === decodedPath)
-          break;
-        decodedPath = decoded;
-      }
-    } catch (e) {
-      decodedPath = path;
-    }
-    const convertedPath = this.convertPathForCurrentPlatform(decodedPath);
-    const normalizedPath = convertedPath.replace(/\\/g, "/");
-    const encodedPath = normalizedPath.split("/").map((segment) => encodeURIComponent(segment)).join("/");
-    const platform = process.platform;
-    if (platform === "win32" && /^[A-Za-z]:/.test(normalizedPath)) {
-      const fixedPath = encodedPath.replace(/^([A-Za-z])%3A/, "$1:");
-      return `file:///${fixedPath}`;
-    }
-    return `file://${encodedPath}`;
-  }
-  convertPathForCurrentPlatform(path) {
-    if (!this.settings.enableCrossPlatform || this.settings.computers.length === 0) {
-      return path;
-    }
-    const sourceComputer = this.findMatchingComputer(path);
-    if (!sourceComputer) {
-      return path;
-    }
-    const currentPlatform = process.platform;
-    const currentUsername = this.detectCurrentUsername();
-    const currentComputer = this.settings.computers.find(
-      (c) => c.platform === currentPlatform && c.username === currentUsername
-    );
-    if (!currentComputer || sourceComputer.id === currentComputer.id) {
-      return path;
-    }
-    let relativePath = "";
-    if (sourceComputer.platform === "darwin") {
-      relativePath = path.replace(`/Users/${sourceComputer.username}/`, "");
-    } else {
-      const winPattern = new RegExp(`[A-Za-z]:[/\\\\]Users[/\\\\]${sourceComputer.username}[/\\\\]`, "i");
-      relativePath = path.replace(winPattern, "").replace(/\\/g, "/");
-    }
-    if (currentComputer.platform === "darwin") {
-      return `/Users/${currentComputer.username}/${relativePath}`;
-    } else {
-      return `C:/Users/${currentComputer.username}/${relativePath}`;
-    }
-  }
-  findMatchingComputer(path) {
-    for (const computer of this.settings.computers) {
-      if (computer.platform === "darwin") {
-        if (path.includes(`/Users/${computer.username}/`)) {
-          return computer;
+      pathToFileUrl(path) {
+        let decodedPath = path;
+        try {
+          while (decodedPath.includes("%")) {
+            const decoded = decodeURIComponent(decodedPath);
+            if (decoded === decodedPath)
+              break;
+            decodedPath = decoded;
+          }
+        } catch (e) {
+          decodedPath = path;
         }
-      } else if (computer.platform === "win32") {
-        const winPattern = new RegExp(`[A-Za-z]:[/\\\\]Users[/\\\\]${computer.username}[/\\\\]`, "i");
-        if (winPattern.test(path)) {
-          return computer;
+        const convertedPath = this.convertPathForCurrentPlatform(decodedPath);
+        const normalizedPath = convertedPath.replace(/\\/g, "/");
+        const encodedPath = normalizedPath.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+        const platform = process.platform;
+        if (platform === "win32" && /^[A-Za-z]:/.test(normalizedPath)) {
+          const fixedPath = encodedPath.replace(/^([A-Za-z])%3A/, "$1:");
+          return `file:///${fixedPath}`;
+        }
+        return `file://${encodedPath}`;
+      }
+      convertPathForCurrentPlatform(path) {
+        if (!this.settings.enableCrossPlatform || this.settings.computers.length === 0) {
+          return path;
+        }
+        const sourceComputer = this.findMatchingComputer(path);
+        if (!sourceComputer) {
+          return path;
+        }
+        const currentPlatform = process.platform;
+        const currentUsername = this.detectCurrentUsername();
+        const currentComputer = this.settings.computers.find(
+          (c) => c.platform === currentPlatform && c.username === currentUsername
+        );
+        if (!currentComputer || sourceComputer.id === currentComputer.id) {
+          return path;
+        }
+        let relativePath = "";
+        if (sourceComputer.platform === "darwin") {
+          relativePath = path.replace(`/Users/${sourceComputer.username}/`, "");
+        } else {
+          const winPattern = new RegExp(`[A-Za-z]:[/\\\\]Users[/\\\\]${sourceComputer.username}[/\\\\]`, "i");
+          relativePath = path.replace(winPattern, "").replace(/\\/g, "/");
+        }
+        if (currentComputer.platform === "darwin") {
+          return `/Users/${currentComputer.username}/${relativePath}`;
+        } else {
+          return `C:/Users/${currentComputer.username}/${relativePath}`;
         }
       }
-    }
-    return null;
-  }
-  detectCurrentUsername() {
-    const adapter = this.app.vault.adapter;
-    const vaultPath = adapter.basePath || "";
-    const platform = String(process.platform);
-    if (platform === "darwin") {
-      const match = vaultPath.match(/^\/Users\/([^/]+)/);
-      if (match)
-        return match[1];
-    } else if (platform === "win32") {
-      const match = vaultPath.match(/^[A-Za-z]:[/\\]Users[/\\]([^/\\]+)/i);
-      if (match)
-        return match[1];
-    }
-    return "";
-  }
-  buildMetadataLine(item) {
-    const linkUrl = buildEagleItemUrl(item.id);
-    const tags = item.tags.filter((t) => !t.startsWith("r2:") && t !== "r2-cloud" && t !== "cloud-upload").map((t) => `#${this.normalizeTag(t)}`).join(" ");
-    const dimensions = item.width && item.height ? `${item.width}\xD7${item.height}` : "";
-    return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)}${dimensions ? ` | ${dimensions}` : ""} | ${tags || "No tags"} | [Eagle](${linkUrl})`;
-  }
-  buildLinkCard(item) {
-    const linkUrl = buildEagleItemUrl(item.id);
-    const tags = item.tags.map((t) => `#${this.normalizeTag(t)}`).join(" ");
-    const dimensions = item.width && item.height ? `${item.width}\xD7${item.height}` : "N/A";
-    return `> [!cmdspace-eagle] ${item.name}
+      findMatchingComputer(path) {
+        for (const computer of this.settings.computers) {
+          if (computer.platform === "darwin") {
+            if (path.includes(`/Users/${computer.username}/`)) {
+              return computer;
+            }
+          } else if (computer.platform === "win32") {
+            const winPattern = new RegExp(`[A-Za-z]:[/\\\\]Users[/\\\\]${computer.username}[/\\\\]`, "i");
+            if (winPattern.test(path)) {
+              return computer;
+            }
+          }
+        }
+        return null;
+      }
+      detectCurrentUsername() {
+        const adapter = this.app.vault.adapter;
+        const vaultPath = adapter.basePath || "";
+        const platform = String(process.platform);
+        if (platform === "darwin") {
+          const match = vaultPath.match(/^\/Users\/([^/]+)/);
+          if (match)
+            return match[1];
+        } else if (platform === "win32") {
+          const match = vaultPath.match(/^[A-Za-z]:[/\\]Users[/\\]([^/\\]+)/i);
+          if (match)
+            return match[1];
+        }
+        return "";
+      }
+      buildMetadataLine(item) {
+        const linkUrl = buildEagleItemUrl(item.id);
+        const tags = item.tags.filter((t) => !t.startsWith("r2:") && t !== "r2-cloud" && t !== "cloud-upload").map((t) => `#${this.normalizeTag(t)}`).join(" ");
+        const dimensions = item.width && item.height ? `${item.width}\xD7${item.height}` : "";
+        return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)}${dimensions ? ` | ${dimensions}` : ""} | ${tags || "No tags"} | [Eagle](${linkUrl})`;
+      }
+      buildLinkCard(item) {
+        const linkUrl = buildEagleItemUrl(item.id);
+        const tags = item.tags.map((t) => `#${this.normalizeTag(t)}`).join(" ");
+        const dimensions = item.width && item.height ? `${item.width}\xD7${item.height}` : "N/A";
+        return `> [!cmdspace-eagle] ${item.name}
 > 
 > | Property | Value |
 > |----------|-------|
@@ -838,82 +860,115 @@ var EagleSearchModal = class extends import_obsidian2.FuzzySuggestModal {
 > [Open in Eagle](${linkUrl})
 
 `;
+      }
+      normalizeTag(tag) {
+        let normalized = tag.replace(/\s+/g, "-");
+        if (this.settings.tagNormalization === "lowercase") {
+          normalized = normalized.toLowerCase();
+        }
+        if (this.settings.tagPrefix) {
+          normalized = `${this.settings.tagPrefix}/${normalized}`;
+        }
+        return normalized;
+      }
+      formatFileSize(bytes) {
+        if (bytes < 1024)
+          return `${bytes} B`;
+        if (bytes < 1024 * 1024)
+          return `${(bytes / 1024).toFixed(1)} KB`;
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+      }
+    };
+    EagleFolderModal = class extends import_obsidian2.FuzzySuggestModal {
+      constructor(app, folders, onSelect) {
+        super(app);
+        this.folders = [];
+        this.folders = folders;
+        this.onSelect = onSelect;
+        this.setPlaceholder("Select Eagle folder...");
+      }
+      getItems() {
+        return this.folders;
+      }
+      getItemText(item) {
+        return item.path;
+      }
+      onChooseItem(item) {
+        this.onSelect(item.id);
+      }
+    };
+    ImagePasteChoiceModal = class extends import_obsidian2.Modal {
+      constructor(app, cloudProviderName = "Cloud") {
+        super(app);
+        this.response = { rememberChoice: false };
+        this.cloudProviderName = cloudProviderName;
+      }
+      onOpen() {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.addClass("cmdspace-paste-choice-modal");
+        contentEl.createEl("h2", { text: "Where to save image?" });
+        const buttonContainer = contentEl.createDiv({ cls: "cmdspace-paste-buttons" });
+        const eagleBtn = buttonContainer.createEl("button", {
+          text: "Eagle (Local)",
+          cls: "mod-cta"
+        });
+        eagleBtn.addEventListener("click", () => {
+          this.response.choice = "eagle";
+          this.close();
+        });
+        const localBtn = buttonContainer.createEl("button", { text: "Vault (Local)" });
+        localBtn.addEventListener("click", () => {
+          this.response.choice = "local";
+          this.close();
+        });
+        const cloudBtn = buttonContainer.createEl("button", {
+          text: `${this.cloudProviderName} (Cloud)`,
+          cls: "mod-warning"
+        });
+        cloudBtn.addEventListener("click", () => {
+          this.response.choice = "cloud";
+          this.close();
+        });
+        new import_obsidian2.Setting(contentEl).setName("Remember this choice").setDesc("You can change this later in plugin settings").addToggle((toggle) => {
+          toggle.setValue(false).onChange((value) => {
+            this.response.rememberChoice = value;
+          });
+        });
+      }
+      onClose() {
+        var _a, _b;
+        if (this.resolvePromise) {
+          this.resolvePromise({
+            choice: (_a = this.response.choice) != null ? _a : "cancel",
+            rememberChoice: (_b = this.response.rememberChoice) != null ? _b : false
+          });
+        }
+      }
+      getResponse() {
+        return new Promise((resolve) => {
+          this.resolvePromise = resolve;
+        });
+      }
+    };
   }
-  normalizeTag(tag) {
-    let normalized = tag.replace(/\s+/g, "-");
-    if (this.settings.tagNormalization === "lowercase") {
-      normalized = normalized.toLowerCase();
-    }
-    if (this.settings.tagPrefix) {
-      normalized = `${this.settings.tagPrefix}/${normalized}`;
-    }
-    return normalized;
-  }
-  formatFileSize(bytes) {
-    if (bytes < 1024)
-      return `${bytes} B`;
-    if (bytes < 1024 * 1024)
-      return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-};
-var ImagePasteChoiceModal = class extends import_obsidian2.Modal {
-  constructor(app, cloudProviderName = "Cloud") {
-    super(app);
-    this.response = { rememberChoice: false };
-    this.cloudProviderName = cloudProviderName;
-  }
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.addClass("cmdspace-paste-choice-modal");
-    contentEl.createEl("h2", { text: "Where to save image?" });
-    const buttonContainer = contentEl.createDiv({ cls: "cmdspace-paste-buttons" });
-    const eagleBtn = buttonContainer.createEl("button", {
-      text: "Eagle (Local)",
-      cls: "mod-cta"
-    });
-    eagleBtn.addEventListener("click", () => {
-      this.response.choice = "eagle";
-      this.close();
-    });
-    const localBtn = buttonContainer.createEl("button", { text: "Vault (Local)" });
-    localBtn.addEventListener("click", () => {
-      this.response.choice = "local";
-      this.close();
-    });
-    const cloudBtn = buttonContainer.createEl("button", {
-      text: `${this.cloudProviderName} (Cloud)`,
-      cls: "mod-warning"
-    });
-    cloudBtn.addEventListener("click", () => {
-      this.response.choice = "cloud";
-      this.close();
-    });
-    new import_obsidian2.Setting(contentEl).setName("Remember this choice").setDesc("You can change this later in plugin settings").addToggle((toggle) => {
-      toggle.setValue(false).onChange((value) => {
-        this.response.rememberChoice = value;
-      });
-    });
-  }
-  onClose() {
-    var _a, _b;
-    if (this.resolvePromise) {
-      this.resolvePromise({
-        choice: (_a = this.response.choice) != null ? _a : "cancel",
-        rememberChoice: (_b = this.response.rememberChoice) != null ? _b : false
-      });
-    }
-  }
-  getResponse() {
-    return new Promise((resolve) => {
-      this.resolvePromise = resolve;
-    });
-  }
-};
+});
+
+// src/main.ts
+var main_exports = {};
+__export(main_exports, {
+  default: () => CMDSPACELinkEagle
+});
+module.exports = __toCommonJS(main_exports);
+var import_obsidian5 = require("obsidian");
+init_types();
+init_api();
+init_modals();
 
 // src/settings.ts
 var import_obsidian3 = require("obsidian");
+init_api();
+init_types();
 var CMDSPACEEagleSettingTab = class extends import_obsidian3.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
@@ -948,6 +1003,44 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian3.PluginSettingTab {
       this.plugin.settings.imagePasteBehavior = value;
       await this.plugin.saveSettings();
     }));
+    new import_obsidian3.Setting(containerEl).setName("Eagle target folder").setHeading();
+    new import_obsidian3.Setting(containerEl).setName("Save new attachments to a specific Eagle folder").setDesc("When pasting or dropping images into Eagle, save them to a designated folder instead of the root library.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableDefaultFolder).onChange(async (value) => {
+      this.plugin.settings.enableDefaultFolder = value;
+      await this.plugin.saveSettings();
+      this.display();
+    }));
+    if (this.plugin.settings.enableDefaultFolder) {
+      new import_obsidian3.Setting(containerEl).setName("Target Folder").setDesc(this.plugin.settings.defaultFolderName || "No folder selected").addButton((button) => button.setButtonText("Select Folder").onClick(async () => {
+        const api = new EagleApiService(this.plugin.settings);
+        const folders = await api.listFolders();
+        if (!folders || folders.length === 0) {
+          new import_obsidian3.Notice("No folders found or Eagle is not connected.");
+          return;
+        }
+        const flattened = [];
+        const flatten = (items, parentPath = "") => {
+          for (const item of items) {
+            const currentPath = parentPath ? `${parentPath} / ${item.name}` : item.name;
+            flattened.push({ id: item.id, name: item.name, path: currentPath });
+            if (item.children && item.children.length > 0) {
+              flatten(item.children, currentPath);
+            }
+          }
+        };
+        flatten(folders);
+        const { EagleFolderModal: EagleFolderModal2 } = await Promise.resolve().then(() => (init_modals(), modals_exports));
+        const modal = new EagleFolderModal2(this.app, flattened, async (folderId) => {
+          const selected = flattened.find((f) => f.id === folderId);
+          if (selected) {
+            this.plugin.settings.defaultFolder = selected.id;
+            this.plugin.settings.defaultFolderName = selected.path;
+            await this.plugin.saveSettings();
+            this.display();
+          }
+        });
+        modal.open();
+      }));
+    }
     new import_obsidian3.Setting(containerEl).setName("Excalidraw integration").setHeading();
     new import_obsidian3.Setting(containerEl).setName("Embed images in Excalidraw via cloud").setDesc("When you paste or drop an image onto an Excalidraw canvas, upload it to your cloud provider and embed the URL instead of saving a vault attachment. Eagle assets are resolved to the original; screenshots are uploaded as-is. Requires the Excalidraw plugin and a configured cloud provider.").addToggle((toggle) => toggle.setValue(this.plugin.settings.excalidrawIntegration).onChange(async (value) => {
       this.plugin.settings.excalidrawIntegration = value;
@@ -1372,6 +1465,7 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian3.PluginSettingTab {
 
 // src/cloud-providers.ts
 var import_obsidian4 = require("obsidian");
+init_fs_utils();
 function getMimeType2(ext) {
   const MIME_TYPES2 = {
     "jpg": "image/jpeg",
@@ -2148,7 +2242,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     const success = await this.api.addFromUrl({
       url: clipboardText,
       name,
-      folderId: this.settings.defaultFolder || void 0
+      folderId: this.settings.enableDefaultFolder ? this.settings.defaultFolder || void 0 : void 0
     });
     if (success) {
       new import_obsidian5.Notice("URL captured to Eagle");
@@ -2800,7 +2894,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       const result = await this.api.addFromPath({
         path: absolutePath,
         name: filenameWithoutExt,
-        folderId: this.settings.defaultFolder || void 0
+        folderId: this.settings.enableDefaultFolder ? this.settings.defaultFolder || void 0 : void 0
       });
       if (!result.success || !result.itemId) {
         throw new Error("Failed to add image to Eagle");
@@ -3079,7 +3173,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
           const added = await this.api.addFromPath({
             path: tempPath,
             name: file.name.replace(/\.[^.]+$/, ""),
-            folderId: this.settings.defaultFolder || void 0
+            folderId: this.settings.enableDefaultFolder ? this.settings.defaultFolder || void 0 : void 0
           });
           if (added.success)
             eagleNote = " + Eagle";
@@ -3209,7 +3303,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     const result = await this.api.addFromPath({
       path: tempPath,
       name: filenameWithoutExt,
-      folderId: this.settings.defaultFolder || void 0
+      folderId: this.settings.enableDefaultFolder ? this.settings.defaultFolder || void 0 : void 0
     });
     if (!result.success || !result.itemId) {
       throw new Error("Failed to add image to Eagle");

@@ -423,7 +423,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		const success = await this.api.addFromUrl({
 			url: clipboardText,
 			name,
-			folderId: this.settings.defaultFolder || undefined,
+			folderId: this.settings.enableDefaultFolder ? (this.settings.defaultFolder || undefined) : undefined,
 		});
 
 		if (success) {
@@ -1191,7 +1191,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			const result = await this.api.addFromPath({
 				path: absolutePath,
 				name: filenameWithoutExt,
-				folderId: this.settings.defaultFolder || undefined,
+				folderId: this.settings.enableDefaultFolder ? (this.settings.defaultFolder || undefined) : undefined,
 			});
 
 			if (!result.success || !result.itemId) {
@@ -1526,7 +1526,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 					const added = await this.api.addFromPath({
 						path: tempPath,
 						name: file.name.replace(/\.[^.]+$/, ''),
-						folderId: this.settings.defaultFolder || undefined,
+						folderId: this.settings.enableDefaultFolder ? (this.settings.defaultFolder || undefined) : undefined,
 					});
 					if (added.success) eagleNote = ' + Eagle';
 				}
@@ -1683,7 +1683,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		const result = await this.api.addFromPath({
 			path: tempPath,
 			name: filenameWithoutExt,
-			folderId: this.settings.defaultFolder || undefined,
+			folderId: this.settings.enableDefaultFolder ? (this.settings.defaultFolder || undefined) : undefined,
 		});
 
 		if (!result.success || !result.itemId) {

@@ -82,6 +82,61 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
+		new Setting(containerEl).setName('Eagle target folder').setHeading();
+
+		new Setting(containerEl)
+			.setName('Save new attachments to a specific Eagle folder')
+			.setDesc('When pasting or dropping images into Eagle, save them to a designated folder instead of the root library.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.enableDefaultFolder)
+				.onChange(async (value) => {
+					this.plugin.settings.enableDefaultFolder = value;
+					await this.plugin.saveSettings();
+					this.display(); // re-render to show/hide the folder selection
+				}));
+
+		if (this.plugin.settings.enableDefaultFolder) {
+			new Setting(containerEl)
+				.setName('Target Folder')
+				.setDesc(this.plugin.settings.defaultFolderName || 'No folder selected')
+				.addButton(button => button
+					.setButtonText('Select Folder')
+					.onClick(async () => {
+						const api = new EagleApiService(this.plugin.settings);
+						const folders = await api.listFolders();
+						
+						if (!folders || folders.length === 0) {
+							new Notice('No folders found or Eagle is not connected.');
+							return;
+						}
+
+						// Flatten the folder hierarchy
+						const flattened: { id: string, name: string, path: string }[] = [];
+						const flatten = (items: import('./types').EagleFolder[], parentPath = '') => {
+							for (const item of items) {
+								const currentPath = parentPath ? `${parentPath} / ${item.name}` : item.name;
+								flattened.push({ id: item.id, name: item.name, path: currentPath });
+								if (item.children && item.children.length > 0) {
+									flatten(item.children, currentPath);
+								}
+							}
+						};
+						flatten(folders);
+
+						const { EagleFolderModal } = await import('./modals');
+						const modal = new EagleFolderModal(this.app, flattened, async (folderId) => {
+							const selected = flattened.find(f => f.id === folderId);
+							if (selected) {
+								this.plugin.settings.defaultFolder = selected.id;
+								this.plugin.settings.defaultFolderName = selected.path;
+								await this.plugin.saveSettings();
+								this.display();
+							}
+						});
+						modal.open();
+					}));
+		}
+
 		new Setting(containerEl).setName('Excalidraw integration').setHeading();
 
 		new Setting(containerEl)

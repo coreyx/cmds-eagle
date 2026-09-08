@@ -182,7 +182,9 @@ export interface CMDSPACEEagleSettings {
 	linkFormat: 'markdown' | 'wikilink';
 	insertThumbnail: boolean;
 	thumbnailSize: 'small' | 'medium' | 'large';
+	enableDefaultFolder: boolean;
 	defaultFolder: string;
+	defaultFolderName: string;
 	r2WorkerUrl: string;
 	r2ApiKey: string;
 	r2PublicUrl: string;
@@ -218,7 +220,9 @@ export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
 	linkFormat: 'markdown',
 	insertThumbnail: true,
 	thumbnailSize: 'medium',
+	enableDefaultFolder: false,
 	defaultFolder: '',
+	defaultFolderName: '',
 	r2WorkerUrl: '',
 	r2ApiKey: '',
 	r2PublicUrl: '',
