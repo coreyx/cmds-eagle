@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Eagle Target Folder**: Added a new setting to designate a specific folder in your Eagle library for new attachments. When enabled, a new "Select Folder" button provides a searchable dropdown of your entire Eagle folder hierarchy.
+- **Default Eagle Tags**: Added a setting to automatically append a comma-separated list of tags to every image uploaded to Eagle.
+- **Obsidian Backlinks in Eagle**: Added a setting to automatically generate an Obsidian Advanced URI backlink to the current note when adding a new image to Eagle. The backlink can be saved to the image's URL field, Note field, or both. If the active note lacks a unique identifier (`uid`), one is automatically generated and saved to its frontmatter to ensure the link never breaks.
 - **Docs**: Added a "Development & Testing" section to the `README.md` with instructions for compiling, installing, and testing local builds.
 
 ### Fixed

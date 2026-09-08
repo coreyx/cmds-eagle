@@ -1,5 +1,11 @@
 # Release Notes
 
+## New Features
+
+* **Eagle Target Folder Selection:** You can now configure the plugin to upload new pasted or dropped images into a specific folder in your Eagle library, rather than dropping them into the root library. A new searchable dropdown in settings lets you navigate your entire folder hierarchy to make your selection.
+* **Default Eagle Tags:** Added a new setting to automatically append a comma-separated list of tags (e.g., `obsidian, inspiration`) to all newly uploaded Eagle assets.
+* **Obsidian Backlinks in Eagle:** You can now configure the plugin to automatically generate bidirectional backlinks. When an image is uploaded to Eagle, it can save an Obsidian Advanced URI back to the original note. You can choose to place this link in Eagle's URL field (making the standard link button open Obsidian), in the Note field as a markdown link, or both. To ensure these links never break even if you rename the file, the plugin will automatically generate and save a `uid` to the note's frontmatter if one doesn't already exist.
+
 ## WebDAV Improvements and Fixes
 
 This release focuses on heavily improving the stability and compatibility of the WebDAV cloud provider, ensuring it works flawlessly with servers like Nextcloud, Synology, and rclone:
