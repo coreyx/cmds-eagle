@@ -1014,8 +1014,13 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		editor.replaceSelection(placeholderText);
 
 		try {
-			const imageUrl = await this.uploadImageToEagle(file);
-			const markdownImage = `![${file.name}](${imageUrl})`;
+			const { url: imageUrl, item } = await this.uploadImageToEagle(file);
+			let markdownImage = `![${file.name}](${imageUrl})`;
+			
+			if (item && this.settings.insertThumbnail) {
+				markdownImage += '\n\n' + this.buildMetadataCard(item);
+			}
+
 			this.replaceTextInDocument(editor, placeholderText, markdownImage);
 			new Notice(`Uploaded to Eagle: ${file.name}`);
 		} catch (error) {
@@ -1666,7 +1671,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		}
 	}
 
-	private async uploadImageToEagle(file: File): Promise<string> {
+	private async uploadImageToEagle(file: File): Promise<{ url: string, item: EagleItem | null }> {
 		const tempPath = await this.saveToTempLocation(file);
 		
 		const connected = await this.api.isConnected();
@@ -1688,8 +1693,12 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		await this.delay(1000);
 
 		const thumbnailPath = await this.api.getThumbnailPath(result.itemId);
+		const item = await this.api.getItemInfo(result.itemId);
 		
-		return thumbnailPath ? `file://${thumbnailPath}` : `file://${tempPath}`;
+		return {
+			url: thumbnailPath ? `file://${thumbnailPath}` : `file://${tempPath}`,
+			item
+		};
 	}
 
 	private async saveToTempLocation(file: File): Promise<string> {

@@ -2654,8 +2654,11 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     const placeholderText = `![Uploading ${file.name}...](${pasteId})`;
     editor.replaceSelection(placeholderText);
     try {
-      const imageUrl = await this.uploadImageToEagle(file);
-      const markdownImage = `![${file.name}](${imageUrl})`;
+      const { url: imageUrl, item } = await this.uploadImageToEagle(file);
+      let markdownImage = `![${file.name}](${imageUrl})`;
+      if (item && this.settings.insertThumbnail) {
+        markdownImage += "\n\n" + this.buildMetadataCard(item);
+      }
       this.replaceTextInDocument(editor, placeholderText, markdownImage);
       new import_obsidian5.Notice(`Uploaded to Eagle: ${file.name}`);
     } catch (error) {
@@ -3213,7 +3216,11 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     }
     await this.delay(1e3);
     const thumbnailPath = await this.api.getThumbnailPath(result.itemId);
-    return thumbnailPath ? `file://${thumbnailPath}` : `file://${tempPath}`;
+    const item = await this.api.getItemInfo(result.itemId);
+    return {
+      url: thumbnailPath ? `file://${thumbnailPath}` : `file://${tempPath}`,
+      item
+    };
   }
   async saveToTempLocation(file) {
     const tempDir = ".eagle-temp";
