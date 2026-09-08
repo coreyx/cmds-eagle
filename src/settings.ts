@@ -137,6 +137,32 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 					}));
 		}
 
+		new Setting(containerEl).setName('Eagle tags').setHeading();
+
+		new Setting(containerEl)
+			.setName('Add default tags to new Eagle attachments')
+			.setDesc('Automatically append specific tags to images you paste or drop into Eagle.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.enableDefaultTags)
+				.onChange(async (value) => {
+					this.plugin.settings.enableDefaultTags = value;
+					await this.plugin.saveSettings();
+					this.display(); // re-render to show/hide the tags input
+				}));
+
+		if (this.plugin.settings.enableDefaultTags) {
+			new Setting(containerEl)
+				.setName('Default Tags')
+				.setDesc('Comma-separated list of tags to add (e.g. obsidian, reference)')
+				.addText(text => text
+					.setPlaceholder('obsidian, reference')
+					.setValue(this.plugin.settings.defaultTags)
+					.onChange(async (value) => {
+						this.plugin.settings.defaultTags = value;
+						await this.plugin.saveSettings();
+					}));
+		}
+
 		new Setting(containerEl).setName('Excalidraw integration').setHeading();
 
 		new Setting(containerEl)

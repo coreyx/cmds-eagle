@@ -185,6 +185,8 @@ export interface CMDSPACEEagleSettings {
 	enableDefaultFolder: boolean;
 	defaultFolder: string;
 	defaultFolderName: string;
+	enableDefaultTags: boolean;
+	defaultTags: string;
 	r2WorkerUrl: string;
 	r2ApiKey: string;
 	r2PublicUrl: string;
@@ -223,6 +225,8 @@ export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
 	enableDefaultFolder: false,
 	defaultFolder: '',
 	defaultFolderName: '',
+	enableDefaultTags: false,
+	defaultTags: '',
 	r2WorkerUrl: '',
 	r2ApiKey: '',
 	r2PublicUrl: '',

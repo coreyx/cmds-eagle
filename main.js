@@ -58,6 +58,8 @@ var init_types = __esm({
       enableDefaultFolder: false,
       defaultFolder: "",
       defaultFolderName: "",
+      enableDefaultTags: false,
+      defaultTags: "",
       r2WorkerUrl: "",
       r2ApiKey: "",
       r2PublicUrl: "",
@@ -1039,6 +1041,18 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian3.PluginSettingTab {
           }
         });
         modal.open();
+      }));
+    }
+    new import_obsidian3.Setting(containerEl).setName("Eagle tags").setHeading();
+    new import_obsidian3.Setting(containerEl).setName("Add default tags to new Eagle attachments").setDesc("Automatically append specific tags to images you paste or drop into Eagle.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableDefaultTags).onChange(async (value) => {
+      this.plugin.settings.enableDefaultTags = value;
+      await this.plugin.saveSettings();
+      this.display();
+    }));
+    if (this.plugin.settings.enableDefaultTags) {
+      new import_obsidian3.Setting(containerEl).setName("Default Tags").setDesc("Comma-separated list of tags to add (e.g. obsidian, reference)").addText((text) => text.setPlaceholder("obsidian, reference").setValue(this.plugin.settings.defaultTags).onChange(async (value) => {
+        this.plugin.settings.defaultTags = value;
+        await this.plugin.saveSettings();
       }));
     }
     new import_obsidian3.Setting(containerEl).setName("Excalidraw integration").setHeading();
@@ -2242,6 +2256,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     const success = await this.api.addFromUrl({
       url: clipboardText,
       name,
+      tags: this.getDefaultTags(),
       folderId: this.settings.enableDefaultFolder ? this.settings.defaultFolder || void 0 : void 0
     });
     if (success) {
@@ -2894,6 +2909,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       const result = await this.api.addFromPath({
         path: absolutePath,
         name: filenameWithoutExt,
+        tags: this.getDefaultTags(),
         folderId: this.settings.enableDefaultFolder ? this.settings.defaultFolder || void 0 : void 0
       });
       if (!result.success || !result.itemId) {
@@ -3173,6 +3189,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
           const added = await this.api.addFromPath({
             path: tempPath,
             name: file.name.replace(/\.[^.]+$/, ""),
+            tags: this.getDefaultTags(),
             folderId: this.settings.enableDefaultFolder ? this.settings.defaultFolder || void 0 : void 0
           });
           if (added.success)
@@ -3293,6 +3310,13 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       return `${targetRoot}${relativePath}`;
     }
   }
+  getDefaultTags() {
+    if (!this.settings.enableDefaultTags || !this.settings.defaultTags) {
+      return void 0;
+    }
+    const parsedTags = this.settings.defaultTags.split(",").map((tag) => tag.trim()).filter((tag) => tag.length > 0);
+    return parsedTags.length > 0 ? parsedTags : void 0;
+  }
   async uploadImageToEagle(file) {
     const tempPath = await this.saveToTempLocation(file);
     const connected = await this.api.isConnected();
@@ -3303,6 +3327,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     const result = await this.api.addFromPath({
       path: tempPath,
       name: filenameWithoutExt,
+      tags: this.getDefaultTags(),
       folderId: this.settings.enableDefaultFolder ? this.settings.defaultFolder || void 0 : void 0
     });
     if (!result.success || !result.itemId) {

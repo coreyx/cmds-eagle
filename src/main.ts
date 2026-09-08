@@ -423,6 +423,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		const success = await this.api.addFromUrl({
 			url: clipboardText,
 			name,
+			tags: this.getDefaultTags(),
 			folderId: this.settings.enableDefaultFolder ? (this.settings.defaultFolder || undefined) : undefined,
 		});
 
@@ -1191,6 +1192,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			const result = await this.api.addFromPath({
 				path: absolutePath,
 				name: filenameWithoutExt,
+				tags: this.getDefaultTags(),
 				folderId: this.settings.enableDefaultFolder ? (this.settings.defaultFolder || undefined) : undefined,
 			});
 
@@ -1526,6 +1528,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 					const added = await this.api.addFromPath({
 						path: tempPath,
 						name: file.name.replace(/\.[^.]+$/, ''),
+						tags: this.getDefaultTags(),
 						folderId: this.settings.enableDefaultFolder ? (this.settings.defaultFolder || undefined) : undefined,
 					});
 					if (added.success) eagleNote = ' + Eagle';
@@ -1671,6 +1674,19 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		}
 	}
 
+	private getDefaultTags(): string[] | undefined {
+		if (!this.settings.enableDefaultTags || !this.settings.defaultTags) {
+			return undefined;
+		}
+		
+		const parsedTags = this.settings.defaultTags
+			.split(',')
+			.map(tag => tag.trim())
+			.filter(tag => tag.length > 0);
+			
+		return parsedTags.length > 0 ? parsedTags : undefined;
+	}
+
 	private async uploadImageToEagle(file: File): Promise<{ url: string, item: EagleItem | null }> {
 		const tempPath = await this.saveToTempLocation(file);
 		
@@ -1683,6 +1699,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		const result = await this.api.addFromPath({
 			path: tempPath,
 			name: filenameWithoutExt,
+			tags: this.getDefaultTags(),
 			folderId: this.settings.enableDefaultFolder ? (this.settings.defaultFolder || undefined) : undefined,
 		});
 
