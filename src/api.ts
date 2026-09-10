@@ -202,11 +202,12 @@ export class EagleApiService {
 		const path = await this.getLibraryPath();
 		if (!path) return null;
 		
-		const match = path.match(/([^/]+)\.library\/?$/i);
+		const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
+		const match = normalized.match(/([^/]+)\.library$/i);
 		if (match) {
 			return match[1];
 		}
-		return path.split('/').pop()?.replace('.library', '') || null;
+		return normalized.split('/').filter(Boolean).pop()?.replace(/\.library$/i, '') || null;
 	}
 
 	async refreshThumbnail(id: string): Promise<boolean> {
@@ -378,6 +379,71 @@ export class EagleApiService {
 		});
 		return response.json as EagleApiResponse<T>;
 	}
+
+	async addExtraLinks(
+		baseUrl: string,
+		itemId: string,
+		links: string | { title?: string; url: string } | Array<string | { title?: string; url: string }>
+	): Promise<{ success: boolean; error?: string }> {
+		try {
+			const cleanBaseUrl = baseUrl.replace(/\/+$/, '');
+			let body: Record<string, any>;
+
+			if (typeof links === 'string') {
+				body = { url: links, allowDuplicates: false };
+			} else if (Array.isArray(links)) {
+				if (links.length === 1) {
+					const first = links[0];
+					if (typeof first === 'string') {
+						body = { url: first, allowDuplicates: false };
+					} else {
+						body = {
+							...(first.title ? { title: first.title } : {}),
+							url: first.url,
+							allowDuplicates: false,
+						};
+					}
+				} else {
+					const urlStrings = links.map(l => (typeof l === 'string' ? l : l.url));
+					body = { urls: urlStrings, allowDuplicates: false };
+				}
+			} else if (typeof links === 'object' && links !== null) {
+				body = {
+					...(links.title ? { title: links.title } : {}),
+					url: links.url,
+					allowDuplicates: false,
+				};
+			} else {
+				body = { url: String(links), allowDuplicates: false };
+			}
+
+			const response = await requestUrl({
+				url: `${cleanBaseUrl}/api/item/${encodeURIComponent(itemId)}/links`,
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify(body),
+			});
+
+			if (response.status >= 200 && response.status < 300) {
+				const json = response.json as { status?: string; message?: string };
+				if (json && json.status === 'error') {
+					return { success: false, error: json.message || 'Error from Eagle Extra Links' };
+				}
+				return { success: true };
+			}
+			return {
+				success: false,
+				error: `HTTP ${response.status}`,
+			};
+		} catch (error) {
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : 'Unknown error',
+			};
+		}
+	}
 }
 
 export function buildEagleItemUrl(itemId: string): string {
@@ -412,6 +478,48 @@ export function parseEagleLocalhostUrl(url: string): string | null {
 
 export function isEagleLocalhostUrl(url: string): boolean {
 	return /^https?:\/\/localhost:\d+\/item\?id=[A-Z0-9]+$/i.test(url);
+}
+
+export function extractEagleItemId(text: string): string | null {
+	if (!text) return null;
+	const trimmed = text.trim();
+
+	// eagle://item/{itemId}
+	const itemMatch = trimmed.match(/^eagle:\/\/item\/([A-Za-z0-9]+)$/i);
+	if (itemMatch) return itemMatch[1];
+
+	// http(s)://localhost:{port}/item?id={itemId}
+	const localhostMatch = trimmed.match(/^https?:\/\/localhost:\d+\/item\?id=([A-Za-z0-9]+)$/i);
+	if (localhostMatch) return localhostMatch[1];
+
+	// eagle://{itemId}.info/{filename}
+	const legacyMatch = trimmed.match(/^eagle:\/\/([A-Za-z0-9]+)\.info\//i);
+	if (legacyMatch) return legacyMatch[1];
+
+	return null;
+}
+
+export function isEagleUrl(text: string): boolean {
+	return extractEagleItemId(text) !== null;
+}
+
+export function buildEagleCustomEmbedUrl(
+	prefix: string,
+	libraryName: string,
+	itemId: string,
+	filenameWithoutExt: string,
+	ext: string,
+	isThumbnail: boolean
+): string {
+	const cleanPrefix = prefix.replace(/\/+$/, '');
+	const normalizedLib = libraryName.replace(/\\/g, '/').replace(/\/+$/, '');
+	const baseName = normalizedLib.split('/').filter(Boolean).pop()?.replace(/\.library$/i, '') || 'Main';
+	const libDir = `${baseName}.library`;
+	const cleanExt = ext.replace(/^\./, '');
+	const targetFile = isThumbnail
+		? `${encodeURIComponent(filenameWithoutExt)}_thumbnail.png`
+		: `${encodeURIComponent(filenameWithoutExt)}.${cleanExt}`;
+	return `${cleanPrefix}/${libDir}/images/${itemId}.info/${targetFile}`;
 }
 
 export function buildEagleLocalhostThumbnailUrl(baseUrl: string, id: string): string {

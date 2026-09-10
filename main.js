@@ -61,7 +61,13 @@ var init_types = __esm({
       enableDefaultTags: false,
       defaultTags: "",
       enableBacklinks: false,
+      frontmatterIdField: "id",
+      backlinkMode: "extra-links",
+      extraLinksBaseUrl: "http://127.0.0.1:41598",
       backlinkDestination: "both",
+      eagleLinkPasteMode: "ask",
+      eagleEmbedUrlMode: "file",
+      eagleCustomUrlPrefix: "https://localhost:8080",
       r2WorkerUrl: "",
       r2ApiKey: "",
       r2PublicUrl: "",
@@ -160,6 +166,31 @@ function parseEagleLocalhostUrl(url) {
 }
 function isEagleLocalhostUrl(url) {
   return /^https?:\/\/localhost:\d+\/item\?id=[A-Z0-9]+$/i.test(url);
+}
+function extractEagleItemId(text) {
+  if (!text)
+    return null;
+  const trimmed = text.trim();
+  const itemMatch = trimmed.match(/^eagle:\/\/item\/([A-Za-z0-9]+)$/i);
+  if (itemMatch)
+    return itemMatch[1];
+  const localhostMatch = trimmed.match(/^https?:\/\/localhost:\d+\/item\?id=([A-Za-z0-9]+)$/i);
+  if (localhostMatch)
+    return localhostMatch[1];
+  const legacyMatch = trimmed.match(/^eagle:\/\/([A-Za-z0-9]+)\.info\//i);
+  if (legacyMatch)
+    return legacyMatch[1];
+  return null;
+}
+function buildEagleCustomEmbedUrl(prefix, libraryName, itemId, filenameWithoutExt, ext, isThumbnail) {
+  var _a;
+  const cleanPrefix = prefix.replace(/\/+$/, "");
+  const normalizedLib = libraryName.replace(/\\/g, "/").replace(/\/+$/, "");
+  const baseName = ((_a = normalizedLib.split("/").filter(Boolean).pop()) == null ? void 0 : _a.replace(/\.library$/i, "")) || "Main";
+  const libDir = `${baseName}.library`;
+  const cleanExt = ext.replace(/^\./, "");
+  const targetFile = isThumbnail ? `${encodeURIComponent(filenameWithoutExt)}_thumbnail.png` : `${encodeURIComponent(filenameWithoutExt)}.${cleanExt}`;
+  return `${cleanPrefix}/${libDir}/images/${itemId}.info/${targetFile}`;
 }
 function getR2KeyFromItem(item) {
   const r2Tag = item.tags.find((t) => t.startsWith("r2:"));
@@ -330,11 +361,12 @@ var init_api = __esm({
         const path = await this.getLibraryPath();
         if (!path)
           return null;
-        const match = path.match(/([^/]+)\.library\/?$/i);
+        const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
+        const match = normalized.match(/([^/]+)\.library$/i);
         if (match) {
           return match[1];
         }
-        return ((_a = path.split("/").pop()) == null ? void 0 : _a.replace(".library", "")) || null;
+        return ((_a = normalized.split("/").filter(Boolean).pop()) == null ? void 0 : _a.replace(/\.library$/i, "")) || null;
       }
       async refreshThumbnail(id) {
         try {
@@ -485,6 +517,63 @@ var init_api = __esm({
         });
         return response.json;
       }
+      async addExtraLinks(baseUrl, itemId, links) {
+        try {
+          const cleanBaseUrl = baseUrl.replace(/\/+$/, "");
+          let body;
+          if (typeof links === "string") {
+            body = { url: links, allowDuplicates: false };
+          } else if (Array.isArray(links)) {
+            if (links.length === 1) {
+              const first = links[0];
+              if (typeof first === "string") {
+                body = { url: first, allowDuplicates: false };
+              } else {
+                body = {
+                  ...first.title ? { title: first.title } : {},
+                  url: first.url,
+                  allowDuplicates: false
+                };
+              }
+            } else {
+              const urlStrings = links.map((l) => typeof l === "string" ? l : l.url);
+              body = { urls: urlStrings, allowDuplicates: false };
+            }
+          } else if (typeof links === "object" && links !== null) {
+            body = {
+              ...links.title ? { title: links.title } : {},
+              url: links.url,
+              allowDuplicates: false
+            };
+          } else {
+            body = { url: String(links), allowDuplicates: false };
+          }
+          const response = await (0, import_obsidian.requestUrl)({
+            url: `${cleanBaseUrl}/api/item/${encodeURIComponent(itemId)}/links`,
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(body)
+          });
+          if (response.status >= 200 && response.status < 300) {
+            const json = response.json;
+            if (json && json.status === "error") {
+              return { success: false, error: json.message || "Error from Eagle Extra Links" };
+            }
+            return { success: true };
+          }
+          return {
+            success: false,
+            error: `HTTP ${response.status}`
+          };
+        } catch (error) {
+          return {
+            success: false,
+            error: error instanceof Error ? error.message : "Unknown error"
+          };
+        }
+      }
     };
     MIME_TYPES = {
       "jpg": "image/jpeg",
@@ -508,10 +597,11 @@ var init_api = __esm({
 var modals_exports = {};
 __export(modals_exports, {
   EagleFolderModal: () => EagleFolderModal,
+  EagleLinkChoiceModal: () => EagleLinkChoiceModal,
   EagleSearchModal: () => EagleSearchModal,
   ImagePasteChoiceModal: () => ImagePasteChoiceModal
 });
-var import_obsidian2, EagleSearchModal, EagleFolderModal, ImagePasteChoiceModal;
+var import_obsidian2, EagleSearchModal, EagleFolderModal, ImagePasteChoiceModal, EagleLinkChoiceModal;
 var init_modals = __esm({
   "src/modals.ts"() {
     import_obsidian2 = require("obsidian");
@@ -955,6 +1045,107 @@ var init_modals = __esm({
         });
       }
     };
+    EagleLinkChoiceModal = class extends import_obsidian2.Modal {
+      constructor(app, item) {
+        super(app);
+        this.response = {
+          choice: "embed",
+          useThumbnail: false,
+          rememberChoice: false
+        };
+        this.thumbnailSettingEl = null;
+        this.item = item;
+      }
+      onOpen() {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.addClass("cmdspace-paste-choice-modal");
+        contentEl.createEl("h2", { text: "Paste Eagle item" });
+        const desc = contentEl.createEl("p", {
+          cls: "cmdspace-eagle-suggestion-meta"
+        });
+        desc.setText(`${this.item.name}.${this.item.ext} (${this.item.ext.toUpperCase()})`);
+        const buttonContainer = contentEl.createDiv({ cls: "cmdspace-paste-buttons" });
+        const embedBtn = buttonContainer.createEl("button", {
+          text: "Embed",
+          cls: "mod-cta"
+        });
+        const inlineBtn = buttonContainer.createEl("button", {
+          text: "Inline Link"
+        });
+        const optionsContainer = contentEl.createDiv();
+        const hasThumbnail = this.item.noThumbnail === false;
+        if (hasThumbnail) {
+          const thumbnailSetting = new import_obsidian2.Setting(optionsContainer).setName("Embed thumbnail").setDesc("Embed the thumbnail image instead of the original asset").addToggle((toggle) => {
+            toggle.setValue(this.response.useThumbnail).onChange((value) => {
+              this.response.useThumbnail = value;
+            });
+          });
+          this.thumbnailSettingEl = thumbnailSetting.settingEl;
+        }
+        const updateUI = (mode) => {
+          this.response.choice = mode;
+          if (mode === "embed") {
+            embedBtn.addClass("mod-cta");
+            inlineBtn.removeClass("mod-cta");
+            if (this.thumbnailSettingEl) {
+              this.thumbnailSettingEl.style.display = "";
+            }
+          } else {
+            embedBtn.removeClass("mod-cta");
+            inlineBtn.addClass("mod-cta");
+            if (this.thumbnailSettingEl) {
+              this.thumbnailSettingEl.style.display = "none";
+            }
+          }
+        };
+        embedBtn.addEventListener("click", () => {
+          updateUI("embed");
+        });
+        inlineBtn.addEventListener("click", () => {
+          updateUI("inline");
+        });
+        new import_obsidian2.Setting(optionsContainer).setName("Remember this choice").setDesc("You can change this later in plugin settings").addToggle((toggle) => {
+          toggle.setValue(false).onChange((value) => {
+            this.response.rememberChoice = value;
+          });
+        });
+        const actionRow = contentEl.createDiv({
+          cls: "cmdspace-paste-buttons",
+          attr: { style: "margin-top: 16px;" }
+        });
+        const confirmBtn = actionRow.createEl("button", {
+          text: "Insert",
+          cls: "mod-cta"
+        });
+        confirmBtn.addEventListener("click", () => {
+          this.close();
+        });
+        const cancelBtn = actionRow.createEl("button", {
+          text: "Cancel"
+        });
+        cancelBtn.addEventListener("click", () => {
+          this.response.choice = "cancel";
+          this.close();
+        });
+        updateUI("embed");
+      }
+      onClose() {
+        var _a, _b, _c;
+        if (this.resolvePromise) {
+          this.resolvePromise({
+            choice: (_a = this.response.choice) != null ? _a : "cancel",
+            useThumbnail: (_b = this.response.useThumbnail) != null ? _b : false,
+            rememberChoice: (_c = this.response.rememberChoice) != null ? _c : false
+          });
+        }
+      }
+      getResponse() {
+        return new Promise((resolve) => {
+          this.resolvePromise = resolve;
+        });
+      }
+    };
   }
 });
 
@@ -1007,6 +1198,22 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian3.PluginSettingTab {
       this.plugin.settings.imagePasteBehavior = value;
       await this.plugin.saveSettings();
     }));
+    new import_obsidian3.Setting(containerEl).setName("Eagle link paste").setHeading();
+    new import_obsidian3.Setting(containerEl).setName("Eagle link paste behavior").setDesc("What to do when pasting an Eagle item link into a note").addDropdown((dropdown) => dropdown.addOption("ask", "Always ask").addOption("embed", "Embed image").addOption("inline", "Inline link").setValue(this.plugin.settings.eagleLinkPasteMode).onChange(async (value) => {
+      this.plugin.settings.eagleLinkPasteMode = value;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian3.Setting(containerEl).setName("Eagle embed URL mode").setDesc("How to reference the Eagle image when embedding").addDropdown((dropdown) => dropdown.addOption("file", "Local file path (file://)").addOption("custom-url", "Custom URL prefix (HTTP / WebDAV)").setValue(this.plugin.settings.eagleEmbedUrlMode).onChange(async (value) => {
+      this.plugin.settings.eagleEmbedUrlMode = value;
+      await this.plugin.saveSettings();
+      this.display();
+    }));
+    if (this.plugin.settings.eagleEmbedUrlMode === "custom-url") {
+      new import_obsidian3.Setting(containerEl).setName("Custom URL prefix").setDesc("Base URL for serving Eagle library files over HTTP/WebDAV (e.g. https://localhost:8080)").addText((text) => text.setPlaceholder("https://localhost:8080").setValue(this.plugin.settings.eagleCustomUrlPrefix).onChange(async (value) => {
+        this.plugin.settings.eagleCustomUrlPrefix = value.trim() || "https://localhost:8080";
+        await this.plugin.saveSettings();
+      }));
+    }
     new import_obsidian3.Setting(containerEl).setName("Eagle target folder").setHeading();
     new import_obsidian3.Setting(containerEl).setName("Save new attachments to a specific Eagle folder").setDesc("When pasting or dropping images into Eagle, save them to a designated folder instead of the root library.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableDefaultFolder).onChange(async (value) => {
       this.plugin.settings.enableDefaultFolder = value;
@@ -1058,16 +1265,32 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian3.PluginSettingTab {
       }));
     }
     new import_obsidian3.Setting(containerEl).setName("Obsidian Backlinks").setHeading();
-    new import_obsidian3.Setting(containerEl).setName("Add Obsidian backlink to new Eagle attachments").setDesc("Automatically generate an Advanced URI backlink to the current note when adding images to Eagle.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableBacklinks).onChange(async (value) => {
+    new import_obsidian3.Setting(containerEl).setName("Add Obsidian backlink to Eagle attachments").setDesc("Automatically generate an Advanced URI backlink to the current note when adding or pasting Eagle items.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableBacklinks).onChange(async (value) => {
       this.plugin.settings.enableBacklinks = value;
       await this.plugin.saveSettings();
       this.display();
     }));
     if (this.plugin.settings.enableBacklinks) {
-      new import_obsidian3.Setting(containerEl).setName("Backlink Destination").setDesc("Where should the backlink be saved in Eagle?").addDropdown((dropdown) => dropdown.addOption("url", "URL/Link Field").addOption("note", "Note/Annotation Field").addOption("both", "Both").setValue(this.plugin.settings.backlinkDestination).onChange(async (value) => {
-        this.plugin.settings.backlinkDestination = value;
+      new import_obsidian3.Setting(containerEl).setName("UID field in frontmatter").setDesc(`Frontmatter property used to identify the note for Advanced URI linking (matches Advanced URI's "UID field"). Defaults to "id".`).addText((text) => text.setPlaceholder("id").setValue(this.plugin.settings.frontmatterIdField).onChange(async (value) => {
+        this.plugin.settings.frontmatterIdField = value.trim() || "id";
         await this.plugin.saveSettings();
       }));
+      new import_obsidian3.Setting(containerEl).setName("Backlink Mode").setDesc("Choose how backlinks are registered with Eagle").addDropdown((dropdown) => dropdown.addOption("extra-links", "Eagle Extra Links Plugin (REST API)").addOption("legacy", "Eagle Native Fields (Website / Note)").setValue(this.plugin.settings.backlinkMode).onChange(async (value) => {
+        this.plugin.settings.backlinkMode = value;
+        await this.plugin.saveSettings();
+        this.display();
+      }));
+      if (this.plugin.settings.backlinkMode === "extra-links") {
+        new import_obsidian3.Setting(containerEl).setName("Eagle Extra Links Base URL").setDesc("REST endpoint URL for the eagle-extra-links plugin in Eagle").addText((text) => text.setPlaceholder("http://127.0.0.1:41598").setValue(this.plugin.settings.extraLinksBaseUrl).onChange(async (value) => {
+          this.plugin.settings.extraLinksBaseUrl = value.trim() || "http://127.0.0.1:41598";
+          await this.plugin.saveSettings();
+        }));
+      } else {
+        new import_obsidian3.Setting(containerEl).setName("Backlink Destination").setDesc("Where should the backlink be saved in Eagle?").addDropdown((dropdown) => dropdown.addOption("url", "URL/Link Field").addOption("note", "Note/Annotation Field").addOption("both", "Both").setValue(this.plugin.settings.backlinkDestination).onChange(async (value) => {
+          this.plugin.settings.backlinkDestination = value;
+          await this.plugin.saveSettings();
+        }));
+      }
     }
     new import_obsidian3.Setting(containerEl).setName("Excalidraw integration").setHeading();
     new import_obsidian3.Setting(containerEl).setName("Embed images in Excalidraw via cloud").setDesc("When you paste or drop an image onto an Excalidraw canvas, upload it to your cloud provider and embed the URL instead of saving a vault attachment. Eagle assets are resolved to the original; screenshots are uploaded as-is. Requires the Excalidraw plugin and a configured cloud provider.").addToggle((toggle) => toggle.setValue(this.plugin.settings.excalidrawIntegration).onChange(async (value) => {
@@ -2070,6 +2293,10 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
   async loadSettings() {
     const saved = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
+    if (this.settings.extraLinksBaseUrl === "http://127.0.0.1:41596" || this.settings.extraLinksBaseUrl === "http://localhost:41596") {
+      this.settings.extraLinksBaseUrl = "http://127.0.0.1:41598";
+      await this.saveSettings();
+    }
   }
   async saveSettings() {
     await this.saveData(this.settings);
@@ -2617,6 +2844,8 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     if (!clipboardData)
       return false;
     const text = clipboardData.getData("text/plain").trim();
+    if (extractEagleItemId(text))
+      return true;
     if (isEagleLocalhostUrl(text))
       return true;
     if (this.isEagleLibraryPath(text))
@@ -2631,8 +2860,8 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     if (!clipboardData)
       return;
     const text = clipboardData.getData("text/plain").trim();
-    if (isEagleLocalhostUrl(text)) {
-      await this.handleEagleLocalhostUrlPaste(text, editor);
+    if (extractEagleItemId(text)) {
+      await this.handleEagleLinkPaste(text, editor);
       return;
     }
     if (this.isEagleLibraryPath(text)) {
@@ -2933,6 +3162,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       if (!result.success || !result.itemId) {
         throw new Error("Failed to add image to Eagle");
       }
+      void this.applyObsidianBacklink(result.itemId);
       await this.delay(1e3);
       const thumbnailPath = await this.api.getThumbnailPath(result.itemId);
       const imageUrl = thumbnailPath ? `file://${thumbnailPath}` : `eagle://item/${result.itemId}`;
@@ -3036,8 +3266,8 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       await this.app.vault.modify(file, content);
     }
   }
-  async handleEagleLocalhostUrlPaste(url, editor) {
-    const itemId = parseEagleLocalhostUrl(url);
+  async handleEagleLinkPaste(text, editor) {
+    const itemId = extractEagleItemId(text);
     if (!itemId) {
       new import_obsidian5.Notice("Invalid Eagle URL");
       return;
@@ -3047,16 +3277,81 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       new import_obsidian5.Notice("Could not fetch item info from Eagle");
       return;
     }
-    const filePath = await this.getEagleItemFilePath(itemId, item.name, item.ext);
+    let action = "embed";
+    let useThumbnail = false;
+    if (this.settings.eagleLinkPasteMode === "ask") {
+      const modal = new EagleLinkChoiceModal(this.app, item);
+      modal.open();
+      const response = await modal.getResponse();
+      if (response.choice === "cancel") {
+        return;
+      }
+      if (response.rememberChoice) {
+        this.settings.eagleLinkPasteMode = response.choice;
+        await this.saveSettings();
+      }
+      action = response.choice;
+      useThumbnail = response.useThumbnail;
+    } else if (this.settings.eagleLinkPasteMode === "embed") {
+      action = "embed";
+      useThumbnail = false;
+    } else if (this.settings.eagleLinkPasteMode === "inline") {
+      action = "inline";
+      useThumbnail = false;
+    }
+    if (action === "embed") {
+      await this.insertEagleEmbed(editor, item, useThumbnail);
+    } else {
+      this.insertEagleInlineLink(editor, item);
+    }
+    void this.applyObsidianBacklink(item.id);
+  }
+  async insertEagleEmbed(editor, item, useThumbnail) {
+    const filename = `${item.name}.${item.ext}`;
+    if (this.settings.eagleEmbedUrlMode === "custom-url") {
+      const libraryName = await this.api.getLibraryName() || "Main";
+      const embedUrl = buildEagleCustomEmbedUrl(
+        this.settings.eagleCustomUrlPrefix,
+        libraryName,
+        item.id,
+        item.name,
+        item.ext,
+        useThumbnail
+      );
+      let markdown = `![${filename}](${embedUrl})`;
+      if (this.settings.insertThumbnail) {
+        markdown += "\n\n" + this.buildMetadataCard(item);
+      }
+      editor.replaceSelection(markdown);
+      new import_obsidian5.Notice(`Embedded: ${filename}`);
+      return;
+    }
+    let filePath = null;
+    if (useThumbnail) {
+      filePath = await this.api.getThumbnailPath(item.id);
+    }
+    if (!filePath) {
+      filePath = await this.getEagleItemFilePath(item.id, item.name, item.ext);
+    }
     if (filePath) {
       const fileUrl = this.pathToFileUrl(filePath);
-      const filename = `${item.name}.${item.ext}`;
-      const markdown = `![${filename}](${fileUrl})`;
+      let markdown = `![${filename}](${fileUrl})`;
+      if (this.settings.insertThumbnail) {
+        markdown += "\n\n" + this.buildMetadataCard(item);
+      }
       editor.replaceSelection(markdown);
       new import_obsidian5.Notice(`Embedded: ${filename}`);
     } else {
       new import_obsidian5.Notice("Could not get file path from Eagle");
     }
+  }
+  insertEagleInlineLink(editor, item) {
+    const cleanBaseUrl = this.settings.eagleApiBaseUrl.replace(/\/+$/, "");
+    const linkUrl = `${cleanBaseUrl}/item?id=${item.id}`;
+    const filename = `${item.name}.${item.ext}`;
+    const markdown = `[${filename}](${linkUrl})`;
+    editor.replaceSelection(markdown);
+    new import_obsidian5.Notice(`Inserted link to: ${filename}`);
   }
   isEagleLibraryPath(text) {
     if (text.startsWith("![") || text.startsWith("](")) {
@@ -3074,7 +3369,11 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
         const folderPath = normalizedPath.substring(0, normalizedPath.lastIndexOf("/"));
         const originalPath = `${folderPath}/${item.name}.${item.ext}`;
         const filename2 = `${item.name}.${item.ext}`;
-        editor.replaceSelection(`![${filename2}](${this.pathToFileUrl(originalPath)})`);
+        let markdown = `![${filename2}](${this.pathToFileUrl(originalPath)})`;
+        if (this.settings.insertThumbnail) {
+          markdown += "\n\n" + this.buildMetadataCard(item);
+        }
+        editor.replaceSelection(markdown);
         new import_obsidian5.Notice(`Embedded: ${filename2}`);
         return;
       }
@@ -3212,8 +3511,12 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
             folderId: this.settings.enableDefaultFolder ? this.settings.defaultFolder || void 0 : void 0,
             ...backlinkData
           });
-          if (added.success)
+          if (added.success) {
             eagleNote = " + Eagle";
+            if (added.itemId) {
+              void this.applyObsidianBacklink(added.itemId);
+            }
+          }
         }
         const result = await provider.upload(tempPath, file.name, getMimeType2(getExtFromFilename(file.name)));
         if (result.success && result.publicUrl) {
@@ -3337,9 +3640,40 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     const parsedTags = this.settings.defaultTags.split(",").map((tag) => tag.trim()).filter((tag) => tag.length > 0);
     return parsedTags.length > 0 ? parsedTags : void 0;
   }
+  async getOrCreateActiveNoteId(activeFile) {
+    var _a, _b, _c, _d, _e, _f;
+    const cache = this.app.metadataCache.getFileCache(activeFile);
+    const idField = ((_a = this.settings.frontmatterIdField) == null ? void 0 : _a.trim()) || "id";
+    let id = "";
+    if ((_b = cache == null ? void 0 : cache.frontmatter) == null ? void 0 : _b[idField]) {
+      id = String(cache.frontmatter[idField]);
+    } else if (idField !== "id" && ((_c = cache == null ? void 0 : cache.frontmatter) == null ? void 0 : _c.id)) {
+      id = String(cache.frontmatter.id);
+    } else if (idField !== "uid" && ((_d = cache == null ? void 0 : cache.frontmatter) == null ? void 0 : _d.uid)) {
+      id = String(cache.frontmatter.uid);
+    } else {
+      id = crypto.randomUUID();
+    }
+    const hasTargetField = Boolean((_e = cache == null ? void 0 : cache.frontmatter) == null ? void 0 : _e[idField]);
+    const hasRedundantUid = idField !== "uid" && Boolean((_f = cache == null ? void 0 : cache.frontmatter) == null ? void 0 : _f.uid);
+    if (!hasTargetField || hasRedundantUid) {
+      try {
+        await this.app.fileManager.processFrontMatter(activeFile, (frontmatter) => {
+          if (!frontmatter[idField]) {
+            frontmatter[idField] = id;
+          }
+          if (idField !== "uid" && "uid" in frontmatter) {
+            delete frontmatter.uid;
+          }
+        });
+      } catch (err) {
+        console.error(`[CMDS Eagle] Failed to update frontmatter ${idField}:`, err);
+      }
+    }
+    return id;
+  }
   async getEagleBacklinkPayload() {
-    var _a, _b;
-    if (!this.settings.enableBacklinks) {
+    if (!this.settings.enableBacklinks || this.settings.backlinkMode !== "legacy") {
       return {};
     }
     const activeFile = this.app.workspace.getActiveFile();
@@ -3349,23 +3683,8 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     const vaultName = encodeURIComponent(this.app.vault.getName());
     const filePath = encodeURIComponent(activeFile.path);
     const basename = activeFile.basename;
-    let uid = "";
-    const cache = this.app.metadataCache.getFileCache(activeFile);
-    if ((_a = cache == null ? void 0 : cache.frontmatter) == null ? void 0 : _a.uid) {
-      uid = String(cache.frontmatter.uid);
-    } else if ((_b = cache == null ? void 0 : cache.frontmatter) == null ? void 0 : _b.id) {
-      uid = String(cache.frontmatter.id);
-    } else {
-      uid = crypto.randomUUID();
-      try {
-        await this.app.fileManager.processFrontMatter(activeFile, (frontmatter) => {
-          frontmatter.uid = uid;
-        });
-      } catch (err) {
-        console.error("[CMDS Eagle] Failed to write frontmatter uid:", err);
-      }
-    }
-    const advancedUri = `obsidian://adv-uri?vault=${vaultName}&uid=${uid}&filepath=${filePath}`;
+    const id = await this.getOrCreateActiveNoteId(activeFile);
+    const advancedUri = `obsidian://adv-uri?vault=${vaultName}&uid=${id}&filepath=${filePath}`;
     const result = {};
     const dest = this.settings.backlinkDestination;
     if (dest === "url" || dest === "both") {
@@ -3375,6 +3694,43 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       result.annotation = `Linked From Obsidian: [${basename}](${advancedUri})`;
     }
     return result;
+  }
+  async applyObsidianBacklink(itemId) {
+    if (!this.settings.enableBacklinks) {
+      return;
+    }
+    const activeFile = this.app.workspace.getActiveFile();
+    if (!activeFile) {
+      return;
+    }
+    const vaultName = encodeURIComponent(this.app.vault.getName());
+    const filePath = encodeURIComponent(activeFile.path);
+    const basename = activeFile.basename;
+    const id = await this.getOrCreateActiveNoteId(activeFile);
+    const advancedUri = `obsidian://adv-uri?vault=${vaultName}&uid=${id}&filepath=${filePath}`;
+    if (this.settings.backlinkMode === "extra-links") {
+      const res = await this.api.addExtraLinks(
+        this.settings.extraLinksBaseUrl,
+        itemId,
+        { title: basename, url: advancedUri }
+      );
+      if (!res.success) {
+        new import_obsidian5.Notice("Eagle Extra Links plugin is unreachable. Please ensure the Extra Links plugin is installed in Eagle and its IPC server is toggled on.");
+        console.warn("[CMDS Eagle] Failed to add extra link:", res.error);
+      }
+    } else {
+      const updates = {};
+      const dest = this.settings.backlinkDestination;
+      if (dest === "url" || dest === "both") {
+        updates.url = advancedUri;
+      }
+      if (dest === "note" || dest === "both") {
+        updates.annotation = `Linked From Obsidian: [${basename}](${advancedUri})`;
+      }
+      if (updates.url || updates.annotation) {
+        await this.api.updateItem(itemId, updates);
+      }
+    }
   }
   async uploadImageToEagle(file) {
     const tempPath = await this.saveToTempLocation(file);
@@ -3394,6 +3750,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     if (!result.success || !result.itemId) {
       throw new Error("Failed to add image to Eagle");
     }
+    void this.applyObsidianBacklink(result.itemId);
     await this.delay(1e3);
     const thumbnailPath = await this.api.getThumbnailPath(result.itemId);
     const item = await this.api.getItemInfo(result.itemId);

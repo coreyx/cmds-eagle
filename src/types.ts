@@ -86,6 +86,17 @@ export interface EagleApplicationInfo {
 
 export type ImagePasteBehavior = 'eagle' | 'local' | 'cloud' | 'ask';
 
+export type BacklinkMode = 'extra-links' | 'legacy';
+
+export type EagleLinkPasteMode = 'ask' | 'embed' | 'inline';
+
+export type EagleEmbedUrlMode = 'file' | 'custom-url';
+
+export interface EagleExtraLink {
+	title: string;
+	url: string;
+}
+
 export type SearchScope = 'name' | 'tags' | 'annotation' | 'folders';
 
 export const SUPPORTED_IMAGE_EXTENSIONS = [
@@ -188,7 +199,13 @@ export interface CMDSPACEEagleSettings {
 	enableDefaultTags: boolean;
 	defaultTags: string;
 	enableBacklinks: boolean;
+	frontmatterIdField: string;
+	backlinkMode: BacklinkMode;
+	extraLinksBaseUrl: string;
 	backlinkDestination: 'url' | 'note' | 'both';
+	eagleLinkPasteMode: EagleLinkPasteMode;
+	eagleEmbedUrlMode: EagleEmbedUrlMode;
+	eagleCustomUrlPrefix: string;
 	r2WorkerUrl: string;
 	r2ApiKey: string;
 	r2PublicUrl: string;
@@ -230,7 +247,13 @@ export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
 	enableDefaultTags: false,
 	defaultTags: '',
 	enableBacklinks: false,
+	frontmatterIdField: 'id',
+	backlinkMode: 'extra-links',
+	extraLinksBaseUrl: 'http://127.0.0.1:41598',
 	backlinkDestination: 'both',
+	eagleLinkPasteMode: 'ask',
+	eagleEmbedUrlMode: 'file',
+	eagleCustomUrlPrefix: 'https://localhost:8080',
 	r2WorkerUrl: '',
 	r2ApiKey: '',
 	r2PublicUrl: '',

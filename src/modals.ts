@@ -543,3 +543,138 @@ export class ImagePasteChoiceModal extends Modal {
 		});
 	}
 }
+
+export interface EagleLinkChoiceResponse {
+	choice: 'embed' | 'inline' | 'cancel';
+	useThumbnail: boolean;
+	rememberChoice: boolean;
+}
+
+export class EagleLinkChoiceModal extends Modal {
+	private item: EagleItem;
+	private response: EagleLinkChoiceResponse = {
+		choice: 'embed',
+		useThumbnail: false,
+		rememberChoice: false,
+	};
+	private resolvePromise?: (value: EagleLinkChoiceResponse) => void;
+	private thumbnailSettingEl: HTMLElement | null = null;
+
+	constructor(app: App, item: EagleItem) {
+		super(app);
+		this.item = item;
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass('cmdspace-paste-choice-modal');
+
+		contentEl.createEl('h2', { text: 'Paste Eagle item' });
+		const desc = contentEl.createEl('p', {
+			cls: 'cmdspace-eagle-suggestion-meta',
+		});
+		desc.setText(`${this.item.name}.${this.item.ext} (${this.item.ext.toUpperCase()})`);
+
+		const buttonContainer = contentEl.createDiv({ cls: 'cmdspace-paste-buttons' });
+
+		const embedBtn = buttonContainer.createEl('button', {
+			text: 'Embed',
+			cls: 'mod-cta',
+		});
+
+		const inlineBtn = buttonContainer.createEl('button', {
+			text: 'Inline Link',
+		});
+
+		const optionsContainer = contentEl.createDiv();
+
+		const hasThumbnail = this.item.noThumbnail === false;
+
+		if (hasThumbnail) {
+			const thumbnailSetting = new Setting(optionsContainer)
+				.setName('Embed thumbnail')
+				.setDesc('Embed the thumbnail image instead of the original asset')
+				.addToggle((toggle) => {
+					toggle.setValue(this.response.useThumbnail).onChange((value) => {
+						this.response.useThumbnail = value;
+					});
+				});
+			this.thumbnailSettingEl = thumbnailSetting.settingEl;
+		}
+
+		const updateUI = (mode: 'embed' | 'inline') => {
+			this.response.choice = mode;
+			if (mode === 'embed') {
+				embedBtn.addClass('mod-cta');
+				inlineBtn.removeClass('mod-cta');
+				if (this.thumbnailSettingEl) {
+					this.thumbnailSettingEl.style.display = '';
+				}
+			} else {
+				embedBtn.removeClass('mod-cta');
+				inlineBtn.addClass('mod-cta');
+				if (this.thumbnailSettingEl) {
+					this.thumbnailSettingEl.style.display = 'none';
+				}
+			}
+		};
+
+		embedBtn.addEventListener('click', () => {
+			updateUI('embed');
+		});
+
+		inlineBtn.addEventListener('click', () => {
+			updateUI('inline');
+		});
+
+		new Setting(optionsContainer)
+			.setName('Remember this choice')
+			.setDesc('You can change this later in plugin settings')
+			.addToggle((toggle) => {
+				toggle.setValue(false).onChange((value) => {
+					this.response.rememberChoice = value;
+				});
+			});
+
+		const actionRow = contentEl.createDiv({
+			cls: 'cmdspace-paste-buttons',
+			attr: { style: 'margin-top: 16px;' },
+		});
+
+		const confirmBtn = actionRow.createEl('button', {
+			text: 'Insert',
+			cls: 'mod-cta',
+		});
+		confirmBtn.addEventListener('click', () => {
+			this.close();
+		});
+
+		const cancelBtn = actionRow.createEl('button', {
+			text: 'Cancel',
+		});
+		cancelBtn.addEventListener('click', () => {
+			this.response.choice = 'cancel';
+			this.close();
+		});
+
+		updateUI('embed');
+	}
+
+	onClose(): void {
+		if (this.resolvePromise) {
+			this.resolvePromise({
+				choice: this.response.choice ?? 'cancel',
+				useThumbnail: this.response.useThumbnail ?? false,
+				rememberChoice: this.response.rememberChoice ?? false,
+			});
+		}
+	}
+
+	getResponse(): Promise<EagleLinkChoiceResponse> {
+		return new Promise((resolve) => {
+			this.resolvePromise = resolve;
+		});
+	}
+}
+

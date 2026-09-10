@@ -4,6 +4,9 @@ import { EagleApiService } from './api';
 import { 
 	CloudProviderType, 
 	ImagePasteBehavior,
+	BacklinkMode,
+	EagleLinkPasteMode,
+	EagleEmbedUrlMode,
 	SearchScope,
 	SUPPORTED_IMAGE_EXTENSIONS,
 	SUPPORTED_VIDEO_EXTENSIONS,
@@ -81,6 +84,47 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 					this.plugin.settings.imagePasteBehavior = value;
 					await this.plugin.saveSettings();
 				}));
+
+		new Setting(containerEl).setName('Eagle link paste').setHeading();
+
+		new Setting(containerEl)
+			.setName('Eagle link paste behavior')
+			.setDesc('What to do when pasting an Eagle item link into a note')
+			.addDropdown(dropdown => dropdown
+				.addOption('ask', 'Always ask')
+				.addOption('embed', 'Embed image')
+				.addOption('inline', 'Inline link')
+				.setValue(this.plugin.settings.eagleLinkPasteMode)
+				.onChange(async (value: EagleLinkPasteMode) => {
+					this.plugin.settings.eagleLinkPasteMode = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Eagle embed URL mode')
+			.setDesc('How to reference the Eagle image when embedding')
+			.addDropdown(dropdown => dropdown
+				.addOption('file', 'Local file path (file://)')
+				.addOption('custom-url', 'Custom URL prefix (HTTP / WebDAV)')
+				.setValue(this.plugin.settings.eagleEmbedUrlMode)
+				.onChange(async (value: EagleEmbedUrlMode) => {
+					this.plugin.settings.eagleEmbedUrlMode = value;
+					await this.plugin.saveSettings();
+					this.display();
+				}));
+
+		if (this.plugin.settings.eagleEmbedUrlMode === 'custom-url') {
+			new Setting(containerEl)
+				.setName('Custom URL prefix')
+				.setDesc('Base URL for serving Eagle library files over HTTP/WebDAV (e.g. https://localhost:8080)')
+				.addText(text => text
+					.setPlaceholder('https://localhost:8080')
+					.setValue(this.plugin.settings.eagleCustomUrlPrefix)
+					.onChange(async (value) => {
+						this.plugin.settings.eagleCustomUrlPrefix = value.trim() || 'https://localhost:8080';
+						await this.plugin.saveSettings();
+					}));
+		}
 
 		new Setting(containerEl).setName('Eagle target folder').setHeading();
 
@@ -166,8 +210,8 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 		new Setting(containerEl).setName('Obsidian Backlinks').setHeading();
 
 		new Setting(containerEl)
-			.setName('Add Obsidian backlink to new Eagle attachments')
-			.setDesc('Automatically generate an Advanced URI backlink to the current note when adding images to Eagle.')
+			.setName('Add Obsidian backlink to Eagle attachments')
+			.setDesc('Automatically generate an Advanced URI backlink to the current note when adding or pasting Eagle items.')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.enableBacklinks)
 				.onChange(async (value) => {
@@ -178,17 +222,54 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 
 		if (this.plugin.settings.enableBacklinks) {
 			new Setting(containerEl)
-				.setName('Backlink Destination')
-				.setDesc('Where should the backlink be saved in Eagle?')
-				.addDropdown(dropdown => dropdown
-					.addOption('url', 'URL/Link Field')
-					.addOption('note', 'Note/Annotation Field')
-					.addOption('both', 'Both')
-					.setValue(this.plugin.settings.backlinkDestination)
-					.onChange(async (value: 'url' | 'note' | 'both') => {
-						this.plugin.settings.backlinkDestination = value;
+				.setName('UID field in frontmatter')
+				.setDesc('Frontmatter property used to identify the note for Advanced URI linking (matches Advanced URI\'s "UID field"). Defaults to "id".')
+				.addText(text => text
+					.setPlaceholder('id')
+					.setValue(this.plugin.settings.frontmatterIdField)
+					.onChange(async (value) => {
+						this.plugin.settings.frontmatterIdField = value.trim() || 'id';
 						await this.plugin.saveSettings();
 					}));
+
+			new Setting(containerEl)
+				.setName('Backlink Mode')
+				.setDesc('Choose how backlinks are registered with Eagle')
+				.addDropdown(dropdown => dropdown
+					.addOption('extra-links', 'Eagle Extra Links Plugin (REST API)')
+					.addOption('legacy', 'Eagle Native Fields (Website / Note)')
+					.setValue(this.plugin.settings.backlinkMode)
+					.onChange(async (value: BacklinkMode) => {
+						this.plugin.settings.backlinkMode = value;
+						await this.plugin.saveSettings();
+						this.display();
+					}));
+
+			if (this.plugin.settings.backlinkMode === 'extra-links') {
+				new Setting(containerEl)
+					.setName('Eagle Extra Links Base URL')
+					.setDesc('REST endpoint URL for the eagle-extra-links plugin in Eagle')
+					.addText(text => text
+						.setPlaceholder('http://127.0.0.1:41598')
+						.setValue(this.plugin.settings.extraLinksBaseUrl)
+						.onChange(async (value) => {
+							this.plugin.settings.extraLinksBaseUrl = value.trim() || 'http://127.0.0.1:41598';
+							await this.plugin.saveSettings();
+						}));
+			} else {
+				new Setting(containerEl)
+					.setName('Backlink Destination')
+					.setDesc('Where should the backlink be saved in Eagle?')
+					.addDropdown(dropdown => dropdown
+						.addOption('url', 'URL/Link Field')
+						.addOption('note', 'Note/Annotation Field')
+						.addOption('both', 'Both')
+						.setValue(this.plugin.settings.backlinkDestination)
+						.onChange(async (value: 'url' | 'note' | 'both') => {
+							this.plugin.settings.backlinkDestination = value;
+							await this.plugin.saveSettings();
+						}));
+			}
 		}
 
 		new Setting(containerEl).setName('Excalidraw integration').setHeading();
