@@ -68,6 +68,7 @@ var init_types = __esm({
       eagleLinkPasteMode: "ask",
       eagleEmbedUrlMode: "file",
       eagleCustomUrlPrefix: "https://localhost:8080",
+      eagleItemLinkFormat: "http",
       enableImageSourceUrl: true,
       imageSourceUrlPriority: "page-first",
       extraLinksImageSource: "none",
@@ -147,8 +148,12 @@ var init_fs_utils = __esm({
 });
 
 // src/api.ts
-function buildEagleItemUrl(itemId) {
-  return `eagle://item/${itemId}`;
+function buildEagleItemUrl(itemId, format = "http", baseUrl = "http://localhost:41595") {
+  if (format === "eagle") {
+    return `eagle://item/${itemId}`;
+  }
+  const cleanBase = (baseUrl || "http://localhost:41595").replace(/\/+$/, "");
+  return `${cleanBase}/item?id=${itemId}`;
 }
 function parseEagleUrl(url) {
   const itemMatch = url.match(/^eagle:\/\/item\/([A-Z0-9]+)$/i);
@@ -873,7 +878,7 @@ var init_modals = __esm({
             return;
           }
         }
-        const linkUrl = buildEagleItemUrl(item.id);
+        const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
         let linkText;
         if (this.settings.linkFormat === "wikilink") {
           linkText = `[[${linkUrl}|${item.name}]]`;
@@ -970,13 +975,13 @@ var init_modals = __esm({
         return "";
       }
       buildMetadataLine(item) {
-        const linkUrl = buildEagleItemUrl(item.id);
+        const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
         const tags = item.tags.filter((t) => !t.startsWith("r2:") && t !== "r2-cloud" && t !== "cloud-upload").map((t) => `#${this.normalizeTag(t)}`).join(" ");
         const dimensions = item.width && item.height ? `${item.width}\xD7${item.height}` : "";
         return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)}${dimensions ? ` | ${dimensions}` : ""} | ${tags || "No tags"} | [Eagle](${linkUrl})`;
       }
       buildLinkCard(item) {
-        const linkUrl = buildEagleItemUrl(item.id);
+        const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
         const tags = item.tags.map((t) => `#${this.normalizeTag(t)}`).join(" ");
         const dimensions = item.width && item.height ? `${item.width}\xD7${item.height}` : "N/A";
         return `> [!cmdspace-eagle] ${item.name}
@@ -1364,6 +1369,10 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian3.PluginSettingTab {
     new import_obsidian3.Setting(containerEl).setName("Search & embed").setHeading();
     new import_obsidian3.Setting(containerEl).setName("Include metadata card").setDesc("Add metadata (type, size, tags, Eagle link) below the image when embedding").addToggle((toggle) => toggle.setValue(this.plugin.settings.insertThumbnail).onChange(async (value) => {
       this.plugin.settings.insertThumbnail = value;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian3.Setting(containerEl).setName("Eagle item link format").setDesc('Choose the link format for opening items in Eagle (used in metadata cards, link cards, and inline links). Default is HTTP localhost URL (e.g. http://localhost:41595/item?id=UUID); "eagle://" protocol remains available.').addDropdown((dropdown) => dropdown.addOption("http", "HTTP URL (http://localhost:41595/item?id=UUID)").addOption("eagle", "Eagle Protocol (eagle://item/UUID)").setValue(this.plugin.settings.eagleItemLinkFormat).onChange(async (value) => {
+      this.plugin.settings.eagleItemLinkFormat = value;
       await this.plugin.saveSettings();
     }));
     this.renderSearchFiltersSettings(containerEl);
@@ -2692,7 +2701,7 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
         return;
       }
     }
-    const linkUrl = buildEagleItemUrl(item.id);
+    const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
     if (this.settings.insertThumbnail) {
       const card = this.buildLinkCard(item);
       editor.replaceSelection(card);
@@ -2702,7 +2711,7 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     }
   }
   buildMetadataCard(item) {
-    const linkUrl = buildEagleItemUrl(item.id);
+    const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
     const tags = item.tags.filter((t) => !t.startsWith("r2:") && t !== "r2-cloud" && t !== "cloud-upload").map((t) => `#${this.normalizeTag(t)}`).join(" ");
     const dimensions = item.width && item.height ? `${item.width}\xD7${item.height}` : "N/A";
     const isUploaded = hasR2Upload(item);
@@ -2719,7 +2728,7 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
 > ${linkSection}`;
   }
   buildLinkCard(item) {
-    const linkUrl = buildEagleItemUrl(item.id);
+    const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
     const tags = item.tags.filter((t) => !t.startsWith("r2:") && t !== "r2-cloud").map((t) => `#${this.normalizeTag(t)}`).join(" ");
     const dimensions = item.width && item.height ? `${item.width}\xD7${item.height}` : "N/A";
     const imageUrl = this.getImageUrl(item);
@@ -2879,12 +2888,12 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
   async openEagleItemUnderCursor(editor) {
     const cursor = editor.getCursor();
     const line = editor.getLine(cursor.line);
-    const match = line.match(/eagle:\/\/item\/([A-Z0-9]+)/i);
+    const match = line.match(/eagle:\/\/item\/([A-Za-z0-9]+)/i) || line.match(/https?:\/\/(?:localhost|127\.0\.0\.1):\d+\/item\?id=([A-Za-z0-9]+)/i);
     if (!match) {
       new import_obsidian5.Notice("No Eagle link found on current line");
       return;
     }
-    const url = `eagle://item/${match[1]}`;
+    const url = buildEagleItemUrl(match[1], this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
     window.open(url);
   }
   async uploadClipboardToCloud(editor) {
@@ -3736,8 +3745,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     }
   }
   insertEagleInlineLink(editor, item) {
-    const cleanBaseUrl = this.settings.eagleApiBaseUrl.replace(/\/+$/, "");
-    const linkUrl = `${cleanBaseUrl}/item?id=${item.id}`;
+    const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
     const filename = `${item.name}.${item.ext}`;
     const markdown = `[${filename}](${linkUrl})`;
     editor.replaceSelection(markdown);

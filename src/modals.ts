@@ -303,7 +303,7 @@ export class EagleSearchModal extends FuzzySuggestModal<EagleItem> {
 			}
 		}
 
-		const linkUrl = buildEagleItemUrl(item.id);
+		const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
 		let linkText: string;
 		if (this.settings.linkFormat === 'wikilink') {
 			linkText = `[[${linkUrl}|${item.name}]]`;
@@ -414,7 +414,7 @@ export class EagleSearchModal extends FuzzySuggestModal<EagleItem> {
 	}
 
 	private buildMetadataLine(item: EagleItem): string {
-		const linkUrl = buildEagleItemUrl(item.id);
+		const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
 		const tags = item.tags
 			.filter(t => !t.startsWith('r2:') && t !== 'r2-cloud' && t !== 'cloud-upload')
 			.map(t => `#${this.normalizeTag(t)}`)
@@ -425,7 +425,7 @@ export class EagleSearchModal extends FuzzySuggestModal<EagleItem> {
 	}
 
 	private buildLinkCard(item: EagleItem): string {
-		const linkUrl = buildEagleItemUrl(item.id);
+		const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
 		const tags = item.tags.map(t => `#${this.normalizeTag(t)}`).join(' ');
 		const dimensions = item.width && item.height ? `${item.width}×${item.height}` : 'N/A';
 		

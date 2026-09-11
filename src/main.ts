@@ -236,7 +236,7 @@ export default class CMDSPACELinkEagle extends Plugin {
 			}
 		}
 		
-		const linkUrl = buildEagleItemUrl(item.id);
+		const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
 		if (this.settings.insertThumbnail) {
 			const card = this.buildLinkCard(item);
 			editor.replaceSelection(card);
@@ -249,7 +249,7 @@ export default class CMDSPACELinkEagle extends Plugin {
 	}
 
 	private buildMetadataCard(item: EagleItem): string {
-		const linkUrl = buildEagleItemUrl(item.id);
+		const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
 		const tags = item.tags
 			.filter(t => !t.startsWith('r2:') && t !== 'r2-cloud' && t !== 'cloud-upload')
 			.map(t => `#${this.normalizeTag(t)}`)
@@ -272,7 +272,7 @@ export default class CMDSPACELinkEagle extends Plugin {
 	}
 
 	private buildLinkCard(item: EagleItem): string {
-		const linkUrl = buildEagleItemUrl(item.id);
+		const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
 		const tags = item.tags
 			.filter(t => !t.startsWith('r2:') && t !== 'r2-cloud')
 			.map(t => `#${this.normalizeTag(t)}`)
@@ -464,13 +464,14 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		const cursor = editor.getCursor();
 		const line = editor.getLine(cursor.line);
 		
-		const match = line.match(/eagle:\/\/item\/([A-Z0-9]+)/i);
+		const match = line.match(/eagle:\/\/item\/([A-Za-z0-9]+)/i) ||
+			line.match(/https?:\/\/(?:localhost|127\.0\.0\.1):\d+\/item\?id=([A-Za-z0-9]+)/i);
 		if (!match) {
 			new Notice('No Eagle link found on current line');
 			return;
 		}
 
-		const url = `eagle://item/${match[1]}`;
+		const url = buildEagleItemUrl(match[1], this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
 		window.open(url);
 	}
 
@@ -1481,8 +1482,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 	}
 
 	private insertEagleInlineLink(editor: Editor, item: EagleItem): void {
-		const cleanBaseUrl = this.settings.eagleApiBaseUrl.replace(/\/+$/, '');
-		const linkUrl = `${cleanBaseUrl}/item?id=${item.id}`;
+		const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
 		const filename = `${item.name}.${item.ext}`;
 		const markdown = `[${filename}](${linkUrl})`;
 		editor.replaceSelection(markdown);

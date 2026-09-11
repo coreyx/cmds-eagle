@@ -92,6 +92,8 @@ export type EagleLinkPasteMode = 'ask' | 'embed' | 'inline';
 
 export type EagleEmbedUrlMode = 'file' | 'custom-url';
 
+export type EagleItemLinkFormat = 'http' | 'eagle';
+
 export type ImageSourceUrlPriority = 'page-first' | 'image-first' | 'page-only' | 'image-only';
 
 export type ExtraLinksImageSource = 'none' | 'page' | 'image' | 'both';
@@ -215,6 +217,7 @@ export interface CMDSPACEEagleSettings {
 	eagleLinkPasteMode: EagleLinkPasteMode;
 	eagleEmbedUrlMode: EagleEmbedUrlMode;
 	eagleCustomUrlPrefix: string;
+	eagleItemLinkFormat: EagleItemLinkFormat;
 	enableImageSourceUrl: boolean;
 	imageSourceUrlPriority: ImageSourceUrlPriority;
 	extraLinksImageSource: ExtraLinksImageSource;
@@ -267,6 +270,7 @@ export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
 	eagleLinkPasteMode: 'ask',
 	eagleEmbedUrlMode: 'file',
 	eagleCustomUrlPrefix: 'https://localhost:8080',
+	eagleItemLinkFormat: 'http',
 	enableImageSourceUrl: true,
 	imageSourceUrlPriority: 'page-first',
 	extraLinksImageSource: 'none',

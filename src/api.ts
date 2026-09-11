@@ -8,6 +8,7 @@ import {
 	EagleApplicationInfo,
 	CMDSPACEEagleSettings,
 	R2UploadResult,
+	EagleItemLinkFormat,
 } from './types';
 
 export class EagleApiService {
@@ -465,8 +466,16 @@ export class EagleApiService {
 	}
 }
 
-export function buildEagleItemUrl(itemId: string): string {
-	return `eagle://item/${itemId}`;
+export function buildEagleItemUrl(
+	itemId: string,
+	format: EagleItemLinkFormat = 'http',
+	baseUrl: string = 'http://localhost:41595'
+): string {
+	if (format === 'eagle') {
+		return `eagle://item/${itemId}`;
+	}
+	const cleanBase = (baseUrl || 'http://localhost:41595').replace(/\/+$/, '');
+	return `${cleanBase}/item?id=${itemId}`;
 }
 
 export function buildEagleFolderUrl(folderId: string): string {

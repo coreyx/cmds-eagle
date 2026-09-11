@@ -7,6 +7,7 @@ import {
 	BacklinkMode,
 	EagleLinkPasteMode,
 	EagleEmbedUrlMode,
+	EagleItemLinkFormat,
 	ImageSourceUrlPriority,
 	ExtraLinksImageSource,
 	SearchScope,
@@ -361,6 +362,18 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.insertThumbnail)
 				.onChange(async (value) => {
 					this.plugin.settings.insertThumbnail = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Eagle item link format')
+			.setDesc('Choose the link format for opening items in Eagle (used in metadata cards, link cards, and inline links). Default is HTTP localhost URL (e.g. http://localhost:41595/item?id=UUID); "eagle://" protocol remains available.')
+			.addDropdown(dropdown => dropdown
+				.addOption('http', 'HTTP URL (http://localhost:41595/item?id=UUID)')
+				.addOption('eagle', 'Eagle Protocol (eagle://item/UUID)')
+				.setValue(this.plugin.settings.eagleItemLinkFormat)
+				.onChange(async (value: EagleItemLinkFormat) => {
+					this.plugin.settings.eagleItemLinkFormat = value;
 					await this.plugin.saveSettings();
 				}));
 
