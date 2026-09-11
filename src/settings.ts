@@ -7,6 +7,8 @@ import {
 	BacklinkMode,
 	EagleLinkPasteMode,
 	EagleEmbedUrlMode,
+	ImageSourceUrlPriority,
+	ExtraLinksImageSource,
 	SearchScope,
 	SUPPORTED_IMAGE_EXTENSIONS,
 	SUPPORTED_VIDEO_EXTENSIONS,
@@ -84,6 +86,59 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 					this.plugin.settings.imagePasteBehavior = value;
 					await this.plugin.saveSettings();
 				}));
+
+		new Setting(containerEl).setName('Image source URL capture').setHeading();
+
+		new Setting(containerEl)
+			.setName('Capture image source URL on paste')
+			.setDesc('When an image copied from a web browser is pasted into Obsidian, automatically extract its origin URL and pass it to Eagle.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.enableImageSourceUrl)
+				.onChange(async (value) => {
+					this.plugin.settings.enableImageSourceUrl = value;
+					await this.plugin.saveSettings();
+					this.display();
+				}));
+
+		if (this.plugin.settings.enableImageSourceUrl) {
+			new Setting(containerEl)
+				.setName('Source URL priority (Eagle website field)')
+				.setDesc('Choose which URL is pushed to Eagle\'s primary website / origin link field.')
+				.addDropdown(dropdown => dropdown
+					.addOption('page-first', 'Webpage URL (fallback to image URL)')
+					.addOption('image-first', 'Direct image URL (fallback to webpage URL)')
+					.addOption('page-only', 'Webpage URL only')
+					.addOption('image-only', 'Direct image URL only')
+					.setValue(this.plugin.settings.imageSourceUrlPriority)
+					.onChange(async (value: ImageSourceUrlPriority) => {
+						this.plugin.settings.imageSourceUrlPriority = value;
+						await this.plugin.saveSettings();
+					}));
+
+			new Setting(containerEl)
+				.setName('Add image source to Extra Links')
+				.setDesc('Push the captured image source URLs into Eagle\'s Extra Links panel alongside any Obsidian backlinks.')
+				.addDropdown(dropdown => dropdown
+					.addOption('none', 'None (do not add to Extra Links)')
+					.addOption('page', 'Page URL only')
+					.addOption('image', 'Image src URL only')
+					.addOption('both', 'Both Page URL and Image src')
+					.setValue(this.plugin.settings.extraLinksImageSource)
+					.onChange(async (value: ExtraLinksImageSource) => {
+						this.plugin.settings.extraLinksImageSource = value;
+						await this.plugin.saveSettings();
+					}));
+
+			new Setting(containerEl)
+				.setName('Include source in metadata card')
+				.setDesc('When embedding an image with metadata card enabled, include a clickable markdown link to the captured source URL.')
+				.addToggle(toggle => toggle
+					.setValue(this.plugin.settings.includeSourceInMetadataCard)
+					.onChange(async (value) => {
+						this.plugin.settings.includeSourceInMetadataCard = value;
+						await this.plugin.saveSettings();
+					}));
+		}
 
 		new Setting(containerEl).setName('Eagle link paste').setHeading();
 

@@ -17,7 +17,7 @@ import {
 	ComputerProfile,
 	PlatformType,
 } from './types';
-import { EagleApiService, buildEagleItemUrl } from './api';
+import { EagleApiService, buildEagleItemUrl, buildEagleCustomEmbedUrl } from './api';
 
 type FileTypeCategory = 'images' | 'videos' | 'documents' | 'all';
 
@@ -268,10 +268,29 @@ export class EagleSearchModal extends FuzzySuggestModal<EagleItem> {
 		const editor = activeView.editor;
 		
 		if (this.settings.insertAsEmbed) {
+			const filename = `${item.name}.${item.ext}`;
+			if (this.settings.eagleEmbedUrlMode === 'custom-url') {
+				const libraryName = (await this.api.getLibraryName()) || 'Main';
+				const embedUrl = buildEagleCustomEmbedUrl(
+					this.settings.eagleCustomUrlPrefix,
+					libraryName,
+					item.id,
+					item.name,
+					item.ext,
+					false
+				);
+				let output = `![${filename}](${embedUrl})`;
+				if (this.settings.insertThumbnail) {
+					output += '\n\n' + this.buildMetadataLine(item);
+				}
+				editor.replaceSelection(output);
+				new Notice(`Embedded: ${item.name}`);
+				return;
+			}
+
 			const filePath = await this.api.getOriginalFilePath(item);
 			if (filePath) {
 				const fileUrl = this.pathToFileUrl(filePath);
-				const filename = `${item.name}.${item.ext}`;
 				let output = `![${filename}](${fileUrl})`;
 				
 				if (this.settings.insertThumbnail) {

@@ -92,6 +92,15 @@ export type EagleLinkPasteMode = 'ask' | 'embed' | 'inline';
 
 export type EagleEmbedUrlMode = 'file' | 'custom-url';
 
+export type ImageSourceUrlPriority = 'page-first' | 'image-first' | 'page-only' | 'image-only';
+
+export type ExtraLinksImageSource = 'none' | 'page' | 'image' | 'both';
+
+export interface ImageSourceInfo {
+	pageUrl?: string;
+	imageUrl?: string;
+}
+
 export interface EagleExtraLink {
 	title: string;
 	url: string;
@@ -206,6 +215,10 @@ export interface CMDSPACEEagleSettings {
 	eagleLinkPasteMode: EagleLinkPasteMode;
 	eagleEmbedUrlMode: EagleEmbedUrlMode;
 	eagleCustomUrlPrefix: string;
+	enableImageSourceUrl: boolean;
+	imageSourceUrlPriority: ImageSourceUrlPriority;
+	extraLinksImageSource: ExtraLinksImageSource;
+	includeSourceInMetadataCard: boolean;
 	r2WorkerUrl: string;
 	r2ApiKey: string;
 	r2PublicUrl: string;
@@ -254,6 +267,10 @@ export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
 	eagleLinkPasteMode: 'ask',
 	eagleEmbedUrlMode: 'file',
 	eagleCustomUrlPrefix: 'https://localhost:8080',
+	enableImageSourceUrl: true,
+	imageSourceUrlPriority: 'page-first',
+	extraLinksImageSource: 'none',
+	includeSourceInMetadataCard: true,
 	r2WorkerUrl: '',
 	r2ApiKey: '',
 	r2PublicUrl: '',
@@ -320,6 +337,7 @@ export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
 export interface AddFromPathRequest {
 	path: string;
 	name: string;
+	website?: string;
 	folderId?: string;
 	tags?: string[];
 	annotation?: string;

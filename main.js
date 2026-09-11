@@ -68,6 +68,10 @@ var init_types = __esm({
       eagleLinkPasteMode: "ask",
       eagleEmbedUrlMode: "file",
       eagleCustomUrlPrefix: "https://localhost:8080",
+      enableImageSourceUrl: true,
+      imageSourceUrlPriority: "page-first",
+      extraLinksImageSource: "none",
+      includeSourceInMetadataCard: true,
       r2WorkerUrl: "",
       r2ApiKey: "",
       r2PublicUrl: "",
@@ -517,62 +521,78 @@ var init_api = __esm({
         });
         return response.json;
       }
-      async addExtraLinks(baseUrl, itemId, links) {
-        try {
-          const cleanBaseUrl = baseUrl.replace(/\/+$/, "");
-          let body;
-          if (typeof links === "string") {
-            body = { url: links, allowDuplicates: false };
-          } else if (Array.isArray(links)) {
-            if (links.length === 1) {
-              const first = links[0];
-              if (typeof first === "string") {
-                body = { url: first, allowDuplicates: false };
-              } else {
-                body = {
-                  ...first.title ? { title: first.title } : {},
-                  url: first.url,
-                  allowDuplicates: false
-                };
-              }
+      async addExtraLinks(baseUrl, itemId, links, retries = 4) {
+        const cleanBaseUrl = baseUrl.replace(/\/+$/, "");
+        let body;
+        if (typeof links === "string") {
+          body = { url: links, allowDuplicates: false };
+        } else if (Array.isArray(links)) {
+          if (links.length === 1) {
+            const first = links[0];
+            if (typeof first === "string") {
+              body = { url: first, allowDuplicates: false };
+            } else {
+              body = {
+                ...first.title ? { title: first.title } : {},
+                url: first.url,
+                allowDuplicates: false
+              };
+            }
+          } else {
+            const hasObjects = links.some((l) => typeof l === "object" && l !== null);
+            if (hasObjects) {
+              const linkObjects = links.map((l) => typeof l === "string" ? { url: l } : { ...l.title ? { title: l.title } : {}, url: l.url });
+              body = { links: linkObjects, allowDuplicates: false };
             } else {
               const urlStrings = links.map((l) => typeof l === "string" ? l : l.url);
               body = { urls: urlStrings, allowDuplicates: false };
             }
-          } else if (typeof links === "object" && links !== null) {
-            body = {
-              ...links.title ? { title: links.title } : {},
-              url: links.url,
-              allowDuplicates: false
-            };
-          } else {
-            body = { url: String(links), allowDuplicates: false };
           }
-          const response = await (0, import_obsidian.requestUrl)({
-            url: `${cleanBaseUrl}/api/item/${encodeURIComponent(itemId)}/links`,
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify(body)
-          });
-          if (response.status >= 200 && response.status < 300) {
-            const json = response.json;
-            if (json && json.status === "error") {
-              return { success: false, error: json.message || "Error from Eagle Extra Links" };
-            }
-            return { success: true };
-          }
-          return {
-            success: false,
-            error: `HTTP ${response.status}`
+        } else if (typeof links === "object" && links !== null) {
+          body = {
+            ...links.title ? { title: links.title } : {},
+            url: links.url,
+            allowDuplicates: false
           };
-        } catch (error) {
-          return {
-            success: false,
-            error: error instanceof Error ? error.message : "Unknown error"
-          };
+        } else {
+          body = { url: String(links), allowDuplicates: false };
         }
+        for (let attempt = 0; attempt <= retries; attempt++) {
+          try {
+            const response = await (0, import_obsidian.requestUrl)({
+              url: `${cleanBaseUrl}/api/item/${encodeURIComponent(itemId)}/links`,
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify(body)
+            });
+            if (response.status >= 200 && response.status < 300) {
+              const json = response.json;
+              if (json && json.status === "error") {
+                return { success: false, error: json.message || "Error from Eagle Extra Links" };
+              }
+              return { success: true };
+            }
+            return {
+              success: false,
+              error: `HTTP ${response.status}`
+            };
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : "Unknown error";
+            const isNotFound = errorMessage.includes("404") || (error == null ? void 0 : error.status) === 404;
+            if (isNotFound && attempt < retries) {
+              const delayMs = 500 * (attempt + 1);
+              await new Promise((resolve) => setTimeout(resolve, delayMs));
+              continue;
+            }
+            return {
+              success: false,
+              error: errorMessage
+            };
+          }
+        }
+        return { success: false, error: "Request failed after retries" };
       }
     };
     MIME_TYPES = {
@@ -822,10 +842,28 @@ var init_modals = __esm({
         }
         const editor = activeView.editor;
         if (this.settings.insertAsEmbed) {
+          const filename = `${item.name}.${item.ext}`;
+          if (this.settings.eagleEmbedUrlMode === "custom-url") {
+            const libraryName = await this.api.getLibraryName() || "Main";
+            const embedUrl = buildEagleCustomEmbedUrl(
+              this.settings.eagleCustomUrlPrefix,
+              libraryName,
+              item.id,
+              item.name,
+              item.ext,
+              false
+            );
+            let output = `![${filename}](${embedUrl})`;
+            if (this.settings.insertThumbnail) {
+              output += "\n\n" + this.buildMetadataLine(item);
+            }
+            editor.replaceSelection(output);
+            new import_obsidian2.Notice(`Embedded: ${item.name}`);
+            return;
+          }
           const filePath = await this.api.getOriginalFilePath(item);
           if (filePath) {
             const fileUrl = this.pathToFileUrl(filePath);
-            const filename = `${item.name}.${item.ext}`;
             let output = `![${filename}](${fileUrl})`;
             if (this.settings.insertThumbnail) {
               output += "\n\n" + this.buildMetadataLine(item);
@@ -1198,6 +1236,26 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian3.PluginSettingTab {
       this.plugin.settings.imagePasteBehavior = value;
       await this.plugin.saveSettings();
     }));
+    new import_obsidian3.Setting(containerEl).setName("Image source URL capture").setHeading();
+    new import_obsidian3.Setting(containerEl).setName("Capture image source URL on paste").setDesc("When an image copied from a web browser is pasted into Obsidian, automatically extract its origin URL and pass it to Eagle.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableImageSourceUrl).onChange(async (value) => {
+      this.plugin.settings.enableImageSourceUrl = value;
+      await this.plugin.saveSettings();
+      this.display();
+    }));
+    if (this.plugin.settings.enableImageSourceUrl) {
+      new import_obsidian3.Setting(containerEl).setName("Source URL priority (Eagle website field)").setDesc("Choose which URL is pushed to Eagle's primary website / origin link field.").addDropdown((dropdown) => dropdown.addOption("page-first", "Webpage URL (fallback to image URL)").addOption("image-first", "Direct image URL (fallback to webpage URL)").addOption("page-only", "Webpage URL only").addOption("image-only", "Direct image URL only").setValue(this.plugin.settings.imageSourceUrlPriority).onChange(async (value) => {
+        this.plugin.settings.imageSourceUrlPriority = value;
+        await this.plugin.saveSettings();
+      }));
+      new import_obsidian3.Setting(containerEl).setName("Add image source to Extra Links").setDesc("Push the captured image source URLs into Eagle's Extra Links panel alongside any Obsidian backlinks.").addDropdown((dropdown) => dropdown.addOption("none", "None (do not add to Extra Links)").addOption("page", "Page URL only").addOption("image", "Image src URL only").addOption("both", "Both Page URL and Image src").setValue(this.plugin.settings.extraLinksImageSource).onChange(async (value) => {
+        this.plugin.settings.extraLinksImageSource = value;
+        await this.plugin.saveSettings();
+      }));
+      new import_obsidian3.Setting(containerEl).setName("Include source in metadata card").setDesc("When embedding an image with metadata card enabled, include a clickable markdown link to the captured source URL.").addToggle((toggle) => toggle.setValue(this.plugin.settings.includeSourceInMetadataCard).onChange(async (value) => {
+        this.plugin.settings.includeSourceInMetadataCard = value;
+        await this.plugin.saveSettings();
+      }));
+    }
     new import_obsidian3.Setting(containerEl).setName("Eagle link paste").setHeading();
     new import_obsidian3.Setting(containerEl).setName("Eagle link paste behavior").setDesc("What to do when pasting an Eagle item link into a note").addDropdown((dropdown) => dropdown.addOption("ask", "Always ask").addOption("embed", "Embed image").addOption("inline", "Inline link").setValue(this.plugin.settings.eagleLinkPasteMode).onChange(async (value) => {
       this.plugin.settings.eagleLinkPasteMode = value;
@@ -2167,6 +2225,306 @@ function getExtFromFilename(filename) {
   return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : "";
 }
 
+// src/clipboard-source.ts
+function safelyReadClipboard(fn) {
+  const proc = typeof process !== "undefined" ? process : null;
+  const prevNoDeprecation = proc ? proc.noDeprecation : void 0;
+  const originalWarn = console.warn;
+  try {
+    if (proc) {
+      proc.noDeprecation = true;
+    }
+    console.warn = (...args) => {
+      if (args.length > 0 && typeof args[0] === "string" && (args[0].includes("clipboard") || args[0].includes("contextBridge"))) {
+        return;
+      }
+      originalWarn.apply(console, args);
+    };
+    return fn();
+  } finally {
+    console.warn = originalWarn;
+    if (proc) {
+      proc.noDeprecation = prevNoDeprecation;
+    }
+  }
+}
+function extractDomain(urlStr) {
+  try {
+    const parsed = new URL(urlStr);
+    return parsed.hostname.replace(/^www\./i, "");
+  } catch (e) {
+    return urlStr.replace(/^https?:\/\//i, "").split("/")[0].replace(/^www\./i, "");
+  }
+}
+function isValidHttpUrl(urlStr) {
+  if (!urlStr)
+    return false;
+  const trimmed = urlStr.trim();
+  return /^https?:\/\/[^\s<>"'\0\x01-\x1f]+/i.test(trimmed);
+}
+var BplistParser = class {
+  static extractSourceUrl(buf) {
+    var _a, _b;
+    try {
+      if (!buf || buf.length < 40)
+        return "";
+      if (buf.subarray(0, 8).toString("ascii") !== "bplist00") {
+        return this.fallbackRegexUrl(buf);
+      }
+      const trailerOffset = buf.length - 32;
+      const offsetIntSize = buf.readUInt8(trailerOffset + 6);
+      const objectRefSize = buf.readUInt8(trailerOffset + 7);
+      const numObjects = Number(buf.readBigUInt64BE(trailerOffset + 8));
+      const topObject = Number(buf.readBigUInt64BE(trailerOffset + 16));
+      const offsetTableOffset = Number(buf.readBigUInt64BE(trailerOffset + 24));
+      if (offsetIntSize === 0 || objectRefSize === 0 || numObjects === 0) {
+        return this.fallbackRegexUrl(buf);
+      }
+      const getOffset = (objIndex) => {
+        const ptr = offsetTableOffset + objIndex * offsetIntSize;
+        if (ptr + offsetIntSize > trailerOffset)
+          return -1;
+        if (offsetIntSize === 1)
+          return buf.readUInt8(ptr);
+        if (offsetIntSize === 2)
+          return buf.readUInt16BE(ptr);
+        if (offsetIntSize === 4)
+          return buf.readUInt32BE(ptr);
+        return Number(buf.readBigUInt64BE(ptr));
+      };
+      const parseObject = (objIndex, depth = 0) => {
+        if (depth > 10)
+          return null;
+        const offset = getOffset(objIndex);
+        if (offset < 8 || offset >= offsetTableOffset)
+          return null;
+        const marker = buf.readUInt8(offset);
+        const objType = marker & 240;
+        let count = marker & 15;
+        let dataStart = offset + 1;
+        if (count === 15) {
+          const intMarker = buf.readUInt8(dataStart);
+          const intBytes = 1 << (intMarker & 15);
+          dataStart += 1;
+          if (intBytes === 1)
+            count = buf.readUInt8(dataStart);
+          else if (intBytes === 2)
+            count = buf.readUInt16BE(dataStart);
+          else if (intBytes === 4)
+            count = buf.readUInt32BE(dataStart);
+          dataStart += intBytes;
+        }
+        if (objType === 80) {
+          if (dataStart + count > buf.length)
+            return null;
+          return buf.subarray(dataStart, dataStart + count).toString("ascii");
+        }
+        if (objType === 96) {
+          const byteLen = count * 2;
+          if (dataStart + byteLen > buf.length)
+            return null;
+          return buf.subarray(dataStart, dataStart + byteLen).swap16().toString("utf16le");
+        }
+        if (objType === 208) {
+          const dict = {};
+          const keysStart = dataStart;
+          const valsStart = dataStart + count * objectRefSize;
+          const readRef = (pos) => {
+            if (objectRefSize === 1)
+              return buf.readUInt8(pos);
+            if (objectRefSize === 2)
+              return buf.readUInt16BE(pos);
+            return buf.readUInt32BE(pos);
+          };
+          for (let i = 0; i < count; i++) {
+            const keyIndex = readRef(keysStart + i * objectRefSize);
+            const valIndex = readRef(valsStart + i * objectRefSize);
+            const key = parseObject(keyIndex, depth + 1);
+            if (typeof key === "string") {
+              if (key === "WebMainResource" || key === "WebResourceURL") {
+                dict[key] = parseObject(valIndex, depth + 1);
+              }
+            }
+          }
+          return dict;
+        }
+        return null;
+      };
+      const root = parseObject(topObject);
+      const url = (_b = (_a = root == null ? void 0 : root.WebMainResource) == null ? void 0 : _a.WebResourceURL) != null ? _b : root == null ? void 0 : root.WebResourceURL;
+      if (typeof url === "string" && url.trim().startsWith("http")) {
+        return url.trim();
+      }
+    } catch (e) {
+      console.warn("[CMDS Eagle] BplistParser exception, falling back to regex:", e);
+    }
+    return this.fallbackRegexUrl(buf);
+  }
+  static fallbackRegexUrl(buf) {
+    try {
+      const text = buf.toString("latin1");
+      const keyPos = text.indexOf("WebResourceURL");
+      if (keyPos !== -1) {
+        const slice = text.substring(keyPos, keyPos + 1e3);
+        const match = slice.match(/https?:\/\/[^\s<>"'\0\x01-\x1f]+/);
+        if (match)
+          return match[0].trim();
+      }
+      const generalMatch = text.match(/https?:\/\/[^\s<>"'\0\x01-\x1f]+/);
+      if (generalMatch)
+        return generalMatch[0].trim();
+    } catch (e) {
+    }
+    return "";
+  }
+};
+var WindowsClipboardProvider = class {
+  async getImageSourceInfo() {
+    try {
+      const electron = window.require ? window.require("electron") : require("electron");
+      if (!electron || !electron.clipboard) {
+        return null;
+      }
+      const clipboard = electron.clipboard;
+      const buf = safelyReadClipboard(() => {
+        let b = clipboard.readBuffer("HTML Format");
+        if (!b || b.length === 0) {
+          b = clipboard.readBuffer('electron application/osclipboard;format="HTML Format"');
+        }
+        return b;
+      });
+      let pageUrl;
+      let imageUrl;
+      if (buf && buf.length > 0) {
+        const text = buf.toString("utf8");
+        const pageMatch = text.match(/SourceURL:(https?:\/\/[^\r\n]+)/i);
+        if (pageMatch && pageMatch[1] && isValidHttpUrl(pageMatch[1])) {
+          pageUrl = pageMatch[1].trim();
+        }
+        const imgMatch = text.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) || text.match(/<img[^>]+src=([^\s>]+)/i);
+        if (imgMatch && imgMatch[1] && isValidHttpUrl(imgMatch[1])) {
+          imageUrl = imgMatch[1].trim();
+        }
+      }
+      if (!pageUrl) {
+        const chromiumSource = safelyReadClipboard(() => {
+          return clipboard.read("Chromium internal source URL");
+        });
+        if (isValidHttpUrl(chromiumSource)) {
+          pageUrl = chromiumSource.trim();
+        }
+      }
+      if (pageUrl || imageUrl) {
+        return { pageUrl, imageUrl };
+      }
+    } catch (err) {
+      console.warn("[CMDS Eagle] Error reading Windows clipboard source:", err);
+    }
+    return null;
+  }
+};
+var MacOSClipboardProvider = class {
+  async getImageSourceInfo() {
+    try {
+      const electron = window.require ? window.require("electron") : require("electron");
+      if (!electron || !electron.clipboard) {
+        return null;
+      }
+      const clipboard = electron.clipboard;
+      let pageUrl;
+      let imageUrl;
+      const chromiumUrl = safelyReadClipboard(() => clipboard.read("org.chromium.source-url"));
+      if (isValidHttpUrl(chromiumUrl)) {
+        pageUrl = chromiumUrl.trim();
+      }
+      const html = safelyReadClipboard(() => clipboard.read("public.html"));
+      if (html && typeof html === "string") {
+        const imgMatch = html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) || html.match(/<img[^>]+src=([^\s>]+)/i);
+        if (imgMatch && imgMatch[1] && isValidHttpUrl(imgMatch[1])) {
+          imageUrl = imgMatch[1].trim();
+        }
+        if (!pageUrl) {
+          const pageMatch = html.match(/SourceURL:(https?:\/\/[^\r\n]+)/i);
+          if (pageMatch && pageMatch[1] && isValidHttpUrl(pageMatch[1])) {
+            pageUrl = pageMatch[1].trim();
+          }
+        }
+      }
+      if (!pageUrl || !imageUrl) {
+        const webArchiveBuf = safelyReadClipboard(() => clipboard.readBuffer("com.apple.webarchive"));
+        if (webArchiveBuf && webArchiveBuf.length > 8) {
+          const safariUrl = BplistParser.extractSourceUrl(webArchiveBuf);
+          if (isValidHttpUrl(safariUrl)) {
+            if (!imageUrl && /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(safariUrl)) {
+              imageUrl = safariUrl;
+            } else if (!pageUrl) {
+              pageUrl = safariUrl;
+            }
+          }
+        }
+      }
+      if (!pageUrl && !imageUrl) {
+        const publicUrl = safelyReadClipboard(() => clipboard.read("public.url"));
+        if (isValidHttpUrl(publicUrl)) {
+          if (/\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(publicUrl)) {
+            imageUrl = publicUrl.trim();
+          } else {
+            pageUrl = publicUrl.trim();
+          }
+        }
+      }
+      if (pageUrl || imageUrl) {
+        return { pageUrl, imageUrl };
+      }
+    } catch (err) {
+      console.warn("[CMDS Eagle] Error reading macOS clipboard source:", err);
+    }
+    return null;
+  }
+};
+var NullClipboardProvider = class {
+  async getImageSourceInfo() {
+    return null;
+  }
+};
+function createClipboardProvider() {
+  if (typeof process !== "undefined" && process.platform === "win32") {
+    return new WindowsClipboardProvider();
+  } else if (typeof process !== "undefined" && process.platform === "darwin") {
+    return new MacOSClipboardProvider();
+  }
+  return new NullClipboardProvider();
+}
+var ClipboardSourceService = class {
+  constructor() {
+    this.provider = createClipboardProvider();
+  }
+  async getSourceInfo() {
+    try {
+      return await this.provider.getImageSourceInfo();
+    } catch (error) {
+      console.warn("[CMDS Eagle] Error extracting clipboard source info:", error);
+      return null;
+    }
+  }
+  resolvePrimaryUrl(info, priority) {
+    if (!info)
+      return null;
+    switch (priority) {
+      case "page-first":
+        return info.pageUrl || info.imageUrl || null;
+      case "image-first":
+        return info.imageUrl || info.pageUrl || null;
+      case "page-only":
+        return info.pageUrl || null;
+      case "image-only":
+        return info.imageUrl || null;
+      default:
+        return info.pageUrl || info.imageUrl || null;
+    }
+  }
+};
+
 // src/main.ts
 var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
   constructor() {
@@ -2178,6 +2536,7 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     console.log("[CMDS Eagle] Loading plugin v1.6.0");
     await this.loadSettings();
     this.api = new EagleApiService(this.settings);
+    this.clipboardSourceService = new ClipboardSourceService();
     this.addCommand({
       id: "search-eagle",
       name: "Search Eagle library and embed",
@@ -2352,6 +2711,10 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     if (cloudUrl) {
       linkSection += ` | [Cloud](${cloudUrl})`;
     }
+    if (this.settings.includeSourceInMetadataCard && item.url) {
+      const domain = extractDomain(item.url);
+      linkSection += ` | [Source: ${domain || "Web"}](${item.url})`;
+    }
     return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)} | ${dimensions} | ${isUploaded ? "\u2601\uFE0F" : "\u{1F4C1}"} | ${tags || "No tags"}
 > ${linkSection}`;
   }
@@ -2371,6 +2734,10 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     let linkSection = `> [Open in Eagle](${linkUrl})`;
     if (cloudUrl) {
       linkSection += ` | [Cloud URL](${cloudUrl})`;
+    }
+    if (this.settings.includeSourceInMetadataCard && item.url) {
+      const domain = extractDomain(item.url);
+      linkSection += ` | [Source: ${domain || "Web"}](${item.url})`;
     }
     return `> [!cmdspace-eagle] ${item.name}
 > 
@@ -2874,10 +3241,14 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     if (this.settings.imagePasteBehavior === "local") {
       return;
     }
+    let sourceInfo = null;
+    if (this.settings.enableImageSourceUrl) {
+      sourceInfo = await this.clipboardSourceService.getSourceInfo();
+    }
     const filesCopy = Array.from(files);
     if (this.settings.imagePasteBehavior === "eagle") {
       for (const file of filesCopy) {
-        await this.uploadFileWithProgress(file, editor);
+        await this.uploadFileWithProgress(file, editor, sourceInfo);
       }
       return;
     }
@@ -2897,7 +3268,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     }
     if (response.choice === "eagle") {
       for (const file of filesCopy) {
-        await this.uploadFileWithProgress(file, editor);
+        await this.uploadFileWithProgress(file, editor, sourceInfo);
       }
     } else if (response.choice === "local") {
       for (const file of filesCopy) {
@@ -3003,18 +3374,19 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       new import_obsidian5.Notice(`Failed to save: ${file.name}`);
     }
   }
-  async uploadFileWithProgress(file, editor) {
+  async uploadFileWithProgress(file, editor, sourceInfo) {
     const pasteId = this.generatePasteId();
     const placeholderText = `![Uploading ${file.name}...](${pasteId})`;
     editor.replaceSelection(placeholderText);
     try {
-      const { url: imageUrl, item } = await this.uploadImageToEagle(file);
-      let markdownImage = `![${file.name}](${imageUrl})`;
+      const { url: imageUrl, item } = await this.uploadImageToEagle(file, sourceInfo);
+      const displayName = item ? `${item.name}.${item.ext}` : file.name;
+      let markdownImage = `![${displayName}](${imageUrl})`;
       if (item && this.settings.insertThumbnail) {
         markdownImage += "\n\n" + this.buildMetadataCard(item);
       }
       this.replaceTextInDocument(editor, placeholderText, markdownImage);
-      new import_obsidian5.Notice(`Uploaded to Eagle: ${file.name}`);
+      new import_obsidian5.Notice(`Uploaded to Eagle: ${displayName}`);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
       const errorText = `<!-- Failed to upload ${file.name}: ${errorMessage} -->`;
@@ -3162,10 +3534,28 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       if (!result.success || !result.itemId) {
         throw new Error("Failed to add image to Eagle");
       }
-      void this.applyObsidianBacklink(result.itemId);
       await this.delay(1e3);
       const thumbnailPath = await this.api.getThumbnailPath(result.itemId);
-      const imageUrl = thumbnailPath ? `file://${thumbnailPath}` : `eagle://item/${result.itemId}`;
+      const item = await this.api.getItemInfo(result.itemId);
+      void this.applyObsidianBacklink(result.itemId);
+      let imageUrl;
+      if (this.settings.eagleEmbedUrlMode === "custom-url") {
+        const libraryName = await this.api.getLibraryName() || "Main";
+        const ext = item ? item.ext : file.extension;
+        const name = item ? item.name : filenameWithoutExt;
+        imageUrl = buildEagleCustomEmbedUrl(
+          this.settings.eagleCustomUrlPrefix,
+          libraryName,
+          result.itemId,
+          name,
+          ext,
+          false
+        );
+      } else if (thumbnailPath) {
+        imageUrl = this.pathToFileUrl(thumbnailPath);
+      } else {
+        imageUrl = `eagle://item/${result.itemId}`;
+      }
       const markdownImage = `![${file.basename}](${imageUrl})`;
       this.replaceTextInDocument(editor, placeholderText, markdownImage);
       new import_obsidian5.Notice(`Uploaded to Eagle: ${file.name}`);
@@ -3672,7 +4062,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     }
     return id;
   }
-  async getEagleBacklinkPayload() {
+  async getEagleBacklinkPayload(hasSourceUrl) {
     if (!this.settings.enableBacklinks || this.settings.backlinkMode !== "legacy") {
       return {};
     }
@@ -3688,14 +4078,18 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     const result = {};
     const dest = this.settings.backlinkDestination;
     if (dest === "url" || dest === "both") {
-      result.website = advancedUri;
+      if (!hasSourceUrl) {
+        result.website = advancedUri;
+      } else {
+        result.annotation = `Linked From Obsidian: [${basename}](${advancedUri})`;
+      }
     }
     if (dest === "note" || dest === "both") {
       result.annotation = `Linked From Obsidian: [${basename}](${advancedUri})`;
     }
     return result;
   }
-  async applyObsidianBacklink(itemId) {
+  async applyObsidianBacklink(itemId, hasSourceUrl) {
     if (!this.settings.enableBacklinks) {
       return;
     }
@@ -3722,7 +4116,11 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       const updates = {};
       const dest = this.settings.backlinkDestination;
       if (dest === "url" || dest === "both") {
-        updates.url = advancedUri;
+        if (!hasSourceUrl) {
+          updates.url = advancedUri;
+        } else {
+          updates.annotation = `Linked From Obsidian: [${basename}](${advancedUri})`;
+        }
       }
       if (dest === "note" || dest === "both") {
         updates.annotation = `Linked From Obsidian: [${basename}](${advancedUri})`;
@@ -3732,17 +4130,19 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       }
     }
   }
-  async uploadImageToEagle(file) {
+  async uploadImageToEagle(file, sourceInfo) {
     const tempPath = await this.saveToTempLocation(file);
     const connected = await this.api.isConnected();
     if (!connected) {
       throw new Error("Eagle is not running");
     }
+    const primaryUrl = sourceInfo && this.settings.enableImageSourceUrl ? this.clipboardSourceService.resolvePrimaryUrl(sourceInfo, this.settings.imageSourceUrlPriority) : null;
     const filenameWithoutExt = file.name.replace(/\.[^.]+$/, "");
-    const backlinkData = await this.getEagleBacklinkPayload();
+    const backlinkData = await this.getEagleBacklinkPayload(!!primaryUrl);
     const result = await this.api.addFromPath({
       path: tempPath,
       name: filenameWithoutExt,
+      website: primaryUrl || backlinkData.website,
       tags: this.getDefaultTags(),
       folderId: this.settings.enableDefaultFolder ? this.settings.defaultFolder || void 0 : void 0,
       ...backlinkData
@@ -3750,14 +4150,73 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     if (!result.success || !result.itemId) {
       throw new Error("Failed to add image to Eagle");
     }
-    void this.applyObsidianBacklink(result.itemId);
+    const itemId = result.itemId;
     await this.delay(1e3);
-    const thumbnailPath = await this.api.getThumbnailPath(result.itemId);
-    const item = await this.api.getItemInfo(result.itemId);
+    const thumbnailPath = await this.api.getThumbnailPath(itemId);
+    const item = await this.api.getItemInfo(itemId);
+    void (async () => {
+      await this.applyObsidianBacklink(itemId, !!primaryUrl);
+      if (sourceInfo && this.settings.enableImageSourceUrl && this.settings.extraLinksImageSource !== "none") {
+        await this.pushImageSourcesToExtraLinks(itemId, sourceInfo);
+      }
+    })();
+    let embedUrl;
+    if (this.settings.eagleEmbedUrlMode === "custom-url") {
+      const libraryName = await this.api.getLibraryName() || "Main";
+      const ext = item ? item.ext : getExtFromFilename(file.name);
+      const nameWithoutExt = item ? item.name : filenameWithoutExt;
+      embedUrl = buildEagleCustomEmbedUrl(
+        this.settings.eagleCustomUrlPrefix,
+        libraryName,
+        itemId,
+        nameWithoutExt,
+        ext,
+        false
+      );
+    } else {
+      const localPath = thumbnailPath || tempPath;
+      embedUrl = this.pathToFileUrl(localPath);
+    }
     return {
-      url: thumbnailPath ? `file://${thumbnailPath}` : `file://${tempPath}`,
+      url: embedUrl,
       item
     };
+  }
+  async pushImageSourcesToExtraLinks(itemId, sourceInfo) {
+    const mode = this.settings.extraLinksImageSource;
+    if (mode === "none")
+      return;
+    const linksToPush = [];
+    if ((mode === "page" || mode === "both") && sourceInfo.pageUrl) {
+      const domain = extractDomain(sourceInfo.pageUrl);
+      linksToPush.push({
+        title: domain ? `Source Page: ${domain}` : "Source Page",
+        url: sourceInfo.pageUrl
+      });
+    }
+    if ((mode === "image" || mode === "both") && sourceInfo.imageUrl) {
+      if (sourceInfo.imageUrl !== sourceInfo.pageUrl) {
+        const domain = extractDomain(sourceInfo.imageUrl);
+        linksToPush.push({
+          title: domain ? `Direct Image: ${domain}` : "Direct Image",
+          url: sourceInfo.imageUrl
+        });
+      }
+    }
+    for (const link of linksToPush) {
+      try {
+        const res = await this.api.addExtraLinks(
+          this.settings.extraLinksBaseUrl,
+          itemId,
+          link
+        );
+        if (!res.success) {
+          console.warn("[CMDS Eagle] Failed to push image source to Extra Links:", res.error);
+        }
+      } catch (err) {
+        console.warn("[CMDS Eagle] Error pushing image source to Extra Links:", err);
+      }
+    }
   }
   async saveToTempLocation(file) {
     const tempDir = ".eagle-temp";

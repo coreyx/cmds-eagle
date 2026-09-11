@@ -383,66 +383,85 @@ export class EagleApiService {
 	async addExtraLinks(
 		baseUrl: string,
 		itemId: string,
-		links: string | { title?: string; url: string } | Array<string | { title?: string; url: string }>
+		links: string | { title?: string; url: string } | Array<string | { title?: string; url: string }>,
+		retries: number = 4
 	): Promise<{ success: boolean; error?: string }> {
-		try {
-			const cleanBaseUrl = baseUrl.replace(/\/+$/, '');
-			let body: Record<string, any>;
+		const cleanBaseUrl = baseUrl.replace(/\/+$/, '');
+		let body: Record<string, any>;
 
-			if (typeof links === 'string') {
-				body = { url: links, allowDuplicates: false };
-			} else if (Array.isArray(links)) {
-				if (links.length === 1) {
-					const first = links[0];
-					if (typeof first === 'string') {
-						body = { url: first, allowDuplicates: false };
-					} else {
-						body = {
-							...(first.title ? { title: first.title } : {}),
-							url: first.url,
-							allowDuplicates: false,
-						};
-					}
+		if (typeof links === 'string') {
+			body = { url: links, allowDuplicates: false };
+		} else if (Array.isArray(links)) {
+			if (links.length === 1) {
+				const first = links[0];
+				if (typeof first === 'string') {
+					body = { url: first, allowDuplicates: false };
+				} else {
+					body = {
+						...(first.title ? { title: first.title } : {}),
+						url: first.url,
+						allowDuplicates: false,
+					};
+				}
+			} else {
+				const hasObjects = links.some(l => typeof l === 'object' && l !== null);
+				if (hasObjects) {
+					const linkObjects = links.map(l => (typeof l === 'string' ? { url: l } : { ...(l.title ? { title: l.title } : {}), url: l.url }));
+					body = { links: linkObjects, allowDuplicates: false };
 				} else {
 					const urlStrings = links.map(l => (typeof l === 'string' ? l : l.url));
 					body = { urls: urlStrings, allowDuplicates: false };
 				}
-			} else if (typeof links === 'object' && links !== null) {
-				body = {
-					...(links.title ? { title: links.title } : {}),
-					url: links.url,
-					allowDuplicates: false,
-				};
-			} else {
-				body = { url: String(links), allowDuplicates: false };
 			}
-
-			const response = await requestUrl({
-				url: `${cleanBaseUrl}/api/item/${encodeURIComponent(itemId)}/links`,
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-				},
-				body: JSON.stringify(body),
-			});
-
-			if (response.status >= 200 && response.status < 300) {
-				const json = response.json as { status?: string; message?: string };
-				if (json && json.status === 'error') {
-					return { success: false, error: json.message || 'Error from Eagle Extra Links' };
-				}
-				return { success: true };
-			}
-			return {
-				success: false,
-				error: `HTTP ${response.status}`,
+		} else if (typeof links === 'object' && links !== null) {
+			body = {
+				...(links.title ? { title: links.title } : {}),
+				url: links.url,
+				allowDuplicates: false,
 			};
-		} catch (error) {
-			return {
-				success: false,
-				error: error instanceof Error ? error.message : 'Unknown error',
-			};
+		} else {
+			body = { url: String(links), allowDuplicates: false };
 		}
+
+		for (let attempt = 0; attempt <= retries; attempt++) {
+			try {
+				const response = await requestUrl({
+					url: `${cleanBaseUrl}/api/item/${encodeURIComponent(itemId)}/links`,
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+					},
+					body: JSON.stringify(body),
+				});
+
+				if (response.status >= 200 && response.status < 300) {
+					const json = response.json as { status?: string; message?: string };
+					if (json && json.status === 'error') {
+						return { success: false, error: json.message || 'Error from Eagle Extra Links' };
+					}
+					return { success: true };
+				}
+
+				return {
+					success: false,
+					error: `HTTP ${response.status}`,
+				};
+			} catch (error) {
+				const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+				const isNotFound = errorMessage.includes('404') || (error as any)?.status === 404;
+				if (isNotFound && attempt < retries) {
+					const delayMs = 500 * (attempt + 1);
+					await new Promise(resolve => setTimeout(resolve, delayMs));
+					continue;
+				}
+				return {
+					success: false,
+					error: errorMessage,
+				};
+			}
+		}
+
+		return { success: false, error: 'Request failed after retries' };
 	}
 }
 

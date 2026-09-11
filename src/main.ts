@@ -12,6 +12,7 @@ import {
 	CMDSPACEEagleSettings,
 	DEFAULT_SETTINGS,
 	EagleItem,
+	ImageSourceInfo,
 	ComputerProfile,
 	PlatformType,
 } from './types';
@@ -28,6 +29,7 @@ import {
 import { EagleSearchModal, ImagePasteChoiceModal, EagleLinkChoiceModal } from './modals';
 import { CMDSPACEEagleSettingTab } from './settings';
 import { createCloudProvider, getMimeType, getExtFromFilename, CloudProvider } from './cloud-providers';
+import { ClipboardSourceService, extractDomain } from './clipboard-source';
 
 // Minimal shape of the Excalidraw plugin's view that we drive.
 // (The Excalidraw plugin is an optional peer, so we don't import its types.)
@@ -39,6 +41,7 @@ interface ExcalidrawViewLike {
 export default class CMDSPACELinkEagle extends Plugin {
 	settings: CMDSPACEEagleSettings;
 	api: EagleApiService;
+	clipboardSourceService: ClipboardSourceService;
 	private lastModifiedFile: string | null = null;
 	private attachedExcalidrawContainers = new WeakSet<HTMLElement>();
 
@@ -47,6 +50,7 @@ export default class CMDSPACELinkEagle extends Plugin {
 
 		await this.loadSettings();
 		this.api = new EagleApiService(this.settings);
+		this.clipboardSourceService = new ClipboardSourceService();
 
 		this.addCommand({
 			id: 'search-eagle',
@@ -258,6 +262,10 @@ export default class CMDSPACELinkEagle extends Plugin {
 		if (cloudUrl) {
 			linkSection += ` | [Cloud](${cloudUrl})`;
 		}
+		if (this.settings.includeSourceInMetadataCard && item.url) {
+			const domain = extractDomain(item.url);
+			linkSection += ` | [Source: ${domain || 'Web'}](${item.url})`;
+		}
 
 		return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)} | ${dimensions} | ${isUploaded ? '☁️' : '📁'} | ${tags || 'No tags'}
 > ${linkSection}`;
@@ -283,6 +291,10 @@ export default class CMDSPACELinkEagle extends Plugin {
 		let linkSection = `> [Open in Eagle](${linkUrl})`;
 		if (cloudUrl) {
 			linkSection += ` | [Cloud URL](${cloudUrl})`;
+		}
+		if (this.settings.includeSourceInMetadataCard && item.url) {
+			const domain = extractDomain(item.url);
+			linkSection += ` | [Source: ${domain || 'Web'}](${item.url})`;
 		}
 
 		return `> [!cmdspace-eagle] ${item.name}
@@ -873,11 +885,16 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			return;
 		}
 
+		let sourceInfo: ImageSourceInfo | null = null;
+		if (this.settings.enableImageSourceUrl) {
+			sourceInfo = await this.clipboardSourceService.getSourceInfo();
+		}
+
 		const filesCopy = Array.from(files);
 
 		if (this.settings.imagePasteBehavior === 'eagle') {
 			for (const file of filesCopy) {
-				await this.uploadFileWithProgress(file, editor);
+				await this.uploadFileWithProgress(file, editor, sourceInfo);
 			}
 			return;
 		}
@@ -901,7 +918,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 
 		if (response.choice === 'eagle') {
 			for (const file of filesCopy) {
-				await this.uploadFileWithProgress(file, editor);
+				await this.uploadFileWithProgress(file, editor, sourceInfo);
 			}
 		} else if (response.choice === 'local') {
 			for (const file of filesCopy) {
@@ -1022,22 +1039,23 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		}
 	}
 
-	private async uploadFileWithProgress(file: File, editor: Editor): Promise<void> {
+	private async uploadFileWithProgress(file: File, editor: Editor, sourceInfo?: ImageSourceInfo | null): Promise<void> {
 		const pasteId = this.generatePasteId();
 		const placeholderText = `![Uploading ${file.name}...](${pasteId})`;
 		
 		editor.replaceSelection(placeholderText);
 
 		try {
-			const { url: imageUrl, item } = await this.uploadImageToEagle(file);
-			let markdownImage = `![${file.name}](${imageUrl})`;
+			const { url: imageUrl, item } = await this.uploadImageToEagle(file, sourceInfo);
+			const displayName = item ? `${item.name}.${item.ext}` : file.name;
+			let markdownImage = `![${displayName}](${imageUrl})`;
 			
 			if (item && this.settings.insertThumbnail) {
 				markdownImage += '\n\n' + this.buildMetadataCard(item);
 			}
 
 			this.replaceTextInDocument(editor, placeholderText, markdownImage);
-			new Notice(`Uploaded to Eagle: ${file.name}`);
+			new Notice(`Uploaded to Eagle: ${displayName}`);
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 			const errorText = `<!-- Failed to upload ${file.name}: ${errorMessage} -->`;
@@ -1217,12 +1235,31 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 				throw new Error('Failed to add image to Eagle');
 			}
 
-			void this.applyObsidianBacklink(result.itemId);
-
 			await this.delay(1000);
 
 			const thumbnailPath = await this.api.getThumbnailPath(result.itemId);
-			const imageUrl = thumbnailPath ? `file://${thumbnailPath}` : `eagle://item/${result.itemId}`;
+			const item = await this.api.getItemInfo(result.itemId);
+
+			void this.applyObsidianBacklink(result.itemId);
+
+			let imageUrl: string;
+			if (this.settings.eagleEmbedUrlMode === 'custom-url') {
+				const libraryName = (await this.api.getLibraryName()) || 'Main';
+				const ext = item ? item.ext : file.extension;
+				const name = item ? item.name : filenameWithoutExt;
+				imageUrl = buildEagleCustomEmbedUrl(
+					this.settings.eagleCustomUrlPrefix,
+					libraryName,
+					result.itemId,
+					name,
+					ext,
+					false
+				);
+			} else if (thumbnailPath) {
+				imageUrl = this.pathToFileUrl(thumbnailPath);
+			} else {
+				imageUrl = `eagle://item/${result.itemId}`;
+			}
 			
 			const markdownImage = `![${file.basename}](${imageUrl})`;
 			this.replaceTextInDocument(editor, placeholderText, markdownImage);
@@ -1832,7 +1869,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		return id;
 	}
 
-	private async getEagleBacklinkPayload(): Promise<{ website?: string; annotation?: string }> {
+	private async getEagleBacklinkPayload(hasSourceUrl?: boolean): Promise<{ website?: string; annotation?: string }> {
 		if (!this.settings.enableBacklinks || this.settings.backlinkMode !== 'legacy') {
 			return {};
 		}
@@ -1852,7 +1889,11 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 
 		const dest = this.settings.backlinkDestination;
 		if (dest === 'url' || dest === 'both') {
-			result.website = advancedUri;
+			if (!hasSourceUrl) {
+				result.website = advancedUri;
+			} else {
+				result.annotation = `Linked From Obsidian: [${basename}](${advancedUri})`;
+			}
 		}
 		if (dest === 'note' || dest === 'both') {
 			result.annotation = `Linked From Obsidian: [${basename}](${advancedUri})`;
@@ -1861,7 +1902,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		return result;
 	}
 
-	private async applyObsidianBacklink(itemId: string): Promise<void> {
+	private async applyObsidianBacklink(itemId: string, hasSourceUrl?: boolean): Promise<void> {
 		if (!this.settings.enableBacklinks) {
 			return;
 		}
@@ -1892,7 +1933,11 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			const updates: { url?: string; annotation?: string } = {};
 			const dest = this.settings.backlinkDestination;
 			if (dest === 'url' || dest === 'both') {
-				updates.url = advancedUri;
+				if (!hasSourceUrl) {
+					updates.url = advancedUri;
+				} else {
+					updates.annotation = `Linked From Obsidian: [${basename}](${advancedUri})`;
+				}
 			}
 			if (dest === 'note' || dest === 'both') {
 				updates.annotation = `Linked From Obsidian: [${basename}](${advancedUri})`;
@@ -1903,7 +1948,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		}
 	}
 
-	private async uploadImageToEagle(file: File): Promise<{ url: string, item: EagleItem | null }> {
+	private async uploadImageToEagle(file: File, sourceInfo?: ImageSourceInfo | null): Promise<{ url: string, item: EagleItem | null }> {
 		const tempPath = await this.saveToTempLocation(file);
 		
 		const connected = await this.api.isConnected();
@@ -1911,12 +1956,17 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			throw new Error('Eagle is not running');
 		}
 
+		const primaryUrl = (sourceInfo && this.settings.enableImageSourceUrl)
+			? this.clipboardSourceService.resolvePrimaryUrl(sourceInfo, this.settings.imageSourceUrlPriority)
+			: null;
+
 		const filenameWithoutExt = file.name.replace(/\.[^.]+$/, '');
-		const backlinkData = await this.getEagleBacklinkPayload();
+		const backlinkData = await this.getEagleBacklinkPayload(!!primaryUrl);
 
 		const result = await this.api.addFromPath({
 			path: tempPath,
 			name: filenameWithoutExt,
+			website: primaryUrl || backlinkData.website,
 			tags: this.getDefaultTags(),
 			folderId: this.settings.enableDefaultFolder ? (this.settings.defaultFolder || undefined) : undefined,
 			...backlinkData
@@ -1926,17 +1976,82 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			throw new Error('Failed to add image to Eagle');
 		}
 
-		void this.applyObsidianBacklink(result.itemId);
+		const itemId = result.itemId;
 
 		await this.delay(1000);
 
-		const thumbnailPath = await this.api.getThumbnailPath(result.itemId);
-		const item = await this.api.getItemInfo(result.itemId);
+		const thumbnailPath = await this.api.getThumbnailPath(itemId);
+		const item = await this.api.getItemInfo(itemId);
+
+		void (async () => {
+			await this.applyObsidianBacklink(itemId, !!primaryUrl);
+			if (sourceInfo && this.settings.enableImageSourceUrl && this.settings.extraLinksImageSource !== 'none') {
+				await this.pushImageSourcesToExtraLinks(itemId, sourceInfo);
+			}
+		})();
+
+		let embedUrl: string;
+		if (this.settings.eagleEmbedUrlMode === 'custom-url') {
+			const libraryName = (await this.api.getLibraryName()) || 'Main';
+			const ext = item ? item.ext : getExtFromFilename(file.name);
+			const nameWithoutExt = item ? item.name : filenameWithoutExt;
+			embedUrl = buildEagleCustomEmbedUrl(
+				this.settings.eagleCustomUrlPrefix,
+				libraryName,
+				itemId,
+				nameWithoutExt,
+				ext,
+				false
+			);
+		} else {
+			const localPath = thumbnailPath || tempPath;
+			embedUrl = this.pathToFileUrl(localPath);
+		}
 		
 		return {
-			url: thumbnailPath ? `file://${thumbnailPath}` : `file://${tempPath}`,
+			url: embedUrl,
 			item
 		};
+	}
+
+	private async pushImageSourcesToExtraLinks(itemId: string, sourceInfo: ImageSourceInfo): Promise<void> {
+		const mode = this.settings.extraLinksImageSource;
+		if (mode === 'none') return;
+
+		const linksToPush: Array<{ title: string; url: string }> = [];
+
+		if ((mode === 'page' || mode === 'both') && sourceInfo.pageUrl) {
+			const domain = extractDomain(sourceInfo.pageUrl);
+			linksToPush.push({
+				title: domain ? `Source Page: ${domain}` : 'Source Page',
+				url: sourceInfo.pageUrl
+			});
+		}
+
+		if ((mode === 'image' || mode === 'both') && sourceInfo.imageUrl) {
+			if (sourceInfo.imageUrl !== sourceInfo.pageUrl) {
+				const domain = extractDomain(sourceInfo.imageUrl);
+				linksToPush.push({
+					title: domain ? `Direct Image: ${domain}` : 'Direct Image',
+					url: sourceInfo.imageUrl
+				});
+			}
+		}
+
+		for (const link of linksToPush) {
+			try {
+				const res = await this.api.addExtraLinks(
+					this.settings.extraLinksBaseUrl,
+					itemId,
+					link
+				);
+				if (!res.success) {
+					console.warn('[CMDS Eagle] Failed to push image source to Extra Links:', res.error);
+				}
+			} catch (err) {
+				console.warn('[CMDS Eagle] Error pushing image source to Extra Links:', err);
+			}
+		}
 	}
 
 	private async saveToTempLocation(file: File): Promise<string> {
