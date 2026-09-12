@@ -33,6 +33,7 @@ All notable changes to this project will be documented in this file.
 - **Docs**: Added a "Development & Testing" section to the `README.md` with instructions for compiling, installing, and testing local builds.
 
 ### Fixed
+- **Image Name Resolution on Paste/Drop**: Fixed an issue where images pasted or dragged from web browsers were genericly named "image" (due to Chromium clipboard assigning `image.png`). The plugin now automatically resolves the real asset filename from the source image URL path (e.g., resolving `2600_HomeforEveryone` from `https://.../2600_HomeforEveryone.jpg`) to pre-populate the Name field in the Ask modal and name the Eagle asset.
 - **Folder Picker Selection**: Fixed an issue in the Ask mode folder picker where choosing a folder could prematurely trigger "Upload cancelled" due to modal dismissal timing.
 - **Metadata Card Image Source Link**: Resolved an issue where the source link was not added to the metadata card even when "Include source in metadata card" was enabled:
   - Sanitized null bytes (`\0`) returned by Windows Electron clipboard (`Chromium internal source URL`), preventing broken CommonMark link syntax in Obsidian.

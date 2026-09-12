@@ -30,6 +30,7 @@
 
 ## Folder Picker & Modal Fixes
 
+* **Automatic Image Name Extraction:** Fixed an issue where images copied or dragged from websites resulted in the Name field being populated with generic "image" (due to Chromium clipboard defaulting to `image.png`). The plugin now automatically resolves the real filename directly from the source image's URL path (e.g. `2600_HomeforEveryone` from `https://.../2600_HomeforEveryone.jpg`).
 * **Clean Folder Selection in Ask Mode:** Fixed an issue where selecting a folder in the "Ask" mode picker modal could trigger "Upload cancelled" due to modal dismissal timing. Selection state is now locked before modal closure.
 
 ## Metadata Card & Image Source URL Fixes

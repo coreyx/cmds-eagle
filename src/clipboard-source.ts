@@ -229,16 +229,21 @@ export class WindowsClipboardProvider implements IClipboardSourceProvider {
 				}
 
 				// Extract <img src="..." alt="...">
-				const imgMatch = text.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) ||
+				const imgMatch = text.match(/<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/i) ||
+					text.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) ||
 					text.match(/<img[^>]+src=([^\s>]+)/i);
 				if (imgMatch && imgMatch[1]) {
-					const decoded = imgMatch[1].replace(/&amp;/g, '&');
+					let decoded = imgMatch[1].replace(/&amp;/g, '&').trim();
+					if (decoded.startsWith('//')) {
+						decoded = 'https:' + decoded;
+					}
 					if (isValidHttpUrl(decoded)) {
 						imageUrl = cleanUrl(decoded);
 					}
 				}
 
-				const altMatch = text.match(/<img[^>]+alt=["']([^"']*)["']/i);
+				const altMatch = text.match(/<img\b[^>]*?\balt\s*=\s*["']([^"']*)["']/i) ||
+					text.match(/<img[^>]+alt=["']([^"']*)["']/i);
 				if (altMatch && altMatch[1]) {
 					altText = altMatch[1].trim();
 				}
@@ -306,16 +311,21 @@ export class MacOSClipboardProvider implements IClipboardSourceProvider {
 			// 2. Read public.html for <img src="..." alt="..."> and possible SourceURL
 			const html = safelyReadClipboard(() => clipboard.read('public.html'));
 			if (html && typeof html === 'string') {
-				const imgMatch = html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) ||
+				const imgMatch = html.match(/<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/i) ||
+					html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) ||
 					html.match(/<img[^>]+src=([^\s>]+)/i);
 				if (imgMatch && imgMatch[1]) {
-					const decoded = imgMatch[1].replace(/&amp;/g, '&');
+					let decoded = imgMatch[1].replace(/&amp;/g, '&').trim();
+					if (decoded.startsWith('//')) {
+						decoded = 'https:' + decoded;
+					}
 					if (isValidHttpUrl(decoded)) {
 						imageUrl = cleanUrl(decoded);
 					}
 				}
 
-				const altMatch = html.match(/<img[^>]+alt=["']([^"']*)["']/i);
+				const altMatch = html.match(/<img\b[^>]*?\balt\s*=\s*["']([^"']*)["']/i) ||
+					html.match(/<img[^>]+alt=["']([^"']*)["']/i);
 				if (altMatch && altMatch[1]) {
 					altText = altMatch[1].trim();
 				}

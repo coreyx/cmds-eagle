@@ -218,6 +218,77 @@ function hasR2Upload(item) {
 function getMimeType(ext) {
   return MIME_TYPES[ext.toLowerCase()] || "application/octet-stream";
 }
+function isGenericImageName(name) {
+  if (!name)
+    return true;
+  const trimmed = name.trim().toLowerCase();
+  if (!trimmed)
+    return true;
+  if (["image", "img", "picture", "photo", "blob", "clipboard", "paste", "untitled", "unknown"].includes(trimmed)) {
+    return true;
+  }
+  if (/^(image|img)[\s_(-]*\d*\)?$/i.test(trimmed)) {
+    return true;
+  }
+  if (/^pasted[\s_-]*image/i.test(trimmed)) {
+    return true;
+  }
+  return false;
+}
+function extractNameFromUrl(url) {
+  if (!url)
+    return null;
+  try {
+    const parsed = new URL(url);
+    const segments = parsed.pathname.split("/").filter((s) => s.trim().length > 0);
+    if (segments.length === 0) {
+      return null;
+    }
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const segment = decodeURIComponent(segments[i]).trim();
+      const nameWithoutExt = segment.replace(/\.[^.]+$/, "").trim();
+      if (nameWithoutExt && !isGenericImageName(nameWithoutExt)) {
+        return nameWithoutExt;
+      }
+    }
+  } catch (e) {
+    const match = url.match(/\/([^\/?#]+?)(?:\.[a-zA-Z0-9]+)?(?:\?|#|$)/);
+    if (match && match[1]) {
+      try {
+        const decoded = decodeURIComponent(match[1]).trim();
+        const nameWithoutExt = decoded.replace(/\.[^.]+$/, "").trim();
+        if (nameWithoutExt && !isGenericImageName(nameWithoutExt)) {
+          return nameWithoutExt;
+        }
+      } catch (e2) {
+      }
+    }
+  }
+  return null;
+}
+function resolveImageFileName(file, sourceInfo) {
+  const rawName = file ? file.basename || file.name || "" : "";
+  const fileBaseName = rawName.replace(/\.[^.]+$/, "").trim();
+  if (fileBaseName && !isGenericImageName(fileBaseName)) {
+    return fileBaseName;
+  }
+  if (sourceInfo == null ? void 0 : sourceInfo.imageUrl) {
+    const fromUrl = extractNameFromUrl(sourceInfo.imageUrl);
+    if (fromUrl) {
+      return fromUrl;
+    }
+  }
+  if (sourceInfo == null ? void 0 : sourceInfo.localFilePath) {
+    const segments = sourceInfo.localFilePath.replace(/\\/g, "/").split("/").filter((s) => s.trim().length > 0);
+    if (segments.length > 0) {
+      const last = segments[segments.length - 1].replace(/\.[^.]+$/, "").trim();
+      if (last && !isGenericImageName(last)) {
+        return last;
+      }
+    }
+  }
+  return fileBaseName || "Image";
+}
 var import_obsidian, EagleApiService, MIME_TYPES;
 var init_api = __esm({
   "src/api.ts"() {
@@ -3314,14 +3385,17 @@ var WindowsClipboardProvider = class {
         if (pageMatch && pageMatch[1] && isValidHttpUrl(pageMatch[1])) {
           pageUrl = cleanUrl(pageMatch[1]);
         }
-        const imgMatch = text.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) || text.match(/<img[^>]+src=([^\s>]+)/i);
+        const imgMatch = text.match(/<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/i) || text.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) || text.match(/<img[^>]+src=([^\s>]+)/i);
         if (imgMatch && imgMatch[1]) {
-          const decoded = imgMatch[1].replace(/&amp;/g, "&");
+          let decoded = imgMatch[1].replace(/&amp;/g, "&").trim();
+          if (decoded.startsWith("//")) {
+            decoded = "https:" + decoded;
+          }
           if (isValidHttpUrl(decoded)) {
             imageUrl = cleanUrl(decoded);
           }
         }
-        const altMatch = text.match(/<img[^>]+alt=["']([^"']*)["']/i);
+        const altMatch = text.match(/<img\b[^>]*?\balt\s*=\s*["']([^"']*)["']/i) || text.match(/<img[^>]+alt=["']([^"']*)["']/i);
         if (altMatch && altMatch[1]) {
           altText = altMatch[1].trim();
         }
@@ -3370,14 +3444,17 @@ var MacOSClipboardProvider = class {
       }
       const html = safelyReadClipboard(() => clipboard.read("public.html"));
       if (html && typeof html === "string") {
-        const imgMatch = html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) || html.match(/<img[^>]+src=([^\s>]+)/i);
+        const imgMatch = html.match(/<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/i) || html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) || html.match(/<img[^>]+src=([^\s>]+)/i);
         if (imgMatch && imgMatch[1]) {
-          const decoded = imgMatch[1].replace(/&amp;/g, "&");
+          let decoded = imgMatch[1].replace(/&amp;/g, "&").trim();
+          if (decoded.startsWith("//")) {
+            decoded = "https:" + decoded;
+          }
           if (isValidHttpUrl(decoded)) {
             imageUrl = cleanUrl(decoded);
           }
         }
-        const altMatch = html.match(/<img[^>]+alt=["']([^"']*)["']/i);
+        const altMatch = html.match(/<img\b[^>]*?\balt\s*=\s*["']([^"']*)["']/i) || html.match(/<img[^>]+alt=["']([^"']*)["']/i);
         if (altMatch && altMatch[1]) {
           altText = altMatch[1].trim();
         }
@@ -4357,8 +4434,10 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       return;
     }
     let sourceInfo = null;
-    if (this.settings.enableImageSourceUrl || this.settings.includeLocalSourceInMetadataCard) {
+    try {
       sourceInfo = await this.clipboardSourceService.getSourceInfo();
+    } catch (e) {
+      console.warn("[CMDS Eagle] Error retrieving clipboard source info:", e);
     }
     const fileItems = Array.from(files).map((file) => ({
       file,
@@ -4414,7 +4493,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       return;
     }
     let sourceInfo = null;
-    if ((this.settings.enableImageSourceUrl || this.settings.includeLocalSourceInMetadataCard) && evt.dataTransfer) {
+    if (evt.dataTransfer) {
       const uriList = evt.dataTransfer.getData("text/uri-list");
       const html = evt.dataTransfer.getData("text/html");
       const textPlain = (_a = evt.dataTransfer.getData("text/plain")) == null ? void 0 : _a.trim();
@@ -4456,14 +4535,17 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       }
       let altText;
       if (html) {
-        const imgMatch = html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) || html.match(/<img[^>]+src=([^\s>]+)/i);
+        const imgMatch = html.match(/<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/i) || html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) || html.match(/<img[^>]+src=([^\s>]+)/i);
         if (imgMatch && imgMatch[1]) {
-          const decoded = imgMatch[1].replace(/&amp;/g, "&");
+          let decoded = imgMatch[1].replace(/&amp;/g, "&").trim();
+          if (decoded.startsWith("//")) {
+            decoded = "https:" + decoded;
+          }
           if (isValidHttpUrl(decoded)) {
             imageUrl = cleanUrl(decoded);
           }
         }
-        const altMatch = html.match(/<img[^>]+alt=["']([^"']*)["']/i);
+        const altMatch = html.match(/<img\b[^>]*?\balt\s*=\s*["']([^"']*)["']/i) || html.match(/<img[^>]+alt=["']([^"']*)["']/i);
         if (altMatch && altMatch[1]) {
           altText = altMatch[1].trim();
         }
@@ -5099,7 +5181,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
         let eagleNote = "";
         if (this.settings.excalidrawImportToEagle) {
           const backlinkData = await this.getEagleBacklinkPayload();
-          const filenameWithoutExt = file.name.replace(/\.[^.]+$/, "");
+          const filenameWithoutExt = resolveImageFileName(file);
           const folderResolution = await this.resolveEagleFolderForUpload({
             file,
             fileName: filenameWithoutExt
@@ -5250,7 +5332,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     return parsedTags.length > 0 ? parsedTags : void 0;
   }
   async resolveEagleFolderForUpload(contextOrFile) {
-    var _a, _b;
+    var _a;
     const context = contextOrFile instanceof import_obsidian5.TFile ? { activeFile: contextOrFile } : contextOrFile || {};
     const mode = this.settings.addFolderMode || (this.settings.enableDefaultFolder ? "target" : "target");
     switch (mode) {
@@ -5266,8 +5348,8 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
         } else if (!previewUrl && context.file instanceof import_obsidian5.TFile) {
           previewUrl = this.app.vault.getResourcePath(context.file);
         }
-        const fileName = context.fileName || (context.file instanceof import_obsidian5.TFile ? context.file.basename : (_a = context.file) == null ? void 0 : _a.name) || "Image";
-        const initialAltText = (_b = context.sourceInfo) == null ? void 0 : _b.altText;
+        const fileName = context.fileName || resolveImageFileName(context.file, context.sourceInfo);
+        const initialAltText = (_a = context.sourceInfo) == null ? void 0 : _a.altText;
         const initialTags = this.getDefaultTags() || [];
         const result = await EagleFolderPickerModal.pickFolder(
           this.app,
@@ -5493,7 +5575,7 @@ ${updates.annotation}`;
       throw new Error("Eagle is not running");
     }
     const primaryUrl = sourceInfo && this.settings.enableImageSourceUrl ? this.clipboardSourceService.resolvePrimaryUrl(sourceInfo, this.settings.imageSourceUrlPriority) : null;
-    const filenameWithoutExt = file.name.replace(/\.[^.]+$/, "");
+    const filenameWithoutExt = resolveImageFileName(file, sourceInfo);
     const backlinkData = await this.getEagleBacklinkPayload(!!primaryUrl);
     const folderResolution = await this.resolveEagleFolderForUpload({
       file,

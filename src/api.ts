@@ -10,6 +10,7 @@ import {
 	R2UploadResult,
 	EagleItemLinkFormat,
 	EagleTag,
+	ImageSourceInfo,
 } from './types';
 
 export class EagleApiService {
@@ -664,3 +665,85 @@ const MIME_TYPES: Record<string, string> = {
 function getMimeType(ext: string): string {
 	return MIME_TYPES[ext.toLowerCase()] || 'application/octet-stream';
 }
+
+export function isGenericImageName(name: string): boolean {
+	if (!name) return true;
+	const trimmed = name.trim().toLowerCase();
+	if (!trimmed) return true;
+	if (['image', 'img', 'picture', 'photo', 'blob', 'clipboard', 'paste', 'untitled', 'unknown'].includes(trimmed)) {
+		return true;
+	}
+	if (/^(image|img)[\s_(-]*\d*\)?$/i.test(trimmed)) {
+		return true;
+	}
+	if (/^pasted[\s_-]*image/i.test(trimmed)) {
+		return true;
+	}
+	return false;
+}
+
+export function extractNameFromUrl(url: string): string | null {
+	if (!url) return null;
+	try {
+		const parsed = new URL(url);
+		const segments = parsed.pathname.split('/').filter(s => s.trim().length > 0);
+		if (segments.length === 0) {
+			return null;
+		}
+
+		for (let i = segments.length - 1; i >= 0; i--) {
+			const segment = decodeURIComponent(segments[i]).trim();
+			const nameWithoutExt = segment.replace(/\.[^.]+$/, '').trim();
+			if (nameWithoutExt && !isGenericImageName(nameWithoutExt)) {
+				return nameWithoutExt;
+			}
+		}
+	} catch {
+		const match = url.match(/\/([^\/?#]+?)(?:\.[a-zA-Z0-9]+)?(?:\?|#|$)/);
+		if (match && match[1]) {
+			try {
+				const decoded = decodeURIComponent(match[1]).trim();
+				const nameWithoutExt = decoded.replace(/\.[^.]+$/, '').trim();
+				if (nameWithoutExt && !isGenericImageName(nameWithoutExt)) {
+					return nameWithoutExt;
+				}
+			} catch { }
+		}
+	}
+	return null;
+}
+
+export function resolveImageFileName(
+	file: { name: string; basename?: string } | null | undefined,
+	sourceInfo?: ImageSourceInfo | null
+): string {
+	const rawName = file ? ((file as any).basename || file.name || '') : '';
+	const fileBaseName = rawName.replace(/\.[^.]+$/, '').trim();
+
+	// 1. If file has a non-generic name, use it!
+	if (fileBaseName && !isGenericImageName(fileBaseName)) {
+		return fileBaseName;
+	}
+
+	// 2. Try imageUrl from sourceInfo
+	if (sourceInfo?.imageUrl) {
+		const fromUrl = extractNameFromUrl(sourceInfo.imageUrl);
+		if (fromUrl) {
+			return fromUrl;
+		}
+	}
+
+	// 3. Try localFilePath from sourceInfo
+	if (sourceInfo?.localFilePath) {
+		const segments = sourceInfo.localFilePath.replace(/\\/g, '/').split('/').filter(s => s.trim().length > 0);
+		if (segments.length > 0) {
+			const last = segments[segments.length - 1].replace(/\.[^.]+$/, '').trim();
+			if (last && !isGenericImageName(last)) {
+				return last;
+			}
+		}
+	}
+
+	return fileBaseName || 'Image';
+}
+

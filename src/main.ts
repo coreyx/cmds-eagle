@@ -29,6 +29,7 @@ import {
 	isEagleLocalhostUrl,
 	extractEagleItemId,
 	buildEagleCustomEmbedUrl,
+	resolveImageFileName,
 } from './api';
 import { EagleSearchModal, ImagePasteChoiceModal, EagleLinkChoiceModal, EagleFolderPickerModal } from './modals';
 import { CMDSPACEEagleSettingTab } from './settings';
@@ -1112,8 +1113,10 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		}
 
 		let sourceInfo: ImageSourceInfo | null = null;
-		if (this.settings.enableImageSourceUrl || this.settings.includeLocalSourceInMetadataCard) {
+		try {
 			sourceInfo = await this.clipboardSourceService.getSourceInfo();
+		} catch (e) {
+			console.warn('[CMDS Eagle] Error retrieving clipboard source info:', e);
 		}
 
 		const fileItems = Array.from(files).map(file => ({
@@ -1176,7 +1179,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		}
 
 		let sourceInfo: ImageSourceInfo | null = null;
-		if ((this.settings.enableImageSourceUrl || this.settings.includeLocalSourceInMetadataCard) && evt.dataTransfer) {
+		if (evt.dataTransfer) {
 			const uriList = evt.dataTransfer.getData('text/uri-list');
 			const html = evt.dataTransfer.getData('text/html');
 			const textPlain = evt.dataTransfer.getData('text/plain')?.trim();
@@ -1221,16 +1224,21 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 
 			let altText: string | undefined;
 			if (html) {
-				const imgMatch = html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) ||
+				const imgMatch = html.match(/<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/i) ||
+					html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) ||
 					html.match(/<img[^>]+src=([^\s>]+)/i);
 				if (imgMatch && imgMatch[1]) {
-					const decoded = imgMatch[1].replace(/&amp;/g, '&');
+					let decoded = imgMatch[1].replace(/&amp;/g, '&').trim();
+					if (decoded.startsWith('//')) {
+						decoded = 'https:' + decoded;
+					}
 					if (isValidHttpUrl(decoded)) {
 						imageUrl = cleanUrl(decoded);
 					}
 				}
 
-				const altMatch = html.match(/<img[^>]+alt=["']([^"']*)["']/i);
+				const altMatch = html.match(/<img\b[^>]*?\balt\s*=\s*["']([^"']*)["']/i) ||
+					html.match(/<img[^>]+alt=["']([^"']*)["']/i);
 				if (altMatch && altMatch[1]) {
 					altText = altMatch[1].trim();
 				}
@@ -1992,7 +2000,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 				let eagleNote = '';
 				if (this.settings.excalidrawImportToEagle) {
 					const backlinkData = await this.getEagleBacklinkPayload();
-					const filenameWithoutExt = file.name.replace(/\.[^.]+$/, '');
+					const filenameWithoutExt = resolveImageFileName(file);
 					const folderResolution = await this.resolveEagleFolderForUpload({
 						file,
 						fileName: filenameWithoutExt,
@@ -2205,7 +2213,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 					previewUrl = this.app.vault.getResourcePath(context.file);
 				}
 
-				const fileName = context.fileName || (context.file instanceof TFile ? context.file.basename : context.file?.name) || 'Image';
+				const fileName = context.fileName || resolveImageFileName(context.file, context.sourceInfo);
 				const initialAltText = context.sourceInfo?.altText;
 				const initialTags = this.getDefaultTags() || [];
 
@@ -2471,7 +2479,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			? this.clipboardSourceService.resolvePrimaryUrl(sourceInfo, this.settings.imageSourceUrlPriority)
 			: null;
 
-		const filenameWithoutExt = file.name.replace(/\.[^.]+$/, '');
+		const filenameWithoutExt = resolveImageFileName(file, sourceInfo);
 		const backlinkData = await this.getEagleBacklinkPayload(!!primaryUrl);
 
 		const folderResolution = await this.resolveEagleFolderForUpload({
