@@ -250,13 +250,42 @@ export default class CMDSPACELinkEagle extends Plugin {
 	}
 
 	private extractLocalFilePath(file: File, sourceInfo?: ImageSourceInfo | null): string | null {
-		const directPath = (file as any).path;
-		if (directPath && typeof directPath === 'string' && directPath.trim().length > 0) {
-			return directPath.trim();
+		// 1. Try webUtils.getPathForFile (modern Electron 28+)
+		try {
+			const electron = (window as any).electron ||
+				((window as any).require ? (window as any).require('electron') : null) ||
+				(typeof require !== 'undefined' ? require('electron') : null);
+
+			const webUtils = electron?.webUtils || (window as any).webUtils;
+			if (webUtils?.getPathForFile) {
+				const p = webUtils.getPathForFile(file);
+				if (p && typeof p === 'string' && p.trim().length > 0) {
+					console.log('[CMDS Eagle] Resolved local path via webUtils.getPathForFile:', p.trim());
+					return p.trim();
+				}
+			}
+		} catch (err) {
+			console.warn('[CMDS Eagle] Failed to get path via webUtils.getPathForFile:', err);
 		}
+
+		// 2. Try direct (file as any).path (older Electron <28)
+		try {
+			const directPath = (file as any).path;
+			if (directPath && typeof directPath === 'string' && directPath.trim().length > 0) {
+				console.log('[CMDS Eagle] Resolved local path via file.path:', directPath.trim());
+				return directPath.trim();
+			}
+		} catch (err) {
+			console.warn('[CMDS Eagle] Failed to get path via file.path:', err);
+		}
+
+		// 3. Fallback to sourceInfo (e.g. from clipboard provider or dataTransfer uri-list)
 		if (sourceInfo?.localFilePath && typeof sourceInfo.localFilePath === 'string' && sourceInfo.localFilePath.trim().length > 0) {
+			console.log('[CMDS Eagle] Resolved local path via sourceInfo:', sourceInfo.localFilePath.trim());
 			return sourceInfo.localFilePath.trim();
 		}
+
+		console.warn('[CMDS Eagle] Could not extract local file path for file:', file?.name);
 		return null;
 	}
 
@@ -297,7 +326,11 @@ export default class CMDSPACELinkEagle extends Plugin {
 		// 4. Resolve localFilePath to file:// URL
 		if (localFilePath) {
 			try {
-				localFileUrl = this.pathToFileUrl(localFilePath);
+				if (localFilePath.startsWith('file://')) {
+					localFileUrl = cleanUrl(localFilePath);
+				} else {
+					localFileUrl = this.pathToFileUrl(localFilePath);
+				}
 			} catch (e) {
 				console.warn('[CMDS Eagle] Failed to convert local file path to file URL:', e);
 			}
@@ -996,19 +1029,21 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			sourceInfo = await this.clipboardSourceService.getSourceInfo();
 		}
 
-		const filesCopy = Array.from(files);
+		const fileItems = Array.from(files).map(file => ({
+			file,
+			localPath: this.extractLocalFilePath(file, sourceInfo)
+		}));
 
 		if (this.settings.imagePasteBehavior === 'eagle') {
-			for (const file of filesCopy) {
-				const localPath = this.extractLocalFilePath(file, sourceInfo);
-				await this.uploadFileWithProgress(file, editor, sourceInfo, localPath);
+			for (const item of fileItems) {
+				await this.uploadFileWithProgress(item.file, editor, sourceInfo, item.localPath);
 			}
 			return;
 		}
 
 		if (this.settings.imagePasteBehavior === 'cloud') {
-			for (const file of filesCopy) {
-				await this.uploadToCloudWithProgress(file, editor);
+			for (const item of fileItems) {
+				await this.uploadToCloudWithProgress(item.file, editor);
 			}
 			return;
 		}
@@ -1024,17 +1059,16 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		}
 
 		if (response.choice === 'eagle') {
-			for (const file of filesCopy) {
-				const localPath = this.extractLocalFilePath(file, sourceInfo);
-				await this.uploadFileWithProgress(file, editor, sourceInfo, localPath);
+			for (const item of fileItems) {
+				await this.uploadFileWithProgress(item.file, editor, sourceInfo, item.localPath);
 			}
 		} else if (response.choice === 'local') {
-			for (const file of filesCopy) {
-				await this.saveImageLocally(file, editor);
+			for (const item of fileItems) {
+				await this.saveImageLocally(item.file, editor);
 			}
 		} else if (response.choice === 'cloud') {
-			for (const file of filesCopy) {
-				await this.uploadToCloudWithProgress(file, editor);
+			for (const item of fileItems) {
+				await this.uploadToCloudWithProgress(item.file, editor);
 			}
 		}
 	}
@@ -1058,6 +1092,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		if ((this.settings.enableImageSourceUrl || this.settings.includeLocalSourceInMetadataCard) && evt.dataTransfer) {
 			const uriList = evt.dataTransfer.getData('text/uri-list');
 			const html = evt.dataTransfer.getData('text/html');
+			const textPlain = evt.dataTransfer.getData('text/plain')?.trim();
 			let pageUrl: string | undefined;
 			let imageUrl: string | undefined;
 			let localFilePath: string | undefined;
@@ -1082,6 +1117,21 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 				}
 			}
 
+			if (textPlain && !localFilePath) {
+				if (/^[A-Za-z]:[\\/]/.test(textPlain) || textPlain.startsWith('\\\\') || textPlain.startsWith('/')) {
+					localFilePath = textPlain;
+				} else if (textPlain.startsWith('file://')) {
+					try {
+						localFilePath = decodeURIComponent(new URL(textPlain.split('\r\n')[0]).pathname);
+						if (/^\/[A-Za-z]:/.test(localFilePath)) {
+							localFilePath = localFilePath.slice(1);
+						}
+					} catch {
+						localFilePath = textPlain.split('\r\n')[0].replace(/^file:\/\//, '');
+					}
+				}
+			}
+
 			if (html) {
 				const imgMatch = html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) ||
 					html.match(/<img[^>]+src=([^\s>]+)/i);
@@ -1098,19 +1148,21 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			}
 		}
 
-		const filesCopy = Array.from(files);
+		const fileItems = Array.from(files).map(file => ({
+			file,
+			localPath: this.extractLocalFilePath(file, sourceInfo)
+		}));
 
 		if (this.settings.imagePasteBehavior === 'eagle') {
-			for (const file of filesCopy) {
-				const localPath = this.extractLocalFilePath(file, sourceInfo);
-				await this.uploadFileWithProgress(file, editor, sourceInfo, localPath);
+			for (const item of fileItems) {
+				await this.uploadFileWithProgress(item.file, editor, sourceInfo, item.localPath);
 			}
 			return;
 		}
 
 		if (this.settings.imagePasteBehavior === 'cloud') {
-			for (const file of filesCopy) {
-				await this.uploadToCloudWithProgress(file, editor);
+			for (const item of fileItems) {
+				await this.uploadToCloudWithProgress(item.file, editor);
 			}
 			return;
 		}
@@ -1126,17 +1178,16 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		}
 
 		if (response.choice === 'eagle') {
-			for (const file of filesCopy) {
-				const localPath = this.extractLocalFilePath(file, sourceInfo);
-				await this.uploadFileWithProgress(file, editor, sourceInfo, localPath);
+			for (const item of fileItems) {
+				await this.uploadFileWithProgress(item.file, editor, sourceInfo, item.localPath);
 			}
 		} else if (response.choice === 'local') {
-			for (const file of filesCopy) {
-				await this.saveImageLocally(file, editor);
+			for (const item of fileItems) {
+				await this.saveImageLocally(item.file, editor);
 			}
 		} else if (response.choice === 'cloud') {
-			for (const file of filesCopy) {
-				await this.uploadToCloudWithProgress(file, editor);
+			for (const item of fileItems) {
+				await this.uploadToCloudWithProgress(item.file, editor);
 			}
 		}
 	}
@@ -1867,7 +1918,10 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 	}
 
 	private pathToFileUrl(path: string): string {
-		let decodedPath = path;
+		let decodedPath = path.replace(/^file:\/\/+/, '');
+		if (/^\/[A-Za-z]:/.test(decodedPath)) {
+			decodedPath = decodedPath.slice(1);
+		}
 		try {
 			while (decodedPath.includes('%')) {
 				const decoded = decodeURIComponent(decodedPath);
@@ -1875,7 +1929,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 				decodedPath = decoded;
 			}
 		} catch {
-			decodedPath = path;
+			// keep decodedPath
 		}
 
 		const convertedPath = this.convertPathForCurrentPlatform(decodedPath);

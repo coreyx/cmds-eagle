@@ -1276,7 +1276,7 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian3.PluginSettingTab {
         this.plugin.settings.imageSourceUrlPriority = value;
         await this.plugin.saveSettings();
       }));
-      new import_obsidian3.Setting(containerEl).setName("Add image source to Extra Links").setDesc("Push the captured image source URLs into Eagle's Extra Links panel alongside any Obsidian backlinks. Requries Extra Links plugin for Eagle.").addDropdown((dropdown) => dropdown.addOption("none", "None (do not add to Extra Links)").addOption("page", "Page URL only").addOption("image", "Image src URL only").addOption("both", "Both Page URL and Image src").setValue(this.plugin.settings.extraLinksImageSource).onChange(async (value) => {
+      new import_obsidian3.Setting(containerEl).setName("Add image source to Extra Links").setDesc("Push the captured image source URLs into Eagle's Extra Links panel alongside any Obsidian backlinks. Requires Extra Links plugin for Eagle.").addDropdown((dropdown) => dropdown.addOption("none", "None (do not add to Extra Links)").addOption("page", "Page URL only").addOption("image", "Image src URL only").addOption("both", "Both Page URL and Image src").setValue(this.plugin.settings.extraLinksImageSource).onChange(async (value) => {
         this.plugin.settings.extraLinksImageSource = value;
         await this.plugin.saveSettings();
       }));
@@ -2778,13 +2778,33 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     }
   }
   extractLocalFilePath(file, sourceInfo) {
-    const directPath = file.path;
-    if (directPath && typeof directPath === "string" && directPath.trim().length > 0) {
-      return directPath.trim();
+    try {
+      const electron = window.electron || (window.require ? window.require("electron") : null) || (typeof require !== "undefined" ? require("electron") : null);
+      const webUtils = (electron == null ? void 0 : electron.webUtils) || window.webUtils;
+      if (webUtils == null ? void 0 : webUtils.getPathForFile) {
+        const p = webUtils.getPathForFile(file);
+        if (p && typeof p === "string" && p.trim().length > 0) {
+          console.log("[CMDS Eagle] Resolved local path via webUtils.getPathForFile:", p.trim());
+          return p.trim();
+        }
+      }
+    } catch (err) {
+      console.warn("[CMDS Eagle] Failed to get path via webUtils.getPathForFile:", err);
+    }
+    try {
+      const directPath = file.path;
+      if (directPath && typeof directPath === "string" && directPath.trim().length > 0) {
+        console.log("[CMDS Eagle] Resolved local path via file.path:", directPath.trim());
+        return directPath.trim();
+      }
+    } catch (err) {
+      console.warn("[CMDS Eagle] Failed to get path via file.path:", err);
     }
     if ((sourceInfo == null ? void 0 : sourceInfo.localFilePath) && typeof sourceInfo.localFilePath === "string" && sourceInfo.localFilePath.trim().length > 0) {
+      console.log("[CMDS Eagle] Resolved local path via sourceInfo:", sourceInfo.localFilePath.trim());
       return sourceInfo.localFilePath.trim();
     }
+    console.warn("[CMDS Eagle] Could not extract local file path for file:", file == null ? void 0 : file.name);
     return null;
   }
   async resolveMetadataSources(item, fallbackWebUrl, localFilePath) {
@@ -2812,7 +2832,11 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     }
     if (localFilePath) {
       try {
-        localFileUrl = this.pathToFileUrl(localFilePath);
+        if (localFilePath.startsWith("file://")) {
+          localFileUrl = cleanUrl(localFilePath);
+        } else {
+          localFileUrl = this.pathToFileUrl(localFilePath);
+        }
       } catch (e) {
         console.warn("[CMDS Eagle] Failed to convert local file path to file URL:", e);
       }
@@ -3379,17 +3403,19 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     if (this.settings.enableImageSourceUrl || this.settings.includeLocalSourceInMetadataCard) {
       sourceInfo = await this.clipboardSourceService.getSourceInfo();
     }
-    const filesCopy = Array.from(files);
+    const fileItems = Array.from(files).map((file) => ({
+      file,
+      localPath: this.extractLocalFilePath(file, sourceInfo)
+    }));
     if (this.settings.imagePasteBehavior === "eagle") {
-      for (const file of filesCopy) {
-        const localPath = this.extractLocalFilePath(file, sourceInfo);
-        await this.uploadFileWithProgress(file, editor, sourceInfo, localPath);
+      for (const item of fileItems) {
+        await this.uploadFileWithProgress(item.file, editor, sourceInfo, item.localPath);
       }
       return;
     }
     if (this.settings.imagePasteBehavior === "cloud") {
-      for (const file of filesCopy) {
-        await this.uploadToCloudWithProgress(file, editor);
+      for (const item of fileItems) {
+        await this.uploadToCloudWithProgress(item.file, editor);
       }
       return;
     }
@@ -3402,17 +3428,16 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       await this.saveSettings();
     }
     if (response.choice === "eagle") {
-      for (const file of filesCopy) {
-        const localPath = this.extractLocalFilePath(file, sourceInfo);
-        await this.uploadFileWithProgress(file, editor, sourceInfo, localPath);
+      for (const item of fileItems) {
+        await this.uploadFileWithProgress(item.file, editor, sourceInfo, item.localPath);
       }
     } else if (response.choice === "local") {
-      for (const file of filesCopy) {
-        await this.saveImageLocally(file, editor);
+      for (const item of fileItems) {
+        await this.saveImageLocally(item.file, editor);
       }
     } else if (response.choice === "cloud") {
-      for (const file of filesCopy) {
-        await this.uploadToCloudWithProgress(file, editor);
+      for (const item of fileItems) {
+        await this.uploadToCloudWithProgress(item.file, editor);
       }
     }
   }
@@ -3424,6 +3449,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     return this.settings.imagePasteBehavior !== "local";
   }
   async handleDrop(evt, editor) {
+    var _a;
     const { files } = evt.dataTransfer || { files: null };
     if (!files || !this.allFilesAreImages(files))
       return;
@@ -3434,6 +3460,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     if ((this.settings.enableImageSourceUrl || this.settings.includeLocalSourceInMetadataCard) && evt.dataTransfer) {
       const uriList = evt.dataTransfer.getData("text/uri-list");
       const html = evt.dataTransfer.getData("text/html");
+      const textPlain = (_a = evt.dataTransfer.getData("text/plain")) == null ? void 0 : _a.trim();
       let pageUrl;
       let imageUrl;
       let localFilePath;
@@ -3456,6 +3483,20 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
           }
         }
       }
+      if (textPlain && !localFilePath) {
+        if (/^[A-Za-z]:[\\/]/.test(textPlain) || textPlain.startsWith("\\\\") || textPlain.startsWith("/")) {
+          localFilePath = textPlain;
+        } else if (textPlain.startsWith("file://")) {
+          try {
+            localFilePath = decodeURIComponent(new URL(textPlain.split("\r\n")[0]).pathname);
+            if (/^\/[A-Za-z]:/.test(localFilePath)) {
+              localFilePath = localFilePath.slice(1);
+            }
+          } catch (e) {
+            localFilePath = textPlain.split("\r\n")[0].replace(/^file:\/\//, "");
+          }
+        }
+      }
       if (html) {
         const imgMatch = html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) || html.match(/<img[^>]+src=([^\s>]+)/i);
         if (imgMatch && imgMatch[1]) {
@@ -3469,17 +3510,19 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
         sourceInfo = { pageUrl, imageUrl, localFilePath };
       }
     }
-    const filesCopy = Array.from(files);
+    const fileItems = Array.from(files).map((file) => ({
+      file,
+      localPath: this.extractLocalFilePath(file, sourceInfo)
+    }));
     if (this.settings.imagePasteBehavior === "eagle") {
-      for (const file of filesCopy) {
-        const localPath = this.extractLocalFilePath(file, sourceInfo);
-        await this.uploadFileWithProgress(file, editor, sourceInfo, localPath);
+      for (const item of fileItems) {
+        await this.uploadFileWithProgress(item.file, editor, sourceInfo, item.localPath);
       }
       return;
     }
     if (this.settings.imagePasteBehavior === "cloud") {
-      for (const file of filesCopy) {
-        await this.uploadToCloudWithProgress(file, editor);
+      for (const item of fileItems) {
+        await this.uploadToCloudWithProgress(item.file, editor);
       }
       return;
     }
@@ -3492,17 +3535,16 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       await this.saveSettings();
     }
     if (response.choice === "eagle") {
-      for (const file of filesCopy) {
-        const localPath = this.extractLocalFilePath(file, sourceInfo);
-        await this.uploadFileWithProgress(file, editor, sourceInfo, localPath);
+      for (const item of fileItems) {
+        await this.uploadFileWithProgress(item.file, editor, sourceInfo, item.localPath);
       }
     } else if (response.choice === "local") {
-      for (const file of filesCopy) {
-        await this.saveImageLocally(file, editor);
+      for (const item of fileItems) {
+        await this.saveImageLocally(item.file, editor);
       }
     } else if (response.choice === "cloud") {
-      for (const file of filesCopy) {
-        await this.uploadToCloudWithProgress(file, editor);
+      for (const item of fileItems) {
+        await this.uploadToCloudWithProgress(item.file, editor);
       }
     }
   }
@@ -4110,7 +4152,10 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     }
   }
   pathToFileUrl(path) {
-    let decodedPath = path;
+    let decodedPath = path.replace(/^file:\/\/+/, "");
+    if (/^\/[A-Za-z]:/.test(decodedPath)) {
+      decodedPath = decodedPath.slice(1);
+    }
     try {
       while (decodedPath.includes("%")) {
         const decoded = decodeURIComponent(decodedPath);
@@ -4119,7 +4164,6 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
         decodedPath = decoded;
       }
     } catch (e) {
-      decodedPath = path;
     }
     const convertedPath = this.convertPathForCurrentPlatform(decodedPath);
     const normalizedPath = convertedPath.replace(/\\/g, "/");
