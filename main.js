@@ -599,6 +599,29 @@ var init_api = __esm({
         }
         return { success: false, error: "Request failed after retries" };
       }
+      async getExtraLinkWebSource(itemId) {
+        try {
+          const libraryPath = await this.getLibraryPath();
+          if (!libraryPath)
+            return null;
+          const extraPath = `${libraryPath}/images/${itemId}.info/extra-links.json`;
+          const buffer = await fsp.readFile(extraPath);
+          const data = JSON.parse(buffer.toString("utf8"));
+          if (Array.isArray(data == null ? void 0 : data.links)) {
+            for (const link of data.links) {
+              if (link && typeof link.url === "string") {
+                const clean = link.url.replace(/\0/g, "").trim();
+                if (/^https?:\/\//i.test(clean)) {
+                  return clean;
+                }
+              }
+            }
+          }
+          return null;
+        } catch (e) {
+          return null;
+        }
+      }
     };
     MIME_TYPES = {
       "jpg": "image/jpeg",
@@ -2257,19 +2280,25 @@ function safelyReadClipboard(fn) {
     }
   }
 }
+function cleanUrl(urlStr) {
+  if (!urlStr)
+    return "";
+  return urlStr.replace(/\0/g, "").trim();
+}
 function extractDomain(urlStr) {
+  const cleaned = cleanUrl(urlStr);
   try {
-    const parsed = new URL(urlStr);
+    const parsed = new URL(cleaned);
     return parsed.hostname.replace(/^www\./i, "");
   } catch (e) {
-    return urlStr.replace(/^https?:\/\//i, "").split("/")[0].replace(/^www\./i, "");
+    return cleaned.replace(/^https?:\/\//i, "").split("/")[0].replace(/^www\./i, "");
   }
 }
 function isValidHttpUrl(urlStr) {
   if (!urlStr)
     return false;
-  const trimmed = urlStr.trim();
-  return /^https?:\/\/[^\s<>"'\0\x01-\x1f]+/i.test(trimmed);
+  const trimmed = cleanUrl(urlStr);
+  return /^https?:\/\/[^\s<>"'\0\x01-\x1f]+$/i.test(trimmed);
 }
 var BplistParser = class {
   static extractSourceUrl(buf) {
@@ -2408,11 +2437,14 @@ var WindowsClipboardProvider = class {
         const text = buf.toString("utf8");
         const pageMatch = text.match(/SourceURL:(https?:\/\/[^\r\n]+)/i);
         if (pageMatch && pageMatch[1] && isValidHttpUrl(pageMatch[1])) {
-          pageUrl = pageMatch[1].trim();
+          pageUrl = cleanUrl(pageMatch[1]);
         }
         const imgMatch = text.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) || text.match(/<img[^>]+src=([^\s>]+)/i);
-        if (imgMatch && imgMatch[1] && isValidHttpUrl(imgMatch[1])) {
-          imageUrl = imgMatch[1].trim();
+        if (imgMatch && imgMatch[1]) {
+          const decoded = imgMatch[1].replace(/&amp;/g, "&");
+          if (isValidHttpUrl(decoded)) {
+            imageUrl = cleanUrl(decoded);
+          }
         }
       }
       if (!pageUrl) {
@@ -2420,7 +2452,7 @@ var WindowsClipboardProvider = class {
           return clipboard.read("Chromium internal source URL");
         });
         if (isValidHttpUrl(chromiumSource)) {
-          pageUrl = chromiumSource.trim();
+          pageUrl = cleanUrl(chromiumSource);
         }
       }
       if (pageUrl || imageUrl) {
@@ -2444,18 +2476,21 @@ var MacOSClipboardProvider = class {
       let imageUrl;
       const chromiumUrl = safelyReadClipboard(() => clipboard.read("org.chromium.source-url"));
       if (isValidHttpUrl(chromiumUrl)) {
-        pageUrl = chromiumUrl.trim();
+        pageUrl = cleanUrl(chromiumUrl);
       }
       const html = safelyReadClipboard(() => clipboard.read("public.html"));
       if (html && typeof html === "string") {
         const imgMatch = html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) || html.match(/<img[^>]+src=([^\s>]+)/i);
-        if (imgMatch && imgMatch[1] && isValidHttpUrl(imgMatch[1])) {
-          imageUrl = imgMatch[1].trim();
+        if (imgMatch && imgMatch[1]) {
+          const decoded = imgMatch[1].replace(/&amp;/g, "&");
+          if (isValidHttpUrl(decoded)) {
+            imageUrl = cleanUrl(decoded);
+          }
         }
         if (!pageUrl) {
           const pageMatch = html.match(/SourceURL:(https?:\/\/[^\r\n]+)/i);
           if (pageMatch && pageMatch[1] && isValidHttpUrl(pageMatch[1])) {
-            pageUrl = pageMatch[1].trim();
+            pageUrl = cleanUrl(pageMatch[1]);
           }
         }
       }
@@ -2464,10 +2499,11 @@ var MacOSClipboardProvider = class {
         if (webArchiveBuf && webArchiveBuf.length > 8) {
           const safariUrl = BplistParser.extractSourceUrl(webArchiveBuf);
           if (isValidHttpUrl(safariUrl)) {
-            if (!imageUrl && /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(safariUrl)) {
-              imageUrl = safariUrl;
+            const cleanedSafari = cleanUrl(safariUrl);
+            if (!imageUrl && /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(cleanedSafari)) {
+              imageUrl = cleanedSafari;
             } else if (!pageUrl) {
-              pageUrl = safariUrl;
+              pageUrl = cleanedSafari;
             }
           }
         }
@@ -2475,10 +2511,11 @@ var MacOSClipboardProvider = class {
       if (!pageUrl && !imageUrl) {
         const publicUrl = safelyReadClipboard(() => clipboard.read("public.url"));
         if (isValidHttpUrl(publicUrl)) {
-          if (/\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(publicUrl)) {
-            imageUrl = publicUrl.trim();
+          const cleanedPublic = cleanUrl(publicUrl);
+          if (/\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(cleanedPublic)) {
+            imageUrl = cleanedPublic;
           } else {
-            pageUrl = publicUrl.trim();
+            pageUrl = cleanedPublic;
           }
         }
       }
@@ -2688,6 +2725,7 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     new import_obsidian5.Notice(`Inserted link to: ${item.name}`);
   }
   async insertItemLink(editor, item) {
+    const sourceUrl = await this.resolveMetadataSourceUrl(item);
     if (this.settings.insertAsEmbed) {
       const filePath = await this.api.getOriginalFilePath(item);
       if (filePath) {
@@ -2695,7 +2733,7 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
         const filename = `${item.name}.${item.ext}`;
         let output = `![${filename}](${fileUrl})`;
         if (this.settings.insertThumbnail) {
-          output += "\n\n" + this.buildMetadataCard(item);
+          output += "\n\n" + this.buildMetadataCard(item, sourceUrl);
         }
         editor.replaceSelection(output);
         return;
@@ -2703,14 +2741,33 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     }
     const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
     if (this.settings.insertThumbnail) {
-      const card = this.buildLinkCard(item);
+      const card = this.buildLinkCard(item, sourceUrl);
       editor.replaceSelection(card);
     } else {
       const link = this.settings.linkFormat === "wikilink" ? `[[${linkUrl}|${item.name}]]` : `[${item.name}](${linkUrl})`;
       editor.replaceSelection(link);
     }
   }
-  buildMetadataCard(item) {
+  async resolveMetadataSourceUrl(item, fallbackSourceUrl) {
+    if (item.url) {
+      const clean = cleanUrl(item.url);
+      if (/^https?:\/\//i.test(clean)) {
+        return clean;
+      }
+    }
+    if (fallbackSourceUrl) {
+      const clean = cleanUrl(fallbackSourceUrl);
+      if (/^https?:\/\//i.test(clean)) {
+        return clean;
+      }
+    }
+    const extraSource = await this.api.getExtraLinkWebSource(item.id);
+    if (extraSource) {
+      return extraSource;
+    }
+    return null;
+  }
+  buildMetadataCard(item, resolvedSourceUrl) {
     const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
     const tags = item.tags.filter((t) => !t.startsWith("r2:") && t !== "r2-cloud" && t !== "cloud-upload").map((t) => `#${this.normalizeTag(t)}`).join(" ");
     const dimensions = item.width && item.height ? `${item.width}\xD7${item.height}` : "N/A";
@@ -2720,14 +2777,15 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     if (cloudUrl) {
       linkSection += ` | [Cloud](${cloudUrl})`;
     }
-    if (this.settings.includeSourceInMetadataCard && item.url) {
-      const domain = extractDomain(item.url);
-      linkSection += ` | [Source: ${domain || "Web"}](${item.url})`;
+    const sourceUrl = resolvedSourceUrl ? cleanUrl(resolvedSourceUrl) : item.url && /^https?:\/\//i.test(cleanUrl(item.url)) ? cleanUrl(item.url) : null;
+    if (this.settings.includeSourceInMetadataCard && sourceUrl) {
+      const domain = extractDomain(sourceUrl);
+      linkSection += ` | [Source: ${domain || "Web"}](${sourceUrl})`;
     }
     return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)} | ${dimensions} | ${isUploaded ? "\u2601\uFE0F" : "\u{1F4C1}"} | ${tags || "No tags"}
 > ${linkSection}`;
   }
-  buildLinkCard(item) {
+  buildLinkCard(item, resolvedSourceUrl) {
     const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
     const tags = item.tags.filter((t) => !t.startsWith("r2:") && t !== "r2-cloud").map((t) => `#${this.normalizeTag(t)}`).join(" ");
     const dimensions = item.width && item.height ? `${item.width}\xD7${item.height}` : "N/A";
@@ -2744,9 +2802,10 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     if (cloudUrl) {
       linkSection += ` | [Cloud URL](${cloudUrl})`;
     }
-    if (this.settings.includeSourceInMetadataCard && item.url) {
-      const domain = extractDomain(item.url);
-      linkSection += ` | [Source: ${domain || "Web"}](${item.url})`;
+    const sourceUrl = resolvedSourceUrl ? cleanUrl(resolvedSourceUrl) : item.url && /^https?:\/\//i.test(cleanUrl(item.url)) ? cleanUrl(item.url) : null;
+    if (this.settings.includeSourceInMetadataCard && sourceUrl) {
+      const domain = extractDomain(sourceUrl);
+      linkSection += ` | [Source: ${domain || "Web"}](${sourceUrl})`;
     }
     return `> [!cmdspace-eagle] ${item.name}
 > 
@@ -3303,10 +3362,37 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     if (this.settings.imagePasteBehavior === "local") {
       return;
     }
+    let sourceInfo = null;
+    if (this.settings.enableImageSourceUrl && evt.dataTransfer) {
+      const uriList = evt.dataTransfer.getData("text/uri-list");
+      const html = evt.dataTransfer.getData("text/html");
+      let pageUrl;
+      let imageUrl;
+      if (uriList && isValidHttpUrl(uriList)) {
+        const cleaned = cleanUrl(uriList);
+        if (/\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(cleaned)) {
+          imageUrl = cleaned;
+        } else {
+          pageUrl = cleaned;
+        }
+      }
+      if (html) {
+        const imgMatch = html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) || html.match(/<img[^>]+src=([^\s>]+)/i);
+        if (imgMatch && imgMatch[1]) {
+          const decoded = imgMatch[1].replace(/&amp;/g, "&");
+          if (isValidHttpUrl(decoded)) {
+            imageUrl = cleanUrl(decoded);
+          }
+        }
+      }
+      if (pageUrl || imageUrl) {
+        sourceInfo = { pageUrl, imageUrl };
+      }
+    }
     const filesCopy = Array.from(files);
     if (this.settings.imagePasteBehavior === "eagle") {
       for (const file of filesCopy) {
-        await this.uploadFileWithProgress(file, editor);
+        await this.uploadFileWithProgress(file, editor, sourceInfo);
       }
       return;
     }
@@ -3326,7 +3412,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     }
     if (response.choice === "eagle") {
       for (const file of filesCopy) {
-        await this.uploadFileWithProgress(file, editor);
+        await this.uploadFileWithProgress(file, editor, sourceInfo);
       }
     } else if (response.choice === "local") {
       for (const file of filesCopy) {
@@ -3392,7 +3478,9 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       const displayName = item ? `${item.name}.${item.ext}` : file.name;
       let markdownImage = `![${displayName}](${imageUrl})`;
       if (item && this.settings.insertThumbnail) {
-        markdownImage += "\n\n" + this.buildMetadataCard(item);
+        const fallbackSourceUrl = sourceInfo && this.settings.enableImageSourceUrl ? this.clipboardSourceService.resolvePrimaryUrl(sourceInfo, this.settings.imageSourceUrlPriority) : null;
+        const sourceUrl = await this.resolveMetadataSourceUrl(item, fallbackSourceUrl);
+        markdownImage += "\n\n" + this.buildMetadataCard(item, sourceUrl);
       }
       this.replaceTextInDocument(editor, placeholderText, markdownImage);
       new import_obsidian5.Notice(`Uploaded to Eagle: ${displayName}`);
@@ -3707,6 +3795,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
   }
   async insertEagleEmbed(editor, item, useThumbnail) {
     const filename = `${item.name}.${item.ext}`;
+    const sourceUrl = await this.resolveMetadataSourceUrl(item);
     if (this.settings.eagleEmbedUrlMode === "custom-url") {
       const libraryName = await this.api.getLibraryName() || "Main";
       const embedUrl = buildEagleCustomEmbedUrl(
@@ -3719,7 +3808,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       );
       let markdown = `![${filename}](${embedUrl})`;
       if (this.settings.insertThumbnail) {
-        markdown += "\n\n" + this.buildMetadataCard(item);
+        markdown += "\n\n" + this.buildMetadataCard(item, sourceUrl);
       }
       editor.replaceSelection(markdown);
       new import_obsidian5.Notice(`Embedded: ${filename}`);
@@ -3736,7 +3825,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       const fileUrl = this.pathToFileUrl(filePath);
       let markdown = `![${filename}](${fileUrl})`;
       if (this.settings.insertThumbnail) {
-        markdown += "\n\n" + this.buildMetadataCard(item);
+        markdown += "\n\n" + this.buildMetadataCard(item, sourceUrl);
       }
       editor.replaceSelection(markdown);
       new import_obsidian5.Notice(`Embedded: ${filename}`);
@@ -3769,7 +3858,8 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
         const filename2 = `${item.name}.${item.ext}`;
         let markdown = `![${filename2}](${this.pathToFileUrl(originalPath)})`;
         if (this.settings.insertThumbnail) {
-          markdown += "\n\n" + this.buildMetadataCard(item);
+          const sourceUrl = await this.resolveMetadataSourceUrl(item);
+          markdown += "\n\n" + this.buildMetadataCard(item, sourceUrl);
         }
         editor.replaceSelection(markdown);
         new import_obsidian5.Notice(`Embedded: ${filename2}`);
@@ -4161,7 +4251,37 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     const itemId = result.itemId;
     await this.delay(1e3);
     const thumbnailPath = await this.api.getThumbnailPath(itemId);
-    const item = await this.api.getItemInfo(itemId);
+    let item = await this.api.getItemInfo(itemId);
+    if (!item) {
+      await this.delay(500);
+      item = await this.api.getItemInfo(itemId);
+    }
+    if (item) {
+      if (!item.url && primaryUrl) {
+        item.url = primaryUrl;
+        void this.api.updateItem(itemId, { url: primaryUrl });
+      } else if (item.url) {
+        item.url = cleanUrl(item.url);
+      }
+    } else {
+      const ext = getExtFromFilename(file.name);
+      item = {
+        id: itemId,
+        name: filenameWithoutExt,
+        size: file.size,
+        ext,
+        tags: this.getDefaultTags() || [],
+        folders: this.settings.enableDefaultFolder && this.settings.defaultFolder ? [this.settings.defaultFolder] : [],
+        isDeleted: false,
+        url: primaryUrl || "",
+        annotation: "",
+        modificationTime: Date.now(),
+        lastModified: Date.now(),
+        width: 0,
+        height: 0,
+        palettes: []
+      };
+    }
     void (async () => {
       await this.applyObsidianBacklink(itemId, !!primaryUrl);
       if (sourceInfo && this.settings.enableImageSourceUrl && this.settings.extraLinksImageSource !== "none") {

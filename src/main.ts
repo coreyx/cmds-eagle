@@ -29,7 +29,7 @@ import {
 import { EagleSearchModal, ImagePasteChoiceModal, EagleLinkChoiceModal } from './modals';
 import { CMDSPACEEagleSettingTab } from './settings';
 import { createCloudProvider, getMimeType, getExtFromFilename, CloudProvider } from './cloud-providers';
-import { ClipboardSourceService, extractDomain } from './clipboard-source';
+import { ClipboardSourceService, extractDomain, cleanUrl, isValidHttpUrl } from './clipboard-source';
 
 // Minimal shape of the Excalidraw plugin's view that we drive.
 // (The Excalidraw plugin is an optional peer, so we don't import its types.)
@@ -220,6 +220,7 @@ export default class CMDSPACELinkEagle extends Plugin {
 	}
 
 	private async insertItemLink(editor: Editor, item: EagleItem): Promise<void> {
+		const sourceUrl = await this.resolveMetadataSourceUrl(item);
 		if (this.settings.insertAsEmbed) {
 			const filePath = await this.api.getOriginalFilePath(item);
 			if (filePath) {
@@ -228,7 +229,7 @@ export default class CMDSPACELinkEagle extends Plugin {
 				let output = `![${filename}](${fileUrl})`;
 				
 				if (this.settings.insertThumbnail) {
-					output += '\n\n' + this.buildMetadataCard(item);
+					output += '\n\n' + this.buildMetadataCard(item, sourceUrl);
 				}
 				
 				editor.replaceSelection(output);
@@ -238,7 +239,7 @@ export default class CMDSPACELinkEagle extends Plugin {
 		
 		const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
 		if (this.settings.insertThumbnail) {
-			const card = this.buildLinkCard(item);
+			const card = this.buildLinkCard(item, sourceUrl);
 			editor.replaceSelection(card);
 		} else {
 			const link = this.settings.linkFormat === 'wikilink'
@@ -248,7 +249,33 @@ export default class CMDSPACELinkEagle extends Plugin {
 		}
 	}
 
-	private buildMetadataCard(item: EagleItem): string {
+	private async resolveMetadataSourceUrl(item: EagleItem, fallbackSourceUrl?: string | null): Promise<string | null> {
+		// 1. Check item.url if it is an HTTP/HTTPS URL
+		if (item.url) {
+			const clean = cleanUrl(item.url);
+			if (/^https?:\/\//i.test(clean)) {
+				return clean;
+			}
+		}
+
+		// 2. Check fallbackSourceUrl
+		if (fallbackSourceUrl) {
+			const clean = cleanUrl(fallbackSourceUrl);
+			if (/^https?:\/\//i.test(clean)) {
+				return clean;
+			}
+		}
+
+		// 3. Fallback: check Extra Links on disk
+		const extraSource = await this.api.getExtraLinkWebSource(item.id);
+		if (extraSource) {
+			return extraSource;
+		}
+
+		return null;
+	}
+
+	private buildMetadataCard(item: EagleItem, resolvedSourceUrl?: string | null): string {
 		const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
 		const tags = item.tags
 			.filter(t => !t.startsWith('r2:') && t !== 'r2-cloud' && t !== 'cloud-upload')
@@ -262,16 +289,20 @@ export default class CMDSPACELinkEagle extends Plugin {
 		if (cloudUrl) {
 			linkSection += ` | [Cloud](${cloudUrl})`;
 		}
-		if (this.settings.includeSourceInMetadataCard && item.url) {
-			const domain = extractDomain(item.url);
-			linkSection += ` | [Source: ${domain || 'Web'}](${item.url})`;
+		const sourceUrl = resolvedSourceUrl
+			? cleanUrl(resolvedSourceUrl)
+			: (item.url && /^https?:\/\//i.test(cleanUrl(item.url)) ? cleanUrl(item.url) : null);
+
+		if (this.settings.includeSourceInMetadataCard && sourceUrl) {
+			const domain = extractDomain(sourceUrl);
+			linkSection += ` | [Source: ${domain || 'Web'}](${sourceUrl})`;
 		}
 
 		return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)} | ${dimensions} | ${isUploaded ? '☁️' : '📁'} | ${tags || 'No tags'}
 > ${linkSection}`;
 	}
 
-	private buildLinkCard(item: EagleItem): string {
+	private buildLinkCard(item: EagleItem, resolvedSourceUrl?: string | null): string {
 		const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
 		const tags = item.tags
 			.filter(t => !t.startsWith('r2:') && t !== 'r2-cloud')
@@ -292,9 +323,13 @@ export default class CMDSPACELinkEagle extends Plugin {
 		if (cloudUrl) {
 			linkSection += ` | [Cloud URL](${cloudUrl})`;
 		}
-		if (this.settings.includeSourceInMetadataCard && item.url) {
-			const domain = extractDomain(item.url);
-			linkSection += ` | [Source: ${domain || 'Web'}](${item.url})`;
+		const sourceUrl = resolvedSourceUrl
+			? cleanUrl(resolvedSourceUrl)
+			: (item.url && /^https?:\/\//i.test(cleanUrl(item.url)) ? cleanUrl(item.url) : null);
+
+		if (this.settings.includeSourceInMetadataCard && sourceUrl) {
+			const domain = extractDomain(sourceUrl);
+			linkSection += ` | [Source: ${domain || 'Web'}](${sourceUrl})`;
 		}
 
 		return `> [!cmdspace-eagle] ${item.name}
@@ -947,11 +982,43 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			return;
 		}
 
+		let sourceInfo: ImageSourceInfo | null = null;
+		if (this.settings.enableImageSourceUrl && evt.dataTransfer) {
+			const uriList = evt.dataTransfer.getData('text/uri-list');
+			const html = evt.dataTransfer.getData('text/html');
+			let pageUrl: string | undefined;
+			let imageUrl: string | undefined;
+
+			if (uriList && isValidHttpUrl(uriList)) {
+				const cleaned = cleanUrl(uriList);
+				if (/\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(cleaned)) {
+					imageUrl = cleaned;
+				} else {
+					pageUrl = cleaned;
+				}
+			}
+
+			if (html) {
+				const imgMatch = html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) ||
+					html.match(/<img[^>]+src=([^\s>]+)/i);
+				if (imgMatch && imgMatch[1]) {
+					const decoded = imgMatch[1].replace(/&amp;/g, '&');
+					if (isValidHttpUrl(decoded)) {
+						imageUrl = cleanUrl(decoded);
+					}
+				}
+			}
+
+			if (pageUrl || imageUrl) {
+				sourceInfo = { pageUrl, imageUrl };
+			}
+		}
+
 		const filesCopy = Array.from(files);
 
 		if (this.settings.imagePasteBehavior === 'eagle') {
 			for (const file of filesCopy) {
-				await this.uploadFileWithProgress(file, editor);
+				await this.uploadFileWithProgress(file, editor, sourceInfo);
 			}
 			return;
 		}
@@ -975,7 +1042,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 
 		if (response.choice === 'eagle') {
 			for (const file of filesCopy) {
-				await this.uploadFileWithProgress(file, editor);
+				await this.uploadFileWithProgress(file, editor, sourceInfo);
 			}
 		} else if (response.choice === 'local') {
 			for (const file of filesCopy) {
@@ -1052,7 +1119,11 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			let markdownImage = `![${displayName}](${imageUrl})`;
 			
 			if (item && this.settings.insertThumbnail) {
-				markdownImage += '\n\n' + this.buildMetadataCard(item);
+				const fallbackSourceUrl = (sourceInfo && this.settings.enableImageSourceUrl)
+					? this.clipboardSourceService.resolvePrimaryUrl(sourceInfo, this.settings.imageSourceUrlPriority)
+					: null;
+				const sourceUrl = await this.resolveMetadataSourceUrl(item, fallbackSourceUrl);
+				markdownImage += '\n\n' + this.buildMetadataCard(item, sourceUrl);
 			}
 
 			this.replaceTextInDocument(editor, placeholderText, markdownImage);
@@ -1439,6 +1510,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 
 	private async insertEagleEmbed(editor: Editor, item: EagleItem, useThumbnail: boolean): Promise<void> {
 		const filename = `${item.name}.${item.ext}`;
+		const sourceUrl = await this.resolveMetadataSourceUrl(item);
 
 		if (this.settings.eagleEmbedUrlMode === 'custom-url') {
 			const libraryName = (await this.api.getLibraryName()) || 'Main';
@@ -1452,7 +1524,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			);
 			let markdown = `![${filename}](${embedUrl})`;
 			if (this.settings.insertThumbnail) {
-				markdown += '\n\n' + this.buildMetadataCard(item);
+				markdown += '\n\n' + this.buildMetadataCard(item, sourceUrl);
 			}
 			editor.replaceSelection(markdown);
 			new Notice(`Embedded: ${filename}`);
@@ -1472,7 +1544,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			const fileUrl = this.pathToFileUrl(filePath);
 			let markdown = `![${filename}](${fileUrl})`;
 			if (this.settings.insertThumbnail) {
-				markdown += '\n\n' + this.buildMetadataCard(item);
+				markdown += '\n\n' + this.buildMetadataCard(item, sourceUrl);
 			}
 			editor.replaceSelection(markdown);
 			new Notice(`Embedded: ${filename}`);
@@ -1513,7 +1585,8 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 				const filename = `${item.name}.${item.ext}`;
 				let markdown = `![${filename}](${this.pathToFileUrl(originalPath)})`;
 				if (this.settings.insertThumbnail) {
-					markdown += '\n\n' + this.buildMetadataCard(item);
+					const sourceUrl = await this.resolveMetadataSourceUrl(item);
+					markdown += '\n\n' + this.buildMetadataCard(item, sourceUrl);
 				}
 				editor.replaceSelection(markdown);
 				new Notice(`Embedded: ${filename}`);
@@ -1981,7 +2054,38 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		await this.delay(1000);
 
 		const thumbnailPath = await this.api.getThumbnailPath(itemId);
-		const item = await this.api.getItemInfo(itemId);
+		let item = await this.api.getItemInfo(itemId);
+		if (!item) {
+			await this.delay(500);
+			item = await this.api.getItemInfo(itemId);
+		}
+
+		if (item) {
+			if (!item.url && primaryUrl) {
+				item.url = primaryUrl;
+				void this.api.updateItem(itemId, { url: primaryUrl });
+			} else if (item.url) {
+				item.url = cleanUrl(item.url);
+			}
+		} else {
+			const ext = getExtFromFilename(file.name);
+			item = {
+				id: itemId,
+				name: filenameWithoutExt,
+				size: file.size,
+				ext: ext,
+				tags: this.getDefaultTags() || [],
+				folders: this.settings.enableDefaultFolder && this.settings.defaultFolder ? [this.settings.defaultFolder] : [],
+				isDeleted: false,
+				url: primaryUrl || '',
+				annotation: '',
+				modificationTime: Date.now(),
+				lastModified: Date.now(),
+				width: 0,
+				height: 0,
+				palettes: []
+			};
+		}
 
 		void (async () => {
 			await this.applyObsidianBacklink(itemId, !!primaryUrl);

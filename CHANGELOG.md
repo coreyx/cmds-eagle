@@ -5,12 +5,21 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Image Source URL Capture on Paste & Drop**: Captures origin webpage URLs and direct image asset URLs from clipboard or browser drag-and-drop (`CF_HTML`, `Chromium internal source URL`, `org.chromium.source-url`, `com.apple.webarchive`) and routes them to Eagle's website field and/or Extra Links panel.
+- **Source Link in Metadata Card**: Added setting to display a clickable `[Source: domain](url)` link in the image metadata card when embedding.
+- **Eagle Item Link Format**: Added a setting (`eagleItemLinkFormat`) defaulting to HTTP localhost format (`http://localhost:41595/item?id=UUID`) with `eagle://item/UUID` protocol as a selectable option.
 - **Eagle Target Folder**: Added a new setting to designate a specific folder in your Eagle library for new attachments. When enabled, a new "Select Folder" button provides a searchable dropdown of your entire Eagle folder hierarchy.
 - **Default Eagle Tags**: Added a setting to automatically append a comma-separated list of tags to every image uploaded to Eagle.
 - **Obsidian Backlinks in Eagle**: Added a setting to automatically generate an Obsidian Advanced URI backlink to the current note when adding a new image to Eagle. The backlink can be saved to the image's URL field, Note field, or both. If the active note lacks a unique identifier (`uid`), one is automatically generated and saved to its frontmatter to ensure the link never breaks.
 - **Docs**: Added a "Development & Testing" section to the `README.md` with instructions for compiling, installing, and testing local builds.
 
 ### Fixed
+- **Metadata Card Image Source Link**: Resolved an issue where the source link was not added to the metadata card even when "Include source in metadata card" was enabled:
+  - Sanitized null bytes (`\0`) returned by Windows Electron clipboard (`Chromium internal source URL`), preventing broken CommonMark link syntax in Obsidian.
+  - Passed in-memory clipboard `sourceInfo` directly to the metadata card generator instead of relying solely on Eagle's asynchronous metadata write round-trip.
+  - Added multi-tier source resolution falling back to `extra-links.json` on disk if Eagle's primary URL field holds an Obsidian backlink.
+  - Filtered out non-HTTP schemes (such as `obsidian://`) from being mislabeled as web sources.
+- **Browser Drag & Drop Source Extraction**: Fixed drag & drop handler (`handleDrop`) to extract `text/uri-list` and `text/html` browser metadata from `dataTransfer` when images are dragged from a browser into Obsidian.
 - **Paste/Drop to Eagle**: Fixed an issue where the "Include metadata card" setting was ignored when directly pasting or dropping a new image to Eagle, preventing the metadata info block (type, size, tags, Eagle link) from being appended below the image in Obsidian.
 - **Local Paste/Drop**: Fixed an issue where local vault embeds could generate invalid markdown links with double slashes (e.g., `//image.png`) when saved to the root of the vault, causing broken image renders.
 - **WebDAV**: Migrated the upload client from the browser's `fetch` API to Obsidian's native `requestUrl` to correctly bypass CORS restrictions.

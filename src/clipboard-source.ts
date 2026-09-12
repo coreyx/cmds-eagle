@@ -33,24 +33,33 @@ function safelyReadClipboard<T>(fn: () => T): T {
 }
 
 /**
+ * Strips null bytes and trims whitespace from a URL string.
+ */
+export function cleanUrl(urlStr?: string | null): string {
+	if (!urlStr) return '';
+	return urlStr.replace(/\0/g, '').trim();
+}
+
+/**
  * Extracts clean domain name from a URL string.
  */
 export function extractDomain(urlStr: string): string {
+	const cleaned = cleanUrl(urlStr);
 	try {
-		const parsed = new URL(urlStr);
+		const parsed = new URL(cleaned);
 		return parsed.hostname.replace(/^www\./i, '');
 	} catch {
-		return urlStr.replace(/^https?:\/\//i, '').split('/')[0].replace(/^www\./i, '');
+		return cleaned.replace(/^https?:\/\//i, '').split('/')[0].replace(/^www\./i, '');
 	}
 }
 
 /**
  * Validates that a string is a valid HTTP or HTTPS URL (and not a data URL).
  */
-function isValidHttpUrl(urlStr?: string | null): boolean {
+export function isValidHttpUrl(urlStr?: string | null): boolean {
 	if (!urlStr) return false;
-	const trimmed = urlStr.trim();
-	return /^https?:\/\/[^\s<>"'\0\x01-\x1f]+/i.test(trimmed);
+	const trimmed = cleanUrl(urlStr);
+	return /^https?:\/\/[^\s<>"'\0\x01-\x1f]+$/i.test(trimmed);
 }
 
 /**
@@ -215,14 +224,17 @@ export class WindowsClipboardProvider implements IClipboardSourceProvider {
 				// Extract SourceURL header
 				const pageMatch = text.match(/SourceURL:(https?:\/\/[^\r\n]+)/i);
 				if (pageMatch && pageMatch[1] && isValidHttpUrl(pageMatch[1])) {
-					pageUrl = pageMatch[1].trim();
+					pageUrl = cleanUrl(pageMatch[1]);
 				}
 
 				// Extract <img src="...">
 				const imgMatch = text.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) ||
 					text.match(/<img[^>]+src=([^\s>]+)/i);
-				if (imgMatch && imgMatch[1] && isValidHttpUrl(imgMatch[1])) {
-					imageUrl = imgMatch[1].trim();
+				if (imgMatch && imgMatch[1]) {
+					const decoded = imgMatch[1].replace(/&amp;/g, '&');
+					if (isValidHttpUrl(decoded)) {
+						imageUrl = cleanUrl(decoded);
+					}
 				}
 			}
 
@@ -232,7 +244,7 @@ export class WindowsClipboardProvider implements IClipboardSourceProvider {
 					return clipboard.read('Chromium internal source URL');
 				});
 				if (isValidHttpUrl(chromiumSource)) {
-					pageUrl = chromiumSource.trim();
+					pageUrl = cleanUrl(chromiumSource);
 				}
 			}
 
@@ -269,7 +281,7 @@ export class MacOSClipboardProvider implements IClipboardSourceProvider {
 			// 1. Chromium family: org.chromium.source-url
 			const chromiumUrl = safelyReadClipboard(() => clipboard.read('org.chromium.source-url'));
 			if (isValidHttpUrl(chromiumUrl)) {
-				pageUrl = chromiumUrl.trim();
+				pageUrl = cleanUrl(chromiumUrl);
 			}
 
 			// 2. Read public.html for <img src="..."> and possible SourceURL
@@ -277,14 +289,17 @@ export class MacOSClipboardProvider implements IClipboardSourceProvider {
 			if (html && typeof html === 'string') {
 				const imgMatch = html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) ||
 					html.match(/<img[^>]+src=([^\s>]+)/i);
-				if (imgMatch && imgMatch[1] && isValidHttpUrl(imgMatch[1])) {
-					imageUrl = imgMatch[1].trim();
+				if (imgMatch && imgMatch[1]) {
+					const decoded = imgMatch[1].replace(/&amp;/g, '&');
+					if (isValidHttpUrl(decoded)) {
+						imageUrl = cleanUrl(decoded);
+					}
 				}
 
 				if (!pageUrl) {
 					const pageMatch = html.match(/SourceURL:(https?:\/\/[^\r\n]+)/i);
 					if (pageMatch && pageMatch[1] && isValidHttpUrl(pageMatch[1])) {
-						pageUrl = pageMatch[1].trim();
+						pageUrl = cleanUrl(pageMatch[1]);
 					}
 				}
 			}
@@ -295,10 +310,11 @@ export class MacOSClipboardProvider implements IClipboardSourceProvider {
 				if (webArchiveBuf && webArchiveBuf.length > 8) {
 					const safariUrl = BplistParser.extractSourceUrl(webArchiveBuf);
 					if (isValidHttpUrl(safariUrl)) {
-						if (!imageUrl && /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(safariUrl)) {
-							imageUrl = safariUrl;
+						const cleanedSafari = cleanUrl(safariUrl);
+						if (!imageUrl && /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(cleanedSafari)) {
+							imageUrl = cleanedSafari;
 						} else if (!pageUrl) {
-							pageUrl = safariUrl;
+							pageUrl = cleanedSafari;
 						}
 					}
 				}
@@ -308,10 +324,11 @@ export class MacOSClipboardProvider implements IClipboardSourceProvider {
 			if (!pageUrl && !imageUrl) {
 				const publicUrl = safelyReadClipboard(() => clipboard.read('public.url'));
 				if (isValidHttpUrl(publicUrl)) {
-					if (/\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(publicUrl)) {
-						imageUrl = publicUrl.trim();
+					const cleanedPublic = cleanUrl(publicUrl);
+					if (/\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(cleanedPublic)) {
+						imageUrl = cleanedPublic;
 					} else {
-						pageUrl = publicUrl.trim();
+						pageUrl = cleanedPublic;
 					}
 				}
 			}

@@ -464,6 +464,29 @@ export class EagleApiService {
 
 		return { success: false, error: 'Request failed after retries' };
 	}
+
+	async getExtraLinkWebSource(itemId: string): Promise<string | null> {
+		try {
+			const libraryPath = await this.getLibraryPath();
+			if (!libraryPath) return null;
+			const extraPath = `${libraryPath}/images/${itemId}.info/extra-links.json`;
+			const buffer = await fsp.readFile(extraPath);
+			const data = JSON.parse(buffer.toString('utf8'));
+			if (Array.isArray(data?.links)) {
+				for (const link of data.links) {
+					if (link && typeof link.url === 'string') {
+						const clean = link.url.replace(/\0/g, '').trim();
+						if (/^https?:\/\//i.test(clean)) {
+							return clean;
+						}
+					}
+				}
+			}
+			return null;
+		} catch {
+			return null;
+		}
+	}
 }
 
 export function buildEagleItemUrl(
