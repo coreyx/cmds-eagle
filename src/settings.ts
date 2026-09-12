@@ -10,6 +10,7 @@ import {
 	EagleItemLinkFormat,
 	ImageSourceUrlPriority,
 	ExtraLinksImageSource,
+	MetadataCardImageSource,
 	SearchScope,
 	SUPPORTED_IMAGE_EXTENSIONS,
 	SUPPORTED_VIDEO_EXTENSIONS,
@@ -133,9 +134,13 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 			new Setting(containerEl)
 				.setName('Include source in metadata card')
 				.setDesc('When embedding an image with metadata card enabled, include a clickable markdown link to the captured source URL.')
-				.addToggle(toggle => toggle
+				.addDropdown(dropdown => dropdown
+					.addOption('none', 'None (do not include source)')
+					.addOption('page', 'Page URL only')
+					.addOption('image', 'Direct image URL only')
+					.addOption('both', 'Both Page URL and Direct image URL')
 					.setValue(this.plugin.settings.includeSourceInMetadataCard)
-					.onChange(async (value) => {
+					.onChange(async (value: MetadataCardImageSource) => {
 						this.plugin.settings.includeSourceInMetadataCard = value;
 						await this.plugin.saveSettings();
 					}));

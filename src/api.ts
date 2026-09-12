@@ -466,25 +466,38 @@ export class EagleApiService {
 	}
 
 	async getExtraLinkWebSource(itemId: string): Promise<string | null> {
+		const sources = await this.getExtraLinkWebSources(itemId);
+		return sources.pageUrl || sources.imageUrl || null;
+	}
+
+	async getExtraLinkWebSources(itemId: string): Promise<{ pageUrl: string | null; imageUrl: string | null }> {
 		try {
 			const libraryPath = await this.getLibraryPath();
-			if (!libraryPath) return null;
+			if (!libraryPath) return { pageUrl: null, imageUrl: null };
 			const extraPath = `${libraryPath}/images/${itemId}.info/extra-links.json`;
 			const buffer = await fsp.readFile(extraPath);
 			const data = JSON.parse(buffer.toString('utf8'));
+			let pageUrl: string | null = null;
+			let imageUrl: string | null = null;
+
 			if (Array.isArray(data?.links)) {
 				for (const link of data.links) {
 					if (link && typeof link.url === 'string') {
 						const clean = link.url.replace(/\0/g, '').trim();
 						if (/^https?:\/\//i.test(clean)) {
-							return clean;
+							const title = typeof link.title === 'string' ? link.title : '';
+							if (title.startsWith('Direct Image') || /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(clean)) {
+								if (!imageUrl) imageUrl = clean;
+							} else {
+								if (!pageUrl) pageUrl = clean;
+							}
 						}
 					}
 				}
 			}
-			return null;
+			return { pageUrl, imageUrl };
 		} catch {
-			return null;
+			return { pageUrl: null, imageUrl: null };
 		}
 	}
 }

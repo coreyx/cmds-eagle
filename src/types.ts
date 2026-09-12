@@ -98,6 +98,8 @@ export type ImageSourceUrlPriority = 'page-first' | 'image-first' | 'page-only' 
 
 export type ExtraLinksImageSource = 'none' | 'page' | 'image' | 'both';
 
+export type MetadataCardImageSource = 'none' | 'page' | 'image' | 'both';
+
 export interface ImageSourceInfo {
 	pageUrl?: string;
 	imageUrl?: string;
@@ -222,7 +224,7 @@ export interface CMDSPACEEagleSettings {
 	enableImageSourceUrl: boolean;
 	imageSourceUrlPriority: ImageSourceUrlPriority;
 	extraLinksImageSource: ExtraLinksImageSource;
-	includeSourceInMetadataCard: boolean;
+	includeSourceInMetadataCard: MetadataCardImageSource;
 	includeLocalSourceInMetadataCard: boolean;
 	r2WorkerUrl: string;
 	r2ApiKey: string;
@@ -276,7 +278,7 @@ export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
 	enableImageSourceUrl: true,
 	imageSourceUrlPriority: 'page-first',
 	extraLinksImageSource: 'none',
-	includeSourceInMetadataCard: true,
+	includeSourceInMetadataCard: 'page',
 	includeLocalSourceInMetadataCard: false,
 	r2WorkerUrl: '',
 	r2ApiKey: '',

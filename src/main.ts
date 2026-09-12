@@ -13,6 +13,7 @@ import {
 	DEFAULT_SETTINGS,
 	EagleItem,
 	ImageSourceInfo,
+	MetadataCardImageSource,
 	ComputerProfile,
 	PlatformType,
 } from './types';
@@ -191,6 +192,11 @@ export default class CMDSPACELinkEagle extends Plugin {
 			this.settings.extraLinksBaseUrl = 'http://127.0.0.1:41598';
 			await this.saveSettings();
 		}
+		// Auto-migrate boolean includeSourceInMetadataCard to 'page' | 'none'
+		if (typeof (this.settings as any).includeSourceInMetadataCard === 'boolean') {
+			this.settings.includeSourceInMetadataCard = (this.settings as any).includeSourceInMetadataCard ? 'page' : 'none';
+			await this.saveSettings();
+		}
 	}
 
 	async saveSettings(): Promise<void> {
@@ -291,35 +297,58 @@ export default class CMDSPACELinkEagle extends Plugin {
 
 	private async resolveMetadataSources(
 		item: EagleItem,
-		fallbackWebUrl?: string | null,
+		sourceInfoOrUrl?: ImageSourceInfo | string | null,
 		localFilePath?: string | null
-	): Promise<{ webUrl: string | null; localFileUrl: string | null }> {
+	): Promise<{ pageUrl: string | null; imageUrl: string | null; webUrl: string | null; localFileUrl: string | null }> {
+		let pageUrl: string | null = null;
+		let imageUrl: string | null = null;
 		let webUrl: string | null = null;
 		let localFileUrl: string | null = null;
 
-		// 1. Check item.url
+		// 1. Check sourceInfo if provided as object
+		if (sourceInfoOrUrl && typeof sourceInfoOrUrl === 'object') {
+			if (sourceInfoOrUrl.pageUrl) {
+				pageUrl = cleanUrl(sourceInfoOrUrl.pageUrl);
+			}
+			if (sourceInfoOrUrl.imageUrl) {
+				imageUrl = cleanUrl(sourceInfoOrUrl.imageUrl);
+			}
+			if (sourceInfoOrUrl.localFilePath && !localFilePath) {
+				localFilePath = sourceInfoOrUrl.localFilePath;
+			}
+		} else if (typeof sourceInfoOrUrl === 'string') {
+			const clean = cleanUrl(sourceInfoOrUrl);
+			if (/^https?:\/\//i.test(clean)) {
+				webUrl = clean;
+			}
+		}
+
+		// 2. Check item.url
 		if (item.url) {
 			const clean = cleanUrl(item.url);
 			if (/^https?:\/\//i.test(clean)) {
-				webUrl = clean;
+				if (!webUrl) webUrl = clean;
+				if (/\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(clean)) {
+					if (!imageUrl) imageUrl = clean;
+				} else {
+					if (!pageUrl) pageUrl = clean;
+				}
 			} else if (/^file:\/\//i.test(clean) && !localFilePath) {
 				localFileUrl = clean;
 			}
 		}
 
-		// 2. Check fallbackWebUrl
-		if (!webUrl && fallbackWebUrl) {
-			const clean = cleanUrl(fallbackWebUrl);
-			if (/^https?:\/\//i.test(clean)) {
-				webUrl = clean;
+		// 3. Fallback: check Extra Links on disk if pageUrl or imageUrl missing
+		if (!pageUrl || !imageUrl) {
+			const extraSources = await this.api.getExtraLinkWebSources(item.id);
+			if (!pageUrl && extraSources.pageUrl) {
+				pageUrl = extraSources.pageUrl;
 			}
-		}
-
-		// 3. Fallback: check Extra Links on disk
-		if (!webUrl) {
-			const extraSource = await this.api.getExtraLinkWebSource(item.id);
-			if (extraSource) {
-				webUrl = extraSource;
+			if (!imageUrl && extraSources.imageUrl) {
+				imageUrl = extraSources.imageUrl;
+			}
+			if (!webUrl) {
+				webUrl = pageUrl || imageUrl;
 			}
 		}
 
@@ -336,17 +365,17 @@ export default class CMDSPACELinkEagle extends Plugin {
 			}
 		}
 
-		return { webUrl, localFileUrl };
+		return { pageUrl, imageUrl, webUrl, localFileUrl };
 	}
 
 	private async resolveMetadataSourceUrl(item: EagleItem, fallbackSourceUrl?: string | null): Promise<string | null> {
 		const sources = await this.resolveMetadataSources(item, fallbackSourceUrl);
-		return sources.webUrl;
+		return sources.pageUrl || sources.imageUrl || sources.webUrl;
 	}
 
 	private buildMetadataCard(
 		item: EagleItem,
-		resolvedSources?: { webUrl?: string | null; localFileUrl?: string | null } | string | null
+		resolvedSources?: { pageUrl?: string | null; imageUrl?: string | null; webUrl?: string | null; localFileUrl?: string | null } | string | null
 	): string {
 		const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
 		const tags = item.tags
@@ -362,22 +391,40 @@ export default class CMDSPACELinkEagle extends Plugin {
 			linkSection += ` | [Cloud](${cloudUrl})`;
 		}
 
-		const sources: { webUrl?: string | null; localFileUrl?: string | null } =
+		const sources: { pageUrl?: string | null; imageUrl?: string | null; webUrl?: string | null; localFileUrl?: string | null } =
 			typeof resolvedSources === 'string'
-				? { webUrl: resolvedSources }
+				? { webUrl: resolvedSources, pageUrl: resolvedSources }
 				: (resolvedSources || {});
 
-		const sourceUrl = sources.webUrl
-			? cleanUrl(sources.webUrl)
-			: (item.url && /^https?:\/\//i.test(cleanUrl(item.url)) ? cleanUrl(item.url) : null);
+		const mode = typeof this.settings.includeSourceInMetadataCard === 'boolean'
+			? (this.settings.includeSourceInMetadataCard ? 'page' : 'none')
+			: (this.settings.includeSourceInMetadataCard || 'page');
+
+		const effectivePageUrl = sources.pageUrl || (!sources.imageUrl ? sources.webUrl : null);
+		const effectiveImageUrl = sources.imageUrl || (sources.webUrl && /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(sources.webUrl) ? sources.webUrl : null);
 
 		const localFileUrl = sources.localFileUrl
 			? cleanUrl(sources.localFileUrl)
 			: (item.url && /^file:\/\//i.test(cleanUrl(item.url)) ? cleanUrl(item.url) : null);
 
-		if (this.settings.includeSourceInMetadataCard && sourceUrl) {
-			const domain = extractDomain(sourceUrl);
-			linkSection += ` | [Source: ${domain || 'Web'}](${sourceUrl})`;
+		if (mode === 'page' || mode === 'both') {
+			if (effectivePageUrl) {
+				const domain = extractDomain(effectivePageUrl);
+				linkSection += ` | [Source: ${domain || 'Web'}](${effectivePageUrl})`;
+			} else if (mode === 'page' && sources.webUrl) {
+				const domain = extractDomain(sources.webUrl);
+				linkSection += ` | [Source: ${domain || 'Web'}](${sources.webUrl})`;
+			}
+		}
+
+		if (mode === 'image' || mode === 'both') {
+			if (effectiveImageUrl && (mode === 'image' || effectiveImageUrl !== effectivePageUrl)) {
+				const domain = extractDomain(effectiveImageUrl);
+				linkSection += ` | [Direct: ${domain || 'Image'}](${effectiveImageUrl})`;
+			} else if (mode === 'image' && sources.webUrl) {
+				const domain = extractDomain(sources.webUrl);
+				linkSection += ` | [Direct: ${domain || 'Image'}](${sources.webUrl})`;
+			}
 		}
 
 		if (this.settings.includeLocalSourceInMetadataCard && localFileUrl) {
@@ -390,7 +437,7 @@ export default class CMDSPACELinkEagle extends Plugin {
 
 	private buildLinkCard(
 		item: EagleItem,
-		resolvedSources?: { webUrl?: string | null; localFileUrl?: string | null } | string | null
+		resolvedSources?: { pageUrl?: string | null; imageUrl?: string | null; webUrl?: string | null; localFileUrl?: string | null } | string | null
 	): string {
 		const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
 		const tags = item.tags
@@ -413,22 +460,40 @@ export default class CMDSPACELinkEagle extends Plugin {
 			linkSection += ` | [Cloud URL](${cloudUrl})`;
 		}
 
-		const sources: { webUrl?: string | null; localFileUrl?: string | null } =
+		const sources: { pageUrl?: string | null; imageUrl?: string | null; webUrl?: string | null; localFileUrl?: string | null } =
 			typeof resolvedSources === 'string'
-				? { webUrl: resolvedSources }
+				? { webUrl: resolvedSources, pageUrl: resolvedSources }
 				: (resolvedSources || {});
 
-		const sourceUrl = sources.webUrl
-			? cleanUrl(sources.webUrl)
-			: (item.url && /^https?:\/\//i.test(cleanUrl(item.url)) ? cleanUrl(item.url) : null);
+		const mode = typeof this.settings.includeSourceInMetadataCard === 'boolean'
+			? (this.settings.includeSourceInMetadataCard ? 'page' : 'none')
+			: (this.settings.includeSourceInMetadataCard || 'page');
+
+		const effectivePageUrl = sources.pageUrl || (!sources.imageUrl ? sources.webUrl : null);
+		const effectiveImageUrl = sources.imageUrl || (sources.webUrl && /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(sources.webUrl) ? sources.webUrl : null);
 
 		const localFileUrl = sources.localFileUrl
 			? cleanUrl(sources.localFileUrl)
 			: (item.url && /^file:\/\//i.test(cleanUrl(item.url)) ? cleanUrl(item.url) : null);
 
-		if (this.settings.includeSourceInMetadataCard && sourceUrl) {
-			const domain = extractDomain(sourceUrl);
-			linkSection += ` | [Source: ${domain || 'Web'}](${sourceUrl})`;
+		if (mode === 'page' || mode === 'both') {
+			if (effectivePageUrl) {
+				const domain = extractDomain(effectivePageUrl);
+				linkSection += ` | [Source: ${domain || 'Web'}](${effectivePageUrl})`;
+			} else if (mode === 'page' && sources.webUrl) {
+				const domain = extractDomain(sources.webUrl);
+				linkSection += ` | [Source: ${domain || 'Web'}](${sources.webUrl})`;
+			}
+		}
+
+		if (mode === 'image' || mode === 'both') {
+			if (effectiveImageUrl && (mode === 'image' || effectiveImageUrl !== effectivePageUrl)) {
+				const domain = extractDomain(effectiveImageUrl);
+				linkSection += ` | [Direct: ${domain || 'Image'}](${effectiveImageUrl})`;
+			} else if (mode === 'image' && sources.webUrl) {
+				const domain = extractDomain(sources.webUrl);
+				linkSection += ` | [Direct: ${domain || 'Image'}](${sources.webUrl})`;
+			}
 		}
 
 		if (this.settings.includeLocalSourceInMetadataCard && localFileUrl) {
@@ -1262,10 +1327,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			let markdownImage = `![${displayName}](${imageUrl})`;
 			
 			if (item && this.settings.insertThumbnail) {
-				const fallbackSourceUrl = (sourceInfo && this.settings.enableImageSourceUrl)
-					? this.clipboardSourceService.resolvePrimaryUrl(sourceInfo, this.settings.imageSourceUrlPriority)
-					: null;
-				const sources = await this.resolveMetadataSources(item, fallbackSourceUrl, effectiveLocalPath);
+				const sources = await this.resolveMetadataSources(item, sourceInfo, effectiveLocalPath);
 				markdownImage += '\n\n' + this.buildMetadataCard(item, sources);
 			}
 

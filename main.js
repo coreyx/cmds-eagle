@@ -72,7 +72,7 @@ var init_types = __esm({
       enableImageSourceUrl: true,
       imageSourceUrlPriority: "page-first",
       extraLinksImageSource: "none",
-      includeSourceInMetadataCard: true,
+      includeSourceInMetadataCard: "page",
       includeLocalSourceInMetadataCard: false,
       r2WorkerUrl: "",
       r2ApiKey: "",
@@ -601,26 +601,39 @@ var init_api = __esm({
         return { success: false, error: "Request failed after retries" };
       }
       async getExtraLinkWebSource(itemId) {
+        const sources = await this.getExtraLinkWebSources(itemId);
+        return sources.pageUrl || sources.imageUrl || null;
+      }
+      async getExtraLinkWebSources(itemId) {
         try {
           const libraryPath = await this.getLibraryPath();
           if (!libraryPath)
-            return null;
+            return { pageUrl: null, imageUrl: null };
           const extraPath = `${libraryPath}/images/${itemId}.info/extra-links.json`;
           const buffer = await fsp.readFile(extraPath);
           const data = JSON.parse(buffer.toString("utf8"));
+          let pageUrl = null;
+          let imageUrl = null;
           if (Array.isArray(data == null ? void 0 : data.links)) {
             for (const link of data.links) {
               if (link && typeof link.url === "string") {
                 const clean = link.url.replace(/\0/g, "").trim();
                 if (/^https?:\/\//i.test(clean)) {
-                  return clean;
+                  const title = typeof link.title === "string" ? link.title : "";
+                  if (title.startsWith("Direct Image") || /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(clean)) {
+                    if (!imageUrl)
+                      imageUrl = clean;
+                  } else {
+                    if (!pageUrl)
+                      pageUrl = clean;
+                  }
                 }
               }
             }
           }
-          return null;
+          return { pageUrl, imageUrl };
         } catch (e) {
-          return null;
+          return { pageUrl: null, imageUrl: null };
         }
       }
     };
@@ -1280,7 +1293,7 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian3.PluginSettingTab {
         this.plugin.settings.extraLinksImageSource = value;
         await this.plugin.saveSettings();
       }));
-      new import_obsidian3.Setting(containerEl).setName("Include source in metadata card").setDesc("When embedding an image with metadata card enabled, include a clickable markdown link to the captured source URL.").addToggle((toggle) => toggle.setValue(this.plugin.settings.includeSourceInMetadataCard).onChange(async (value) => {
+      new import_obsidian3.Setting(containerEl).setName("Include source in metadata card").setDesc("When embedding an image with metadata card enabled, include a clickable markdown link to the captured source URL.").addDropdown((dropdown) => dropdown.addOption("none", "None (do not include source)").addOption("page", "Page URL only").addOption("image", "Direct image URL only").addOption("both", "Both Page URL and Direct image URL").setValue(this.plugin.settings.includeSourceInMetadataCard).onChange(async (value) => {
         this.plugin.settings.includeSourceInMetadataCard = value;
         await this.plugin.saveSettings();
       }));
@@ -2731,6 +2744,10 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
       this.settings.extraLinksBaseUrl = "http://127.0.0.1:41598";
       await this.saveSettings();
     }
+    if (typeof this.settings.includeSourceInMetadataCard === "boolean") {
+      this.settings.includeSourceInMetadataCard = this.settings.includeSourceInMetadataCard ? "page" : "none";
+      await this.saveSettings();
+    }
   }
   async saveSettings() {
     await this.saveData(this.settings);
@@ -2807,27 +2824,53 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     console.warn("[CMDS Eagle] Could not extract local file path for file:", file == null ? void 0 : file.name);
     return null;
   }
-  async resolveMetadataSources(item, fallbackWebUrl, localFilePath) {
+  async resolveMetadataSources(item, sourceInfoOrUrl, localFilePath) {
+    let pageUrl = null;
+    let imageUrl = null;
     let webUrl = null;
     let localFileUrl = null;
+    if (sourceInfoOrUrl && typeof sourceInfoOrUrl === "object") {
+      if (sourceInfoOrUrl.pageUrl) {
+        pageUrl = cleanUrl(sourceInfoOrUrl.pageUrl);
+      }
+      if (sourceInfoOrUrl.imageUrl) {
+        imageUrl = cleanUrl(sourceInfoOrUrl.imageUrl);
+      }
+      if (sourceInfoOrUrl.localFilePath && !localFilePath) {
+        localFilePath = sourceInfoOrUrl.localFilePath;
+      }
+    } else if (typeof sourceInfoOrUrl === "string") {
+      const clean = cleanUrl(sourceInfoOrUrl);
+      if (/^https?:\/\//i.test(clean)) {
+        webUrl = clean;
+      }
+    }
     if (item.url) {
       const clean = cleanUrl(item.url);
       if (/^https?:\/\//i.test(clean)) {
-        webUrl = clean;
+        if (!webUrl)
+          webUrl = clean;
+        if (/\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(clean)) {
+          if (!imageUrl)
+            imageUrl = clean;
+        } else {
+          if (!pageUrl)
+            pageUrl = clean;
+        }
       } else if (/^file:\/\//i.test(clean) && !localFilePath) {
         localFileUrl = clean;
       }
     }
-    if (!webUrl && fallbackWebUrl) {
-      const clean = cleanUrl(fallbackWebUrl);
-      if (/^https?:\/\//i.test(clean)) {
-        webUrl = clean;
+    if (!pageUrl || !imageUrl) {
+      const extraSources = await this.api.getExtraLinkWebSources(item.id);
+      if (!pageUrl && extraSources.pageUrl) {
+        pageUrl = extraSources.pageUrl;
       }
-    }
-    if (!webUrl) {
-      const extraSource = await this.api.getExtraLinkWebSource(item.id);
-      if (extraSource) {
-        webUrl = extraSource;
+      if (!imageUrl && extraSources.imageUrl) {
+        imageUrl = extraSources.imageUrl;
+      }
+      if (!webUrl) {
+        webUrl = pageUrl || imageUrl;
       }
     }
     if (localFilePath) {
@@ -2841,11 +2884,11 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
         console.warn("[CMDS Eagle] Failed to convert local file path to file URL:", e);
       }
     }
-    return { webUrl, localFileUrl };
+    return { pageUrl, imageUrl, webUrl, localFileUrl };
   }
   async resolveMetadataSourceUrl(item, fallbackSourceUrl) {
     const sources = await this.resolveMetadataSources(item, fallbackSourceUrl);
-    return sources.webUrl;
+    return sources.pageUrl || sources.imageUrl || sources.webUrl;
   }
   buildMetadataCard(item, resolvedSources) {
     const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
@@ -2857,12 +2900,28 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     if (cloudUrl) {
       linkSection += ` | [Cloud](${cloudUrl})`;
     }
-    const sources = typeof resolvedSources === "string" ? { webUrl: resolvedSources } : resolvedSources || {};
-    const sourceUrl = sources.webUrl ? cleanUrl(sources.webUrl) : item.url && /^https?:\/\//i.test(cleanUrl(item.url)) ? cleanUrl(item.url) : null;
+    const sources = typeof resolvedSources === "string" ? { webUrl: resolvedSources, pageUrl: resolvedSources } : resolvedSources || {};
+    const mode = typeof this.settings.includeSourceInMetadataCard === "boolean" ? this.settings.includeSourceInMetadataCard ? "page" : "none" : this.settings.includeSourceInMetadataCard || "page";
+    const effectivePageUrl = sources.pageUrl || (!sources.imageUrl ? sources.webUrl : null);
+    const effectiveImageUrl = sources.imageUrl || (sources.webUrl && /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(sources.webUrl) ? sources.webUrl : null);
     const localFileUrl = sources.localFileUrl ? cleanUrl(sources.localFileUrl) : item.url && /^file:\/\//i.test(cleanUrl(item.url)) ? cleanUrl(item.url) : null;
-    if (this.settings.includeSourceInMetadataCard && sourceUrl) {
-      const domain = extractDomain(sourceUrl);
-      linkSection += ` | [Source: ${domain || "Web"}](${sourceUrl})`;
+    if (mode === "page" || mode === "both") {
+      if (effectivePageUrl) {
+        const domain = extractDomain(effectivePageUrl);
+        linkSection += ` | [Source: ${domain || "Web"}](${effectivePageUrl})`;
+      } else if (mode === "page" && sources.webUrl) {
+        const domain = extractDomain(sources.webUrl);
+        linkSection += ` | [Source: ${domain || "Web"}](${sources.webUrl})`;
+      }
+    }
+    if (mode === "image" || mode === "both") {
+      if (effectiveImageUrl && (mode === "image" || effectiveImageUrl !== effectivePageUrl)) {
+        const domain = extractDomain(effectiveImageUrl);
+        linkSection += ` | [Direct: ${domain || "Image"}](${effectiveImageUrl})`;
+      } else if (mode === "image" && sources.webUrl) {
+        const domain = extractDomain(sources.webUrl);
+        linkSection += ` | [Direct: ${domain || "Image"}](${sources.webUrl})`;
+      }
     }
     if (this.settings.includeLocalSourceInMetadataCard && localFileUrl) {
       linkSection += ` | [Source: File](${localFileUrl})`;
@@ -2887,12 +2946,28 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     if (cloudUrl) {
       linkSection += ` | [Cloud URL](${cloudUrl})`;
     }
-    const sources = typeof resolvedSources === "string" ? { webUrl: resolvedSources } : resolvedSources || {};
-    const sourceUrl = sources.webUrl ? cleanUrl(sources.webUrl) : item.url && /^https?:\/\//i.test(cleanUrl(item.url)) ? cleanUrl(item.url) : null;
+    const sources = typeof resolvedSources === "string" ? { webUrl: resolvedSources, pageUrl: resolvedSources } : resolvedSources || {};
+    const mode = typeof this.settings.includeSourceInMetadataCard === "boolean" ? this.settings.includeSourceInMetadataCard ? "page" : "none" : this.settings.includeSourceInMetadataCard || "page";
+    const effectivePageUrl = sources.pageUrl || (!sources.imageUrl ? sources.webUrl : null);
+    const effectiveImageUrl = sources.imageUrl || (sources.webUrl && /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(sources.webUrl) ? sources.webUrl : null);
     const localFileUrl = sources.localFileUrl ? cleanUrl(sources.localFileUrl) : item.url && /^file:\/\//i.test(cleanUrl(item.url)) ? cleanUrl(item.url) : null;
-    if (this.settings.includeSourceInMetadataCard && sourceUrl) {
-      const domain = extractDomain(sourceUrl);
-      linkSection += ` | [Source: ${domain || "Web"}](${sourceUrl})`;
+    if (mode === "page" || mode === "both") {
+      if (effectivePageUrl) {
+        const domain = extractDomain(effectivePageUrl);
+        linkSection += ` | [Source: ${domain || "Web"}](${effectivePageUrl})`;
+      } else if (mode === "page" && sources.webUrl) {
+        const domain = extractDomain(sources.webUrl);
+        linkSection += ` | [Source: ${domain || "Web"}](${sources.webUrl})`;
+      }
+    }
+    if (mode === "image" || mode === "both") {
+      if (effectiveImageUrl && (mode === "image" || effectiveImageUrl !== effectivePageUrl)) {
+        const domain = extractDomain(effectiveImageUrl);
+        linkSection += ` | [Direct: ${domain || "Image"}](${effectiveImageUrl})`;
+      } else if (mode === "image" && sources.webUrl) {
+        const domain = extractDomain(sources.webUrl);
+        linkSection += ` | [Direct: ${domain || "Image"}](${sources.webUrl})`;
+      }
     }
     if (this.settings.includeLocalSourceInMetadataCard && localFileUrl) {
       linkSection += ` | [Source: File](${localFileUrl})`;
@@ -3603,8 +3678,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       const displayName = item ? `${item.name}.${item.ext}` : file.name;
       let markdownImage = `![${displayName}](${imageUrl})`;
       if (item && this.settings.insertThumbnail) {
-        const fallbackSourceUrl = sourceInfo && this.settings.enableImageSourceUrl ? this.clipboardSourceService.resolvePrimaryUrl(sourceInfo, this.settings.imageSourceUrlPriority) : null;
-        const sources = await this.resolveMetadataSources(item, fallbackSourceUrl, effectiveLocalPath);
+        const sources = await this.resolveMetadataSources(item, sourceInfo, effectiveLocalPath);
         markdownImage += "\n\n" + this.buildMetadataCard(item, sources);
       }
       this.replaceTextInDocument(editor, placeholderText, markdownImage);
