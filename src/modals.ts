@@ -15,6 +15,9 @@ import {
 	EagleFolder,
 	EagleFolderMapping,
 	EagleFolderPickerItem,
+	EagleTag,
+	EagleFolderPickerResult,
+	EagleFolderPickerContext,
 	CMDSPACEEagleSettings,
 	SearchScope,
 	SUPPORTED_IMAGE_EXTENSIONS,
@@ -510,19 +513,199 @@ export class EagleFolderModal extends FuzzySuggestModal<{ id: string; name: stri
 	}
 }
 
-export interface EagleFolderPickerResult {
-	folderId?: string;
-	folderName?: string;
-	cancelled: boolean;
+export class EagleTagPickerModal extends Modal {
+	private api: EagleApiService;
+	private selectedTags: Set<string>;
+	private onSelectTag: (tag: string) => void;
+	private allTags: EagleTag[] = [];
+	private filteredTags: EagleTag[] = [];
+	private searchQuery = '';
+	private selectedIndex = 0;
+
+	private searchInputEl!: HTMLInputElement;
+	private listContainerEl!: HTMLElement;
+	private itemElements: HTMLElement[] = [];
+
+	constructor(
+		app: App,
+		api: EagleApiService,
+		selectedTags: string[],
+		onSelectTag: (tag: string) => void
+	) {
+		super(app);
+		this.api = api;
+		this.selectedTags = new Set(selectedTags);
+		this.onSelectTag = onSelectTag;
+	}
+
+	async onOpen(): Promise<void> {
+		const { contentEl, modalEl } = this;
+		modalEl.addClass('cmdspace-eagle-tag-picker-window');
+		contentEl.empty();
+		contentEl.addClass('cmdspace-eagle-tag-picker-modal');
+
+		contentEl.createEl('h3', { text: 'Add Tag', cls: 'cmdspace-eagle-tag-picker-title' });
+
+		const searchContainer = contentEl.createDiv({ cls: 'cmdspace-eagle-tag-search-container' });
+		this.searchInputEl = searchContainer.createEl('input', {
+			type: 'text',
+			cls: 'cmdspace-eagle-tag-search-input',
+			placeholder: 'Search tags or type new tag...',
+		});
+
+		this.searchInputEl.addEventListener('input', () => {
+			this.searchQuery = this.searchInputEl.value;
+			this.selectedIndex = 0;
+			this.renderTagList();
+		});
+
+		this.searchInputEl.addEventListener('keydown', (e: KeyboardEvent) => {
+			if (e.key === 'ArrowDown') {
+				e.preventDefault();
+				this.selectedIndex = Math.min(this.selectedIndex + 1, this.getSelectableCount() - 1);
+				this.updateSelection(true);
+			} else if (e.key === 'ArrowUp') {
+				e.preventDefault();
+				this.selectedIndex = Math.max(this.selectedIndex - 1, 0);
+				this.updateSelection(true);
+			} else if (e.key === 'Enter') {
+				e.preventDefault();
+				this.chooseCurrent();
+			}
+		});
+
+		this.listContainerEl = contentEl.createDiv({ cls: 'cmdspace-eagle-tag-list-container' });
+		this.listContainerEl.createDiv({ cls: 'cmdspace-eagle-loading', text: 'Loading tags...' });
+
+		try {
+			const tags = await this.api.listTags();
+			this.allTags = tags.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+			this.renderTagList();
+		} catch (err) {
+			console.error('[CMDS Eagle] Failed to load tags:', err);
+			this.listContainerEl.empty();
+			this.listContainerEl.createDiv({ cls: 'cmdspace-eagle-picker-empty', text: 'Failed to load tags.' });
+		}
+
+		setTimeout(() => {
+			this.searchInputEl.focus();
+		}, 20);
+	}
+
+	private getSelectableCount(): number {
+		let count = this.filteredTags.length;
+		const query = this.searchQuery.trim();
+		if (query && !this.allTags.some(t => t.name.toLowerCase() === query.toLowerCase())) {
+			count += 1;
+		}
+		return Math.max(count, 0);
+	}
+
+	private chooseCurrent(): void {
+		const query = this.searchQuery.trim();
+		const hasCreate = Boolean(query && !this.allTags.some(t => t.name.toLowerCase() === query.toLowerCase()));
+
+		if (hasCreate && this.selectedIndex === 0) {
+			this.onSelectTag(query);
+			this.close();
+			return;
+		}
+
+		const tagIndex = hasCreate ? this.selectedIndex - 1 : this.selectedIndex;
+		const tag = this.filteredTags[tagIndex];
+		if (tag) {
+			this.onSelectTag(tag.name);
+			this.close();
+		} else if (query) {
+			this.onSelectTag(query);
+			this.close();
+		}
+	}
+
+	private renderTagList(): void {
+		this.listContainerEl.empty();
+		this.itemElements = [];
+
+		const query = this.searchQuery.trim().toLowerCase();
+		this.filteredTags = this.allTags.filter(t => t.name.toLowerCase().includes(query));
+
+		const hasExactMatch = this.allTags.some(t => t.name.toLowerCase() === query);
+		if (query && !hasExactMatch) {
+			const createRow = this.listContainerEl.createDiv({ cls: 'cmdspace-eagle-tag-create-row' });
+			this.itemElements.push(createRow);
+			createRow.createSpan({ text: `+ Create "${this.searchQuery.trim()}"` });
+			createRow.addEventListener('click', () => {
+				this.onSelectTag(this.searchQuery.trim());
+				this.close();
+			});
+		}
+
+		if (this.filteredTags.length === 0 && (!query || hasExactMatch)) {
+			this.listContainerEl.createDiv({ cls: 'cmdspace-eagle-picker-empty', text: 'No tags found.' });
+			return;
+		}
+
+		const gridEl = this.listContainerEl.createDiv({ cls: 'cmdspace-eagle-tag-grid' });
+		for (let i = 0; i < this.filteredTags.length; i++) {
+			const tag = this.filteredTags[i];
+			const tagRow = gridEl.createDiv({ cls: 'cmdspace-eagle-tag-item' });
+			this.itemElements.push(tagRow);
+
+			tagRow.createSpan({ cls: 'cmdspace-eagle-tag-bullet', text: '• ' });
+			tagRow.createSpan({ cls: 'cmdspace-eagle-tag-name', text: tag.name });
+			const count = typeof tag.imageCount === 'number' ? tag.imageCount : 0;
+			tagRow.createSpan({ cls: 'cmdspace-eagle-tag-count', text: ` (${count})` });
+
+			if (this.selectedTags.has(tag.name)) {
+				tagRow.addClass('is-selected-tag');
+			}
+
+			tagRow.addEventListener('click', () => {
+				this.onSelectTag(tag.name);
+				this.close();
+			});
+
+			tagRow.addEventListener('mouseenter', () => {
+				const hasCreate = Boolean(query && !hasExactMatch);
+				this.selectedIndex = hasCreate ? i + 1 : i;
+				this.updateSelection(false);
+			});
+		}
+
+		this.updateSelection(false);
+	}
+
+	private updateSelection(scroll = true): void {
+		for (let i = 0; i < this.itemElements.length; i++) {
+			const el = this.itemElements[i];
+			if (i === this.selectedIndex) {
+				el.addClass('is-focused');
+				if (scroll) el.scrollIntoView({ block: 'nearest' });
+			} else {
+				el.removeClass('is-focused');
+			}
+		}
+	}
 }
 
 export class EagleFolderPickerModal extends Modal {
+	private api: EagleApiService;
 	private folders: EagleFolder[];
 	private recentFolders: { id: string; name: string; path: string }[];
 	private flattenedFolders: { id: string; name: string; path: string }[];
 	private onSelect: (result: EagleFolderPickerResult) => void;
 	private resolved = false;
 
+	// Upload metadata context
+	private context?: EagleFolderPickerContext;
+	private previewUrl?: string;
+	private initialFileName: string;
+	private itemName: string;
+	private itemDescription: string;
+	private itemTags: string[];
+	private starRating = 0;
+
+	// Folder tree state
 	private searchQuery = '';
 	private expandedFolderIds: Set<string> = new Set();
 	private selectedIndex = 0;
@@ -534,16 +717,26 @@ export class EagleFolderPickerModal extends Modal {
 
 	constructor(
 		app: App,
+		api: EagleApiService,
 		folders: EagleFolder[],
 		recentFolders: { id: string; name: string; path: string }[],
 		flattenedFolders: { id: string; name: string; path: string }[],
-		onSelect: (result: EagleFolderPickerResult) => void
+		onSelect: (result: EagleFolderPickerResult) => void,
+		context?: EagleFolderPickerContext
 	) {
 		super(app);
+		this.api = api;
 		this.folders = folders;
 		this.recentFolders = recentFolders;
 		this.flattenedFolders = flattenedFolders;
 		this.onSelect = onSelect;
+		this.context = context;
+
+		this.previewUrl = context?.previewUrl;
+		this.initialFileName = context?.fileName ? context.fileName.replace(/\.[^.]+$/, '') : 'Image';
+		this.itemName = this.initialFileName;
+		this.itemDescription = context?.initialAltText || '';
+		this.itemTags = [...(context?.initialTags || [])];
 	}
 
 	onOpen(): void {
@@ -552,8 +745,154 @@ export class EagleFolderPickerModal extends Modal {
 		contentEl.empty();
 		contentEl.addClass('cmdspace-eagle-folder-picker-modal');
 
+		// Two-pane split container
+		const splitContainer = contentEl.createDiv({ cls: 'cmdspace-eagle-picker-split' });
+
+		// --- LEFT PANE: Preview, Rating, Name, Description, Tags ---
+		const leftPane = splitContainer.createDiv({ cls: 'cmdspace-eagle-picker-left-pane' });
+
+		// 1. Thumbnail Preview with centered inset dimensions badge
+		const previewBox = leftPane.createDiv({ cls: 'cmdspace-eagle-preview-container' });
+		if (this.previewUrl) {
+			const img = previewBox.createEl('img', { cls: 'cmdspace-eagle-preview-image' });
+			img.src = this.previewUrl;
+			const dimensionBadge = previewBox.createDiv({ cls: 'cmdspace-eagle-dimension-badge' });
+			const updateDimensions = () => {
+				if (img.naturalWidth && img.naturalHeight) {
+					dimensionBadge.setText(`${img.naturalWidth}x${img.naturalHeight}`);
+					dimensionBadge.style.display = 'block';
+				} else {
+					dimensionBadge.style.display = 'none';
+				}
+			};
+			if (img.complete && img.naturalWidth) {
+				updateDimensions();
+			} else {
+				img.onload = updateDimensions;
+			}
+		} else {
+			const placeholder = previewBox.createDiv({ cls: 'cmdspace-eagle-preview-placeholder' });
+			placeholder.createSpan({ text: '🖼️', cls: 'cmdspace-eagle-placeholder-icon' });
+		}
+
+		// 2. Ratings Picker (5 stars)
+		const ratingContainer = leftPane.createDiv({ cls: 'cmdspace-eagle-rating-container' });
+		const starContainer = ratingContainer.createDiv({ cls: 'cmdspace-eagle-stars-row' });
+		const starEls: HTMLElement[] = [];
+
+		const updateStars = (val: number) => {
+			for (let s = 1; s <= 5; s++) {
+				if (s <= val) {
+					starEls[s - 1].addClass('is-active');
+					starEls[s - 1].setText('★');
+				} else {
+					starEls[s - 1].removeClass('is-active');
+					starEls[s - 1].setText('☆');
+				}
+			}
+		};
+
+		for (let s = 1; s <= 5; s++) {
+			const star = starContainer.createSpan({
+				cls: 'cmdspace-eagle-star-btn',
+				text: s <= this.starRating ? '★' : '☆',
+			});
+			starEls.push(star);
+			star.addEventListener('mouseenter', () => updateStars(s));
+			star.addEventListener('click', (e) => {
+				e.stopPropagation();
+				this.starRating = (this.starRating === s ? 0 : s);
+				updateStars(this.starRating);
+			});
+		}
+
+		starContainer.addEventListener('mouseleave', () => updateStars(this.starRating));
+
+		// 3. Name Field
+		const nameGroup = leftPane.createDiv({ cls: 'cmdspace-eagle-field-group' });
+		nameGroup.createEl('label', { text: 'Name', cls: 'cmdspace-eagle-field-label' });
+		const nameInput = nameGroup.createEl('input', {
+			type: 'text',
+			cls: 'cmdspace-eagle-input',
+			value: this.itemName,
+			placeholder: 'Add Name',
+		});
+		nameInput.addEventListener('input', () => {
+			this.itemName = nameInput.value;
+		});
+		nameInput.addEventListener('keydown', (e: KeyboardEvent) => {
+			if (e.key === 'Enter') {
+				e.preventDefault();
+				if (this.visibleItems[this.selectedIndex]) {
+					this.selectItem(this.visibleItems[this.selectedIndex]);
+				}
+			}
+		});
+
+		// 4. Description Field
+		const descGroup = leftPane.createDiv({ cls: 'cmdspace-eagle-field-group' });
+		descGroup.createEl('label', { text: 'Description', cls: 'cmdspace-eagle-field-label' });
+		const descTextarea = descGroup.createEl('textarea', {
+			cls: 'cmdspace-eagle-textarea',
+			placeholder: 'Add Description',
+		});
+		descTextarea.value = this.itemDescription;
+		descTextarea.rows = 2;
+		descTextarea.addEventListener('input', () => {
+			this.itemDescription = descTextarea.value;
+		});
+		descTextarea.addEventListener('keydown', (e: KeyboardEvent) => {
+			if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+				e.preventDefault();
+				if (this.visibleItems[this.selectedIndex]) {
+					this.selectItem(this.visibleItems[this.selectedIndex]);
+				}
+			}
+		});
+
+		// 5. Tags Section with Pills & "+ Add Tag" / "+" Button
+		const tagsGroup = leftPane.createDiv({ cls: 'cmdspace-eagle-field-group' });
+		tagsGroup.createEl('label', { text: 'Tags', cls: 'cmdspace-eagle-field-label' });
+		const tagsWrapper = tagsGroup.createDiv({ cls: 'cmdspace-eagle-tags-wrapper' });
+
+		const renderTags = () => {
+			tagsWrapper.empty();
+			for (const tag of this.itemTags) {
+				const pill = tagsWrapper.createDiv({ cls: 'cmdspace-eagle-tag-pill' });
+				pill.createSpan({ cls: 'cmdspace-eagle-tag-pill-text', text: tag });
+				const removeBtn = pill.createSpan({ cls: 'cmdspace-eagle-tag-pill-remove', text: '✕' });
+				removeBtn.addEventListener('click', (e) => {
+					e.stopPropagation();
+					this.itemTags = this.itemTags.filter((t) => t !== tag);
+					renderTags();
+				});
+			}
+
+			const hasTags = this.itemTags.length > 0;
+			const addTagBtn = tagsWrapper.createEl('button', {
+				cls: hasTags ? 'cmdspace-eagle-add-tag-btn is-collapsed' : 'cmdspace-eagle-add-tag-btn',
+				text: hasTags ? '+' : '+ Add Tag',
+			});
+			addTagBtn.title = 'Add tag';
+
+			addTagBtn.addEventListener('click', (e) => {
+				e.stopPropagation();
+				new EagleTagPickerModal(this.app, this.api, this.itemTags, (chosenTag) => {
+					if (!this.itemTags.includes(chosenTag)) {
+						this.itemTags.push(chosenTag);
+						renderTags();
+					}
+				}).open();
+			});
+		};
+
+		renderTags();
+
+		// --- RIGHT PANE: Folder Tree, Search, Recents ---
+		const rightPane = splitContainer.createDiv({ cls: 'cmdspace-eagle-picker-right-pane' });
+
 		// Header
-		const headerEl = contentEl.createDiv({ cls: 'cmdspace-eagle-picker-header' });
+		const headerEl = rightPane.createDiv({ cls: 'cmdspace-eagle-picker-header' });
 		headerEl.createDiv({ cls: 'cmdspace-eagle-picker-title', text: 'Select Eagle Folder' });
 
 		const searchContainer = headerEl.createDiv({ cls: 'cmdspace-eagle-picker-search-container' });
@@ -574,7 +913,7 @@ export class EagleFolderPickerModal extends Modal {
 		});
 
 		// Scrollable List container
-		this.listContainerEl = contentEl.createDiv({ cls: 'cmdspace-eagle-picker-list-container' });
+		this.listContainerEl = rightPane.createDiv({ cls: 'cmdspace-eagle-picker-list-container' });
 
 		// Footer instructions
 		const footerEl = contentEl.createDiv({ cls: 'cmdspace-eagle-picker-footer' });
@@ -589,7 +928,7 @@ export class EagleFolderPickerModal extends Modal {
 		addInstruction('↑↓', 'navigate');
 		addInstruction('→', 'expand');
 		addInstruction('←', 'collapse');
-		addInstruction('↵', 'select');
+		addInstruction('↵', 'select folder & save');
 		addInstruction('esc', 'cancel');
 
 		// Initial render
@@ -912,11 +1251,18 @@ export class EagleFolderPickerModal extends Modal {
 	private selectItem(item: EagleFolderPickerItem): void {
 		if (this.resolved) return;
 		this.resolved = true;
-		if (item.type === 'root') {
-			this.onSelect({ folderId: undefined, folderName: 'Library Root', cancelled: false });
-		} else {
-			this.onSelect({ folderId: item.id, folderName: item.path, cancelled: false });
-		}
+		const folderId = item.type === 'root' ? undefined : item.id;
+		const folderName = item.type === 'root' ? 'Library Root' : item.path;
+
+		this.onSelect({
+			folderId,
+			folderName,
+			cancelled: false,
+			name: this.itemName.trim() || this.initialFileName,
+			annotation: this.itemDescription.trim() || undefined,
+			tags: this.itemTags.length > 0 ? this.itemTags : undefined,
+			star: this.starRating > 0 ? this.starRating : undefined,
+		});
 		this.close();
 	}
 
@@ -930,7 +1276,8 @@ export class EagleFolderPickerModal extends Modal {
 	static async pickFolder(
 		app: App,
 		api: EagleApiService,
-		recentFolderIds: string[] = []
+		recentFolderIds: string[] = [],
+		context?: EagleFolderPickerContext
 	): Promise<EagleFolderPickerResult> {
 		const connected = await api.isConnected();
 		if (!connected) {
@@ -978,12 +1325,14 @@ export class EagleFolderPickerModal extends Modal {
 		return new Promise<EagleFolderPickerResult>((resolve) => {
 			const modal = new EagleFolderPickerModal(
 				app,
+				api,
 				folders,
 				resolvedRecents,
 				flattened,
 				(result) => {
 					resolve(result);
-				}
+				},
+				context
 			);
 			modal.open();
 		});

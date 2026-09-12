@@ -124,6 +124,31 @@ export interface ImageSourceInfo {
 	pageUrl?: string;
 	imageUrl?: string;
 	localFilePath?: string;
+	altText?: string;
+}
+
+export interface EagleTag {
+	name: string;
+	imageCount: number;
+	groups?: string[];
+	pinyin?: string;
+}
+
+export interface EagleFolderPickerResult {
+	folderId?: string;
+	folderName?: string;
+	cancelled: boolean;
+	name?: string;
+	annotation?: string;
+	tags?: string[];
+	star?: number;
+}
+
+export interface EagleFolderPickerContext {
+	previewUrl?: string;
+	fileName?: string;
+	initialAltText?: string;
+	initialTags?: string[];
 }
 
 export interface EagleExtraLink {

@@ -9,6 +9,7 @@ import {
 	CMDSPACEEagleSettings,
 	R2UploadResult,
 	EagleItemLinkFormat,
+	EagleTag,
 } from './types';
 
 export class EagleApiService {
@@ -123,10 +124,17 @@ export class EagleApiService {
 		tags?: string[];
 		annotation?: string;
 		folderId?: string;
+		star?: number;
 	}): Promise<boolean> {
 		try {
-			const response = await this.post<null>('/api/item/addFromURL', options);
-			return response.status === 'success';
+			const response = await this.post<string>('/api/item/addFromURL', options);
+			if (response.status === 'success') {
+				if (response.data && typeof options.star === 'number' && options.star > 0) {
+					await this.updateItem(response.data, { star: options.star });
+				}
+				return true;
+			}
+			return false;
 		} catch {
 			return false;
 		}
@@ -139,15 +147,29 @@ export class EagleApiService {
 		tags?: string[];
 		annotation?: string;
 		folderId?: string;
+		star?: number;
 	}): Promise<{ success: boolean; itemId?: string }> {
 		try {
 			const response = await this.post<string>('/api/item/addFromPath', options);
 			if (response.status === 'success' && response.data) {
-				return { success: true, itemId: response.data };
+				const itemId = response.data;
+				if (typeof options.star === 'number' && options.star > 0) {
+					await this.updateItem(itemId, { star: options.star });
+				}
+				return { success: true, itemId };
 			}
 			return { success: false };
 		} catch {
 			return { success: false };
+		}
+	}
+
+	async listTags(): Promise<EagleTag[]> {
+		try {
+			const response = await this.get<EagleTag[]>('/api/tag/list');
+			return response.data ?? [];
+		} catch {
+			return [];
 		}
 	}
 

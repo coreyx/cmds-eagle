@@ -309,7 +309,13 @@ var init_api = __esm({
       async addFromUrl(options) {
         try {
           const response = await this.post("/api/item/addFromURL", options);
-          return response.status === "success";
+          if (response.status === "success") {
+            if (response.data && typeof options.star === "number" && options.star > 0) {
+              await this.updateItem(response.data, { star: options.star });
+            }
+            return true;
+          }
+          return false;
         } catch (e) {
           return false;
         }
@@ -318,11 +324,24 @@ var init_api = __esm({
         try {
           const response = await this.post("/api/item/addFromPath", options);
           if (response.status === "success" && response.data) {
-            return { success: true, itemId: response.data };
+            const itemId = response.data;
+            if (typeof options.star === "number" && options.star > 0) {
+              await this.updateItem(itemId, { star: options.star });
+            }
+            return { success: true, itemId };
           }
           return { success: false };
         } catch (e) {
           return { success: false };
+        }
+      }
+      async listTags() {
+        var _a;
+        try {
+          const response = await this.get("/api/tag/list");
+          return (_a = response.data) != null ? _a : [];
+        } catch (e) {
+          return [];
         }
       }
       async listFolders() {
@@ -686,6 +705,7 @@ __export(modals_exports, {
   EagleFolderPickerModal: () => EagleFolderPickerModal,
   EagleLinkChoiceModal: () => EagleLinkChoiceModal,
   EagleSearchModal: () => EagleSearchModal,
+  EagleTagPickerModal: () => EagleTagPickerModal,
   ImagePasteChoiceModal: () => ImagePasteChoiceModal,
   flattenEagleFolders: () => flattenEagleFolders
 });
@@ -700,7 +720,7 @@ function flattenEagleFolders(items, parentPath = "") {
   }
   return flattened;
 }
-var import_obsidian2, EagleSearchModal, EagleFolderModal, EagleFolderPickerModal, AddFolderMappingModal, ImagePasteChoiceModal, EagleLinkChoiceModal;
+var import_obsidian2, EagleSearchModal, EagleFolderModal, EagleTagPickerModal, EagleFolderPickerModal, AddFolderMappingModal, ImagePasteChoiceModal, EagleLinkChoiceModal;
 var init_modals = __esm({
   "src/modals.ts"() {
     import_obsidian2 = require("obsidian");
@@ -1108,26 +1128,298 @@ var init_modals = __esm({
         this.onSelect(item.id);
       }
     };
+    EagleTagPickerModal = class extends import_obsidian2.Modal {
+      constructor(app, api, selectedTags, onSelectTag) {
+        super(app);
+        this.allTags = [];
+        this.filteredTags = [];
+        this.searchQuery = "";
+        this.selectedIndex = 0;
+        this.itemElements = [];
+        this.api = api;
+        this.selectedTags = new Set(selectedTags);
+        this.onSelectTag = onSelectTag;
+      }
+      async onOpen() {
+        const { contentEl, modalEl } = this;
+        modalEl.addClass("cmdspace-eagle-tag-picker-window");
+        contentEl.empty();
+        contentEl.addClass("cmdspace-eagle-tag-picker-modal");
+        contentEl.createEl("h3", { text: "Add Tag", cls: "cmdspace-eagle-tag-picker-title" });
+        const searchContainer = contentEl.createDiv({ cls: "cmdspace-eagle-tag-search-container" });
+        this.searchInputEl = searchContainer.createEl("input", {
+          type: "text",
+          cls: "cmdspace-eagle-tag-search-input",
+          placeholder: "Search tags or type new tag..."
+        });
+        this.searchInputEl.addEventListener("input", () => {
+          this.searchQuery = this.searchInputEl.value;
+          this.selectedIndex = 0;
+          this.renderTagList();
+        });
+        this.searchInputEl.addEventListener("keydown", (e) => {
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            this.selectedIndex = Math.min(this.selectedIndex + 1, this.getSelectableCount() - 1);
+            this.updateSelection(true);
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            this.selectedIndex = Math.max(this.selectedIndex - 1, 0);
+            this.updateSelection(true);
+          } else if (e.key === "Enter") {
+            e.preventDefault();
+            this.chooseCurrent();
+          }
+        });
+        this.listContainerEl = contentEl.createDiv({ cls: "cmdspace-eagle-tag-list-container" });
+        this.listContainerEl.createDiv({ cls: "cmdspace-eagle-loading", text: "Loading tags..." });
+        try {
+          const tags = await this.api.listTags();
+          this.allTags = tags.sort((a, b) => a.name.localeCompare(b.name, void 0, { sensitivity: "base" }));
+          this.renderTagList();
+        } catch (err) {
+          console.error("[CMDS Eagle] Failed to load tags:", err);
+          this.listContainerEl.empty();
+          this.listContainerEl.createDiv({ cls: "cmdspace-eagle-picker-empty", text: "Failed to load tags." });
+        }
+        setTimeout(() => {
+          this.searchInputEl.focus();
+        }, 20);
+      }
+      getSelectableCount() {
+        let count = this.filteredTags.length;
+        const query = this.searchQuery.trim();
+        if (query && !this.allTags.some((t) => t.name.toLowerCase() === query.toLowerCase())) {
+          count += 1;
+        }
+        return Math.max(count, 0);
+      }
+      chooseCurrent() {
+        const query = this.searchQuery.trim();
+        const hasCreate = Boolean(query && !this.allTags.some((t) => t.name.toLowerCase() === query.toLowerCase()));
+        if (hasCreate && this.selectedIndex === 0) {
+          this.onSelectTag(query);
+          this.close();
+          return;
+        }
+        const tagIndex = hasCreate ? this.selectedIndex - 1 : this.selectedIndex;
+        const tag = this.filteredTags[tagIndex];
+        if (tag) {
+          this.onSelectTag(tag.name);
+          this.close();
+        } else if (query) {
+          this.onSelectTag(query);
+          this.close();
+        }
+      }
+      renderTagList() {
+        this.listContainerEl.empty();
+        this.itemElements = [];
+        const query = this.searchQuery.trim().toLowerCase();
+        this.filteredTags = this.allTags.filter((t) => t.name.toLowerCase().includes(query));
+        const hasExactMatch = this.allTags.some((t) => t.name.toLowerCase() === query);
+        if (query && !hasExactMatch) {
+          const createRow = this.listContainerEl.createDiv({ cls: "cmdspace-eagle-tag-create-row" });
+          this.itemElements.push(createRow);
+          createRow.createSpan({ text: `+ Create "${this.searchQuery.trim()}"` });
+          createRow.addEventListener("click", () => {
+            this.onSelectTag(this.searchQuery.trim());
+            this.close();
+          });
+        }
+        if (this.filteredTags.length === 0 && (!query || hasExactMatch)) {
+          this.listContainerEl.createDiv({ cls: "cmdspace-eagle-picker-empty", text: "No tags found." });
+          return;
+        }
+        const gridEl = this.listContainerEl.createDiv({ cls: "cmdspace-eagle-tag-grid" });
+        for (let i = 0; i < this.filteredTags.length; i++) {
+          const tag = this.filteredTags[i];
+          const tagRow = gridEl.createDiv({ cls: "cmdspace-eagle-tag-item" });
+          this.itemElements.push(tagRow);
+          tagRow.createSpan({ cls: "cmdspace-eagle-tag-bullet", text: "\u2022 " });
+          tagRow.createSpan({ cls: "cmdspace-eagle-tag-name", text: tag.name });
+          const count = typeof tag.imageCount === "number" ? tag.imageCount : 0;
+          tagRow.createSpan({ cls: "cmdspace-eagle-tag-count", text: ` (${count})` });
+          if (this.selectedTags.has(tag.name)) {
+            tagRow.addClass("is-selected-tag");
+          }
+          tagRow.addEventListener("click", () => {
+            this.onSelectTag(tag.name);
+            this.close();
+          });
+          tagRow.addEventListener("mouseenter", () => {
+            const hasCreate = Boolean(query && !hasExactMatch);
+            this.selectedIndex = hasCreate ? i + 1 : i;
+            this.updateSelection(false);
+          });
+        }
+        this.updateSelection(false);
+      }
+      updateSelection(scroll = true) {
+        for (let i = 0; i < this.itemElements.length; i++) {
+          const el = this.itemElements[i];
+          if (i === this.selectedIndex) {
+            el.addClass("is-focused");
+            if (scroll)
+              el.scrollIntoView({ block: "nearest" });
+          } else {
+            el.removeClass("is-focused");
+          }
+        }
+      }
+    };
     EagleFolderPickerModal = class extends import_obsidian2.Modal {
-      constructor(app, folders, recentFolders, flattenedFolders, onSelect) {
+      constructor(app, api, folders, recentFolders, flattenedFolders, onSelect, context) {
         super(app);
         this.resolved = false;
+        this.starRating = 0;
+        // Folder tree state
         this.searchQuery = "";
         this.expandedFolderIds = /* @__PURE__ */ new Set();
         this.selectedIndex = 0;
         this.visibleItems = [];
         this.rowElements = [];
+        this.api = api;
         this.folders = folders;
         this.recentFolders = recentFolders;
         this.flattenedFolders = flattenedFolders;
         this.onSelect = onSelect;
+        this.context = context;
+        this.previewUrl = context == null ? void 0 : context.previewUrl;
+        this.initialFileName = (context == null ? void 0 : context.fileName) ? context.fileName.replace(/\.[^.]+$/, "") : "Image";
+        this.itemName = this.initialFileName;
+        this.itemDescription = (context == null ? void 0 : context.initialAltText) || "";
+        this.itemTags = [...(context == null ? void 0 : context.initialTags) || []];
       }
       onOpen() {
         const { contentEl, modalEl } = this;
         modalEl.addClass("cmdspace-eagle-picker-modal-window");
         contentEl.empty();
         contentEl.addClass("cmdspace-eagle-folder-picker-modal");
-        const headerEl = contentEl.createDiv({ cls: "cmdspace-eagle-picker-header" });
+        const splitContainer = contentEl.createDiv({ cls: "cmdspace-eagle-picker-split" });
+        const leftPane = splitContainer.createDiv({ cls: "cmdspace-eagle-picker-left-pane" });
+        const previewBox = leftPane.createDiv({ cls: "cmdspace-eagle-preview-container" });
+        if (this.previewUrl) {
+          const img = previewBox.createEl("img", { cls: "cmdspace-eagle-preview-image" });
+          img.src = this.previewUrl;
+          const dimensionBadge = previewBox.createDiv({ cls: "cmdspace-eagle-dimension-badge" });
+          const updateDimensions = () => {
+            if (img.naturalWidth && img.naturalHeight) {
+              dimensionBadge.setText(`${img.naturalWidth}x${img.naturalHeight}`);
+              dimensionBadge.style.display = "block";
+            } else {
+              dimensionBadge.style.display = "none";
+            }
+          };
+          if (img.complete && img.naturalWidth) {
+            updateDimensions();
+          } else {
+            img.onload = updateDimensions;
+          }
+        } else {
+          const placeholder = previewBox.createDiv({ cls: "cmdspace-eagle-preview-placeholder" });
+          placeholder.createSpan({ text: "\u{1F5BC}\uFE0F", cls: "cmdspace-eagle-placeholder-icon" });
+        }
+        const ratingContainer = leftPane.createDiv({ cls: "cmdspace-eagle-rating-container" });
+        const starContainer = ratingContainer.createDiv({ cls: "cmdspace-eagle-stars-row" });
+        const starEls = [];
+        const updateStars = (val) => {
+          for (let s = 1; s <= 5; s++) {
+            if (s <= val) {
+              starEls[s - 1].addClass("is-active");
+              starEls[s - 1].setText("\u2605");
+            } else {
+              starEls[s - 1].removeClass("is-active");
+              starEls[s - 1].setText("\u2606");
+            }
+          }
+        };
+        for (let s = 1; s <= 5; s++) {
+          const star = starContainer.createSpan({
+            cls: "cmdspace-eagle-star-btn",
+            text: s <= this.starRating ? "\u2605" : "\u2606"
+          });
+          starEls.push(star);
+          star.addEventListener("mouseenter", () => updateStars(s));
+          star.addEventListener("click", (e) => {
+            e.stopPropagation();
+            this.starRating = this.starRating === s ? 0 : s;
+            updateStars(this.starRating);
+          });
+        }
+        starContainer.addEventListener("mouseleave", () => updateStars(this.starRating));
+        const nameGroup = leftPane.createDiv({ cls: "cmdspace-eagle-field-group" });
+        nameGroup.createEl("label", { text: "Name", cls: "cmdspace-eagle-field-label" });
+        const nameInput = nameGroup.createEl("input", {
+          type: "text",
+          cls: "cmdspace-eagle-input",
+          value: this.itemName,
+          placeholder: "Add Name"
+        });
+        nameInput.addEventListener("input", () => {
+          this.itemName = nameInput.value;
+        });
+        nameInput.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            if (this.visibleItems[this.selectedIndex]) {
+              this.selectItem(this.visibleItems[this.selectedIndex]);
+            }
+          }
+        });
+        const descGroup = leftPane.createDiv({ cls: "cmdspace-eagle-field-group" });
+        descGroup.createEl("label", { text: "Description", cls: "cmdspace-eagle-field-label" });
+        const descTextarea = descGroup.createEl("textarea", {
+          cls: "cmdspace-eagle-textarea",
+          placeholder: "Add Description"
+        });
+        descTextarea.value = this.itemDescription;
+        descTextarea.rows = 2;
+        descTextarea.addEventListener("input", () => {
+          this.itemDescription = descTextarea.value;
+        });
+        descTextarea.addEventListener("keydown", (e) => {
+          if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+            e.preventDefault();
+            if (this.visibleItems[this.selectedIndex]) {
+              this.selectItem(this.visibleItems[this.selectedIndex]);
+            }
+          }
+        });
+        const tagsGroup = leftPane.createDiv({ cls: "cmdspace-eagle-field-group" });
+        tagsGroup.createEl("label", { text: "Tags", cls: "cmdspace-eagle-field-label" });
+        const tagsWrapper = tagsGroup.createDiv({ cls: "cmdspace-eagle-tags-wrapper" });
+        const renderTags = () => {
+          tagsWrapper.empty();
+          for (const tag of this.itemTags) {
+            const pill = tagsWrapper.createDiv({ cls: "cmdspace-eagle-tag-pill" });
+            pill.createSpan({ cls: "cmdspace-eagle-tag-pill-text", text: tag });
+            const removeBtn = pill.createSpan({ cls: "cmdspace-eagle-tag-pill-remove", text: "\u2715" });
+            removeBtn.addEventListener("click", (e) => {
+              e.stopPropagation();
+              this.itemTags = this.itemTags.filter((t) => t !== tag);
+              renderTags();
+            });
+          }
+          const hasTags = this.itemTags.length > 0;
+          const addTagBtn = tagsWrapper.createEl("button", {
+            cls: hasTags ? "cmdspace-eagle-add-tag-btn is-collapsed" : "cmdspace-eagle-add-tag-btn",
+            text: hasTags ? "+" : "+ Add Tag"
+          });
+          addTagBtn.title = "Add tag";
+          addTagBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            new EagleTagPickerModal(this.app, this.api, this.itemTags, (chosenTag) => {
+              if (!this.itemTags.includes(chosenTag)) {
+                this.itemTags.push(chosenTag);
+                renderTags();
+              }
+            }).open();
+          });
+        };
+        renderTags();
+        const rightPane = splitContainer.createDiv({ cls: "cmdspace-eagle-picker-right-pane" });
+        const headerEl = rightPane.createDiv({ cls: "cmdspace-eagle-picker-header" });
         headerEl.createDiv({ cls: "cmdspace-eagle-picker-title", text: "Select Eagle Folder" });
         const searchContainer = headerEl.createDiv({ cls: "cmdspace-eagle-picker-search-container" });
         this.searchInputEl = searchContainer.createEl("input", {
@@ -1143,7 +1435,7 @@ var init_modals = __esm({
         this.searchInputEl.addEventListener("keydown", (e) => {
           this.handleKeydown(e);
         });
-        this.listContainerEl = contentEl.createDiv({ cls: "cmdspace-eagle-picker-list-container" });
+        this.listContainerEl = rightPane.createDiv({ cls: "cmdspace-eagle-picker-list-container" });
         const footerEl = contentEl.createDiv({ cls: "cmdspace-eagle-picker-footer" });
         const instructionsEl = footerEl.createDiv({ cls: "cmdspace-eagle-picker-instructions" });
         const addInstruction = (key, label) => {
@@ -1154,7 +1446,7 @@ var init_modals = __esm({
         addInstruction("\u2191\u2193", "navigate");
         addInstruction("\u2192", "expand");
         addInstruction("\u2190", "collapse");
-        addInstruction("\u21B5", "select");
+        addInstruction("\u21B5", "select folder & save");
         addInstruction("esc", "cancel");
         this.renderList();
         setTimeout(() => {
@@ -1431,11 +1723,17 @@ var init_modals = __esm({
         if (this.resolved)
           return;
         this.resolved = true;
-        if (item.type === "root") {
-          this.onSelect({ folderId: void 0, folderName: "Library Root", cancelled: false });
-        } else {
-          this.onSelect({ folderId: item.id, folderName: item.path, cancelled: false });
-        }
+        const folderId = item.type === "root" ? void 0 : item.id;
+        const folderName = item.type === "root" ? "Library Root" : item.path;
+        this.onSelect({
+          folderId,
+          folderName,
+          cancelled: false,
+          name: this.itemName.trim() || this.initialFileName,
+          annotation: this.itemDescription.trim() || void 0,
+          tags: this.itemTags.length > 0 ? this.itemTags : void 0,
+          star: this.starRating > 0 ? this.starRating : void 0
+        });
         this.close();
       }
       onClose() {
@@ -1444,7 +1742,7 @@ var init_modals = __esm({
           this.onSelect({ cancelled: true });
         }
       }
-      static async pickFolder(app, api, recentFolderIds = []) {
+      static async pickFolder(app, api, recentFolderIds = [], context) {
         const connected = await api.isConnected();
         if (!connected) {
           new import_obsidian2.Notice("Eagle is not running. Please start Eagle and try again.");
@@ -1483,12 +1781,14 @@ var init_modals = __esm({
         return new Promise((resolve) => {
           const modal = new EagleFolderPickerModal(
             app,
+            api,
             folders,
             resolvedRecents,
             flattened,
             (result) => {
               resolve(result);
-            }
+            },
+            context
           );
           modal.open();
         });
@@ -3007,6 +3307,7 @@ var WindowsClipboardProvider = class {
       });
       let pageUrl;
       let imageUrl;
+      let altText;
       if (buf && buf.length > 0) {
         const text = buf.toString("utf8");
         const pageMatch = text.match(/SourceURL:(https?:\/\/[^\r\n]+)/i);
@@ -3019,6 +3320,10 @@ var WindowsClipboardProvider = class {
           if (isValidHttpUrl(decoded)) {
             imageUrl = cleanUrl(decoded);
           }
+        }
+        const altMatch = text.match(/<img[^>]+alt=["']([^"']*)["']/i);
+        if (altMatch && altMatch[1]) {
+          altText = altMatch[1].trim();
         }
       }
       if (!pageUrl) {
@@ -3039,8 +3344,8 @@ var WindowsClipboardProvider = class {
           localFilePath = cleaned;
         }
       }
-      if (pageUrl || imageUrl || localFilePath) {
-        return { pageUrl, imageUrl, localFilePath };
+      if (pageUrl || imageUrl || localFilePath || altText) {
+        return { pageUrl, imageUrl, localFilePath, altText };
       }
     } catch (err) {
       console.warn("[CMDS Eagle] Error reading Windows clipboard source:", err);
@@ -3058,6 +3363,7 @@ var MacOSClipboardProvider = class {
       const clipboard = electron.clipboard;
       let pageUrl;
       let imageUrl;
+      let altText;
       const chromiumUrl = safelyReadClipboard(() => clipboard.read("org.chromium.source-url"));
       if (isValidHttpUrl(chromiumUrl)) {
         pageUrl = cleanUrl(chromiumUrl);
@@ -3070,6 +3376,10 @@ var MacOSClipboardProvider = class {
           if (isValidHttpUrl(decoded)) {
             imageUrl = cleanUrl(decoded);
           }
+        }
+        const altMatch = html.match(/<img[^>]+alt=["']([^"']*)["']/i);
+        if (altMatch && altMatch[1]) {
+          altText = altMatch[1].trim();
         }
         if (!pageUrl) {
           const pageMatch = html.match(/SourceURL:(https?:\/\/[^\r\n]+)/i);
@@ -3117,8 +3427,8 @@ var MacOSClipboardProvider = class {
           }
         }
       }
-      if (pageUrl || imageUrl || localFilePath) {
-        return { pageUrl, imageUrl, localFilePath };
+      if (pageUrl || imageUrl || localFilePath || altText) {
+        return { pageUrl, imageUrl, localFilePath, altText };
       }
     } catch (err) {
       console.warn("[CMDS Eagle] Error reading macOS clipboard source:", err);
@@ -3653,19 +3963,26 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       new import_obsidian5.Notice("Eagle is not running");
       return;
     }
-    const name = `Captured from Obsidian - ${new Date().toISOString()}`;
+    const defaultName = `Captured from Obsidian - ${new Date().toISOString()}`;
     const backlinkData = await this.getEagleBacklinkPayload();
-    const folderResolution = await this.resolveEagleFolderForUpload();
+    const folderResolution = await this.resolveEagleFolderForUpload({
+      fileName: defaultName
+    });
     if (folderResolution.cancelled) {
       new import_obsidian5.Notice("Capture to Eagle cancelled");
       return;
     }
+    const finalName = folderResolution.name || defaultName;
+    const finalTags = folderResolution.tags !== void 0 ? folderResolution.tags : this.getDefaultTags();
+    const finalAnnotation = [folderResolution.annotation, backlinkData.annotation].filter(Boolean).join("\n\n") || void 0;
     const success = await this.api.addFromUrl({
       url: clipboardText,
-      name,
-      tags: this.getDefaultTags(),
+      name: finalName,
+      tags: finalTags,
       folderId: folderResolution.folderId,
-      ...backlinkData
+      star: folderResolution.star,
+      ...backlinkData,
+      annotation: finalAnnotation
     });
     if (success) {
       new import_obsidian5.Notice("URL captured to Eagle");
@@ -4137,6 +4454,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
           }
         }
       }
+      let altText;
       if (html) {
         const imgMatch = html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) || html.match(/<img[^>]+src=([^\s>]+)/i);
         if (imgMatch && imgMatch[1]) {
@@ -4145,9 +4463,13 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
             imageUrl = cleanUrl(decoded);
           }
         }
+        const altMatch = html.match(/<img[^>]+alt=["']([^"']*)["']/i);
+        if (altMatch && altMatch[1]) {
+          altText = altMatch[1].trim();
+        }
       }
-      if (pageUrl || imageUrl || localFilePath) {
-        sourceInfo = { pageUrl, imageUrl, localFilePath };
+      if (pageUrl || imageUrl || localFilePath || altText) {
+        sourceInfo = { pageUrl, imageUrl, localFilePath, altText };
       }
     }
     const fileItems = Array.from(files).map((file) => ({
@@ -4390,18 +4712,28 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       const absolutePath = this.getAbsolutePath(file.path);
       const filenameWithoutExt = file.basename;
       const backlinkData = await this.getEagleBacklinkPayload();
-      const folderResolution = await this.resolveEagleFolderForUpload(file);
+      const previewUrl = this.app.vault.getResourcePath(file);
+      const folderResolution = await this.resolveEagleFolderForUpload({
+        file,
+        fileName: filenameWithoutExt,
+        previewUrl
+      });
       if (folderResolution.cancelled) {
         this.replaceTextInDocument(editor, placeholderText, originalText);
         new import_obsidian5.Notice("Eagle import cancelled");
         return;
       }
+      const finalName = folderResolution.name || filenameWithoutExt;
+      const finalTags = folderResolution.tags !== void 0 ? folderResolution.tags : this.getDefaultTags();
+      const finalAnnotation = [folderResolution.annotation, backlinkData.annotation].filter(Boolean).join("\n\n") || void 0;
       const result = await this.api.addFromPath({
         path: absolutePath,
-        name: filenameWithoutExt,
-        tags: this.getDefaultTags(),
+        name: finalName,
+        tags: finalTags,
         folderId: folderResolution.folderId,
-        ...backlinkData
+        star: folderResolution.star,
+        ...backlinkData,
+        annotation: finalAnnotation
       });
       if (!result.success || !result.itemId) {
         throw new Error("Failed to add image to Eagle");
@@ -4767,14 +5099,23 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
         let eagleNote = "";
         if (this.settings.excalidrawImportToEagle) {
           const backlinkData = await this.getEagleBacklinkPayload();
-          const folderResolution = await this.resolveEagleFolderForUpload();
+          const filenameWithoutExt = file.name.replace(/\.[^.]+$/, "");
+          const folderResolution = await this.resolveEagleFolderForUpload({
+            file,
+            fileName: filenameWithoutExt
+          });
           if (!folderResolution.cancelled) {
+            const finalName = folderResolution.name || filenameWithoutExt;
+            const finalTags = folderResolution.tags !== void 0 ? folderResolution.tags : this.getDefaultTags();
+            const finalAnnotation = [folderResolution.annotation, backlinkData.annotation].filter(Boolean).join("\n\n") || void 0;
             const added = await this.api.addFromPath({
               path: tempPath,
-              name: file.name.replace(/\.[^.]+$/, ""),
-              tags: this.getDefaultTags(),
+              name: finalName,
+              tags: finalTags,
               folderId: folderResolution.folderId,
-              ...backlinkData
+              star: folderResolution.star,
+              ...backlinkData,
+              annotation: finalAnnotation
             });
             if (added.success) {
               eagleNote = " + Eagle";
@@ -4908,15 +5249,40 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     const parsedTags = this.settings.defaultTags.split(",").map((tag) => tag.trim()).filter((tag) => tag.length > 0);
     return parsedTags.length > 0 ? parsedTags : void 0;
   }
-  async resolveEagleFolderForUpload(activeFile) {
+  async resolveEagleFolderForUpload(contextOrFile) {
+    var _a, _b;
+    const context = contextOrFile instanceof import_obsidian5.TFile ? { activeFile: contextOrFile } : contextOrFile || {};
     const mode = this.settings.addFolderMode || (this.settings.enableDefaultFolder ? "target" : "target");
     switch (mode) {
       case "ask": {
+        let previewUrl = context.previewUrl;
+        let createdBlobUrl = false;
+        if (!previewUrl && context.file && typeof File !== "undefined" && context.file instanceof File) {
+          try {
+            previewUrl = URL.createObjectURL(context.file);
+            createdBlobUrl = true;
+          } catch (e) {
+          }
+        } else if (!previewUrl && context.file instanceof import_obsidian5.TFile) {
+          previewUrl = this.app.vault.getResourcePath(context.file);
+        }
+        const fileName = context.fileName || (context.file instanceof import_obsidian5.TFile ? context.file.basename : (_a = context.file) == null ? void 0 : _a.name) || "Image";
+        const initialAltText = (_b = context.sourceInfo) == null ? void 0 : _b.altText;
+        const initialTags = this.getDefaultTags() || [];
         const result = await EagleFolderPickerModal.pickFolder(
           this.app,
           this.api,
-          this.settings.recentEagleFolders || []
+          this.settings.recentEagleFolders || [],
+          {
+            previewUrl,
+            fileName,
+            initialAltText,
+            initialTags
+          }
         );
+        if (createdBlobUrl && previewUrl) {
+          URL.revokeObjectURL(previewUrl);
+        }
         if (result.cancelled) {
           return { cancelled: true };
         }
@@ -4926,14 +5292,18 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
           this.settings.recentEagleFolders = updated;
           void this.saveSettings();
         }
-        return { folderId: result.folderId, cancelled: false };
+        return result;
       }
       case "mirror": {
-        const folderId = await this.resolveMirroredEagleFolder(activeFile);
+        const folderId = await this.resolveMirroredEagleFolder(
+          context.activeFile || (context.file instanceof import_obsidian5.TFile ? context.file : void 0)
+        );
         return { folderId, cancelled: false };
       }
       case "map": {
-        const folderId = this.resolveMappedEagleFolder(activeFile);
+        const folderId = this.resolveMappedEagleFolder(
+          context.activeFile || (context.file instanceof import_obsidian5.TFile ? context.file : void 0)
+        );
         return { folderId, cancelled: false };
       }
       case "target":
@@ -5104,6 +5474,14 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
         updates.annotation = `Linked From Obsidian: [${basename}](${advancedUri})`;
       }
       if (updates.url || updates.annotation) {
+        if (updates.annotation) {
+          const existingItem = await this.api.getItemInfo(itemId);
+          if ((existingItem == null ? void 0 : existingItem.annotation) && !existingItem.annotation.includes(updates.annotation)) {
+            updates.annotation = `${existingItem.annotation}
+
+${updates.annotation}`;
+          }
+        }
         await this.api.updateItem(itemId, updates);
       }
     }
@@ -5117,17 +5495,26 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     const primaryUrl = sourceInfo && this.settings.enableImageSourceUrl ? this.clipboardSourceService.resolvePrimaryUrl(sourceInfo, this.settings.imageSourceUrlPriority) : null;
     const filenameWithoutExt = file.name.replace(/\.[^.]+$/, "");
     const backlinkData = await this.getEagleBacklinkPayload(!!primaryUrl);
-    const folderResolution = await this.resolveEagleFolderForUpload();
+    const folderResolution = await this.resolveEagleFolderForUpload({
+      file,
+      fileName: filenameWithoutExt,
+      sourceInfo
+    });
     if (folderResolution.cancelled) {
       throw new Error("Upload cancelled");
     }
+    const finalName = folderResolution.name || filenameWithoutExt;
+    const finalTags = folderResolution.tags !== void 0 ? folderResolution.tags : this.getDefaultTags();
+    const finalAnnotation = [folderResolution.annotation, backlinkData.annotation].filter(Boolean).join("\n\n") || void 0;
     const result = await this.api.addFromPath({
       path: tempPath,
-      name: filenameWithoutExt,
+      name: finalName,
       website: primaryUrl || backlinkData.website,
-      tags: this.getDefaultTags(),
+      tags: finalTags,
       folderId: folderResolution.folderId,
-      ...backlinkData
+      star: folderResolution.star,
+      ...backlinkData,
+      annotation: finalAnnotation
     });
     if (!result.success || !result.itemId) {
       throw new Error("Failed to add image to Eagle");
@@ -5151,14 +5538,14 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       const ext = getExtFromFilename(file.name);
       item = {
         id: itemId,
-        name: filenameWithoutExt,
+        name: finalName,
         size: file.size,
         ext,
-        tags: this.getDefaultTags() || [],
+        tags: finalTags || [],
         folders: folderResolution.folderId ? [folderResolution.folderId] : [],
         isDeleted: false,
         url: primaryUrl || "",
-        annotation: "",
+        annotation: finalAnnotation || "",
         modificationTime: Date.now(),
         lastModified: Date.now(),
         width: 0,

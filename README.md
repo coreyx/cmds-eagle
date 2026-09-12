@@ -57,7 +57,9 @@ When pasting or dropping images, choose where to save them.
 
 Control where newly added images are stored in your Eagle library with 4 workflow options under **Settings → When adding an item to Eagle**:
 
-- **Ask**: Prompts before each upload with an interactive modal picker featuring an expandable/collapsible folder tree, real-time search with full breadcrumbs, quick expand/collapse all buttons, recent folder history, and full keyboard navigation.
+- **Ask**: Prompts before each upload with an interactive Eagle Extension-style split modal:
+  - **Left Pane (Metadata & Preview)**: Live thumbnail preview with inset dimensions badge (e.g. `800x600`), 5-star ratings picker, editable "Name" field, "Description" field (pre-populated with HTML `alt` text), removable tag pills, and a dedicated 2-column bulleted Tag Picker popup (`• TagName (Count)`) with search and custom tag creation.
+  - **Right Pane (Folder Navigation)**: Interactive expandable/collapsible folder tree, quick expand/collapse all buttons, recent folder history, library root option, real-time search with breadcrumbs, and complete keyboard navigation.
 - **Add to Target Folder**: Always routes new uploads to a specific designated folder in Eagle (with a "Clear" button to reset to root).
 - **Mirror Obsidian Folder Hierarchy**: Automatically creates and mirrors your active note's relative vault path in Eagle, creating intermediate folders as needed.
 - **Use Folder Map**: Map specific Obsidian vault directories to specific Eagle folders with automatic longest-prefix matching for subdirectories.

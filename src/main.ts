@@ -18,6 +18,7 @@ import {
 	MetadataCardImageSource,
 	ComputerProfile,
 	PlatformType,
+	EagleFolderPickerResult,
 } from './types';
 import { 
 	EagleApiService, 
@@ -651,21 +652,29 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			return;
 		}
 
-		const name = `Captured from Obsidian - ${new Date().toISOString()}`;
+		const defaultName = `Captured from Obsidian - ${new Date().toISOString()}`;
 		const backlinkData = await this.getEagleBacklinkPayload();
 
-		const folderResolution = await this.resolveEagleFolderForUpload();
+		const folderResolution = await this.resolveEagleFolderForUpload({
+			fileName: defaultName,
+		});
 		if (folderResolution.cancelled) {
 			new Notice('Capture to Eagle cancelled');
 			return;
 		}
 
+		const finalName = folderResolution.name || defaultName;
+		const finalTags = folderResolution.tags !== undefined ? folderResolution.tags : this.getDefaultTags();
+		const finalAnnotation = [folderResolution.annotation, backlinkData.annotation].filter(Boolean).join('\n\n') || undefined;
+
 		const success = await this.api.addFromUrl({
 			url: clipboardText,
-			name,
-			tags: this.getDefaultTags(),
+			name: finalName,
+			tags: finalTags,
 			folderId: folderResolution.folderId,
-			...backlinkData
+			star: folderResolution.star,
+			...backlinkData,
+			annotation: finalAnnotation,
 		});
 
 		if (success) {
@@ -1210,6 +1219,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 				}
 			}
 
+			let altText: string | undefined;
 			if (html) {
 				const imgMatch = html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) ||
 					html.match(/<img[^>]+src=([^\s>]+)/i);
@@ -1219,10 +1229,15 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 						imageUrl = cleanUrl(decoded);
 					}
 				}
+
+				const altMatch = html.match(/<img[^>]+alt=["']([^"']*)["']/i);
+				if (altMatch && altMatch[1]) {
+					altText = altMatch[1].trim();
+				}
 			}
 
-			if (pageUrl || imageUrl || localFilePath) {
-				sourceInfo = { pageUrl, imageUrl, localFilePath };
+			if (pageUrl || imageUrl || localFilePath || altText) {
+				sourceInfo = { pageUrl, imageUrl, localFilePath, altText };
 			}
 		}
 
@@ -1518,19 +1533,30 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			
 			const backlinkData = await this.getEagleBacklinkPayload();
 
-			const folderResolution = await this.resolveEagleFolderForUpload(file);
+			const previewUrl = this.app.vault.getResourcePath(file);
+			const folderResolution = await this.resolveEagleFolderForUpload({
+				file,
+				fileName: filenameWithoutExt,
+				previewUrl,
+			});
 			if (folderResolution.cancelled) {
 				this.replaceTextInDocument(editor, placeholderText, originalText);
 				new Notice('Eagle import cancelled');
 				return;
 			}
 
+			const finalName = folderResolution.name || filenameWithoutExt;
+			const finalTags = folderResolution.tags !== undefined ? folderResolution.tags : this.getDefaultTags();
+			const finalAnnotation = [folderResolution.annotation, backlinkData.annotation].filter(Boolean).join('\n\n') || undefined;
+
 			const result = await this.api.addFromPath({
 				path: absolutePath,
-				name: filenameWithoutExt,
-				tags: this.getDefaultTags(),
+				name: finalName,
+				tags: finalTags,
 				folderId: folderResolution.folderId,
-				...backlinkData
+				star: folderResolution.star,
+				...backlinkData,
+				annotation: finalAnnotation,
 			});
 
 			if (!result.success || !result.itemId) {
@@ -1966,15 +1992,25 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 				let eagleNote = '';
 				if (this.settings.excalidrawImportToEagle) {
 					const backlinkData = await this.getEagleBacklinkPayload();
-					const folderResolution = await this.resolveEagleFolderForUpload();
+					const filenameWithoutExt = file.name.replace(/\.[^.]+$/, '');
+					const folderResolution = await this.resolveEagleFolderForUpload({
+						file,
+						fileName: filenameWithoutExt,
+					});
 
 					if (!folderResolution.cancelled) {
+						const finalName = folderResolution.name || filenameWithoutExt;
+						const finalTags = folderResolution.tags !== undefined ? folderResolution.tags : this.getDefaultTags();
+						const finalAnnotation = [folderResolution.annotation, backlinkData.annotation].filter(Boolean).join('\n\n') || undefined;
+
 						const added = await this.api.addFromPath({
 							path: tempPath,
-							name: file.name.replace(/\.[^.]+$/, ''),
-							tags: this.getDefaultTags(),
+							name: finalName,
+							tags: finalTags,
 							folderId: folderResolution.folderId,
-							...backlinkData
+							star: folderResolution.star,
+							...backlinkData,
+							annotation: finalAnnotation,
 						});
 						if (added.success) {
 							eagleNote = ' + Eagle';
@@ -2141,35 +2177,77 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		return parsedTags.length > 0 ? parsedTags : undefined;
 	}
 
-	private async resolveEagleFolderForUpload(activeFile?: TFile | null): Promise<{ folderId?: string; cancelled?: boolean }> {
+	private async resolveEagleFolderForUpload(
+		contextOrFile?: {
+			activeFile?: TFile | null;
+			file?: File | TFile | null;
+			fileName?: string;
+			previewUrl?: string;
+			sourceInfo?: ImageSourceInfo | null;
+		} | TFile | null
+	): Promise<EagleFolderPickerResult> {
+		const context = (contextOrFile instanceof TFile)
+			? { activeFile: contextOrFile }
+			: (contextOrFile || {});
+
 		const mode = this.settings.addFolderMode || (this.settings.enableDefaultFolder ? 'target' : 'target');
 
 		switch (mode) {
 			case 'ask': {
+				let previewUrl = context.previewUrl;
+				let createdBlobUrl = false;
+				if (!previewUrl && context.file && typeof File !== 'undefined' && context.file instanceof File) {
+					try {
+						previewUrl = URL.createObjectURL(context.file);
+						createdBlobUrl = true;
+					} catch { }
+				} else if (!previewUrl && context.file instanceof TFile) {
+					previewUrl = this.app.vault.getResourcePath(context.file);
+				}
+
+				const fileName = context.fileName || (context.file instanceof TFile ? context.file.basename : context.file?.name) || 'Image';
+				const initialAltText = context.sourceInfo?.altText;
+				const initialTags = this.getDefaultTags() || [];
+
 				const result = await EagleFolderPickerModal.pickFolder(
 					this.app,
 					this.api,
-					this.settings.recentEagleFolders || []
+					this.settings.recentEagleFolders || [],
+					{
+						previewUrl,
+						fileName,
+						initialAltText,
+						initialTags,
+					}
 				);
+
+				if (createdBlobUrl && previewUrl) {
+					URL.revokeObjectURL(previewUrl);
+				}
+
 				if (result.cancelled) {
 					return { cancelled: true };
 				}
 				if (result.folderId) {
 					const existing = this.settings.recentEagleFolders || [];
-					const updated = [result.folderId, ...existing.filter(id => id !== result.folderId)].slice(0, 10);
+					const updated = [result.folderId, ...existing.filter((id) => id !== result.folderId)].slice(0, 10);
 					this.settings.recentEagleFolders = updated;
 					void this.saveSettings();
 				}
-				return { folderId: result.folderId, cancelled: false };
+				return result;
 			}
 
 			case 'mirror': {
-				const folderId = await this.resolveMirroredEagleFolder(activeFile);
+				const folderId = await this.resolveMirroredEagleFolder(
+					context.activeFile || (context.file instanceof TFile ? context.file : undefined)
+				);
 				return { folderId, cancelled: false };
 			}
 
 			case 'map': {
-				const folderId = this.resolveMappedEagleFolder(activeFile);
+				const folderId = this.resolveMappedEagleFolder(
+					context.activeFile || (context.file instanceof TFile ? context.file : undefined)
+				);
 				return { folderId, cancelled: false };
 			}
 
@@ -2370,6 +2448,12 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 				updates.annotation = `Linked From Obsidian: [${basename}](${advancedUri})`;
 			}
 			if (updates.url || updates.annotation) {
+				if (updates.annotation) {
+					const existingItem = await this.api.getItemInfo(itemId);
+					if (existingItem?.annotation && !existingItem.annotation.includes(updates.annotation)) {
+						updates.annotation = `${existingItem.annotation}\n\n${updates.annotation}`;
+					}
+				}
 				await this.api.updateItem(itemId, updates);
 			}
 		}
@@ -2390,18 +2474,28 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		const filenameWithoutExt = file.name.replace(/\.[^.]+$/, '');
 		const backlinkData = await this.getEagleBacklinkPayload(!!primaryUrl);
 
-		const folderResolution = await this.resolveEagleFolderForUpload();
+		const folderResolution = await this.resolveEagleFolderForUpload({
+			file,
+			fileName: filenameWithoutExt,
+			sourceInfo,
+		});
 		if (folderResolution.cancelled) {
 			throw new Error('Upload cancelled');
 		}
 
+		const finalName = folderResolution.name || filenameWithoutExt;
+		const finalTags = folderResolution.tags !== undefined ? folderResolution.tags : this.getDefaultTags();
+		const finalAnnotation = [folderResolution.annotation, backlinkData.annotation].filter(Boolean).join('\n\n') || undefined;
+
 		const result = await this.api.addFromPath({
 			path: tempPath,
-			name: filenameWithoutExt,
+			name: finalName,
 			website: primaryUrl || backlinkData.website,
-			tags: this.getDefaultTags(),
+			tags: finalTags,
 			folderId: folderResolution.folderId,
-			...backlinkData
+			star: folderResolution.star,
+			...backlinkData,
+			annotation: finalAnnotation,
 		});
 
 		if (!result.success || !result.itemId) {
@@ -2430,14 +2524,14 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			const ext = getExtFromFilename(file.name);
 			item = {
 				id: itemId,
-				name: filenameWithoutExt,
+				name: finalName,
 				size: file.size,
 				ext: ext,
-				tags: this.getDefaultTags() || [],
+				tags: finalTags || [],
 				folders: folderResolution.folderId ? [folderResolution.folderId] : [],
 				isDeleted: false,
 				url: primaryUrl || '',
-				annotation: '',
+				annotation: finalAnnotation || '',
 				modificationTime: Date.now(),
 				lastModified: Date.now(),
 				width: 0,

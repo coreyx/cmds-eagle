@@ -217,6 +217,7 @@ export class WindowsClipboardProvider implements IClipboardSourceProvider {
 
 			let pageUrl: string | undefined;
 			let imageUrl: string | undefined;
+			let altText: string | undefined;
 
 			if (buf && buf.length > 0) {
 				const text = buf.toString('utf8');
@@ -227,7 +228,7 @@ export class WindowsClipboardProvider implements IClipboardSourceProvider {
 					pageUrl = cleanUrl(pageMatch[1]);
 				}
 
-				// Extract <img src="...">
+				// Extract <img src="..." alt="...">
 				const imgMatch = text.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) ||
 					text.match(/<img[^>]+src=([^\s>]+)/i);
 				if (imgMatch && imgMatch[1]) {
@@ -235,6 +236,11 @@ export class WindowsClipboardProvider implements IClipboardSourceProvider {
 					if (isValidHttpUrl(decoded)) {
 						imageUrl = cleanUrl(decoded);
 					}
+				}
+
+				const altMatch = text.match(/<img[^>]+alt=["']([^"']*)["']/i);
+				if (altMatch && altMatch[1]) {
+					altText = altMatch[1].trim();
 				}
 			}
 
@@ -260,8 +266,8 @@ export class WindowsClipboardProvider implements IClipboardSourceProvider {
 				}
 			}
 
-			if (pageUrl || imageUrl || localFilePath) {
-				return { pageUrl, imageUrl, localFilePath };
+			if (pageUrl || imageUrl || localFilePath || altText) {
+				return { pageUrl, imageUrl, localFilePath, altText };
 			}
 		} catch (err) {
 			console.warn('[CMDS Eagle] Error reading Windows clipboard source:', err);
@@ -289,6 +295,7 @@ export class MacOSClipboardProvider implements IClipboardSourceProvider {
 			const clipboard = electron.clipboard;
 			let pageUrl: string | undefined;
 			let imageUrl: string | undefined;
+			let altText: string | undefined;
 
 			// 1. Chromium family: org.chromium.source-url
 			const chromiumUrl = safelyReadClipboard(() => clipboard.read('org.chromium.source-url'));
@@ -296,7 +303,7 @@ export class MacOSClipboardProvider implements IClipboardSourceProvider {
 				pageUrl = cleanUrl(chromiumUrl);
 			}
 
-			// 2. Read public.html for <img src="..."> and possible SourceURL
+			// 2. Read public.html for <img src="..." alt="..."> and possible SourceURL
 			const html = safelyReadClipboard(() => clipboard.read('public.html'));
 			if (html && typeof html === 'string') {
 				const imgMatch = html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) ||
@@ -306,6 +313,11 @@ export class MacOSClipboardProvider implements IClipboardSourceProvider {
 					if (isValidHttpUrl(decoded)) {
 						imageUrl = cleanUrl(decoded);
 					}
+				}
+
+				const altMatch = html.match(/<img[^>]+alt=["']([^"']*)["']/i);
+				if (altMatch && altMatch[1]) {
+					altText = altMatch[1].trim();
 				}
 
 				if (!pageUrl) {
@@ -361,8 +373,8 @@ export class MacOSClipboardProvider implements IClipboardSourceProvider {
 				}
 			}
 
-			if (pageUrl || imageUrl || localFilePath) {
-				return { pageUrl, imageUrl, localFilePath };
+			if (pageUrl || imageUrl || localFilePath || altText) {
+				return { pageUrl, imageUrl, localFilePath, altText };
 			}
 		} catch (err) {
 			console.warn('[CMDS Eagle] Error reading macOS clipboard source:', err);
