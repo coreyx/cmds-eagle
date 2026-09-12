@@ -118,7 +118,7 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 
 			new Setting(containerEl)
 				.setName('Add image source to Extra Links')
-				.setDesc('Push the captured image source URLs into Eagle\'s Extra Links panel alongside any Obsidian backlinks.')
+				.setDesc('Push the captured image source URLs into Eagle\'s Extra Links panel alongside any Obsidian backlinks. Requires Extra Links plugin for Eagle.')
 				.addDropdown(dropdown => dropdown
 					.addOption('none', 'None (do not add to Extra Links)')
 					.addOption('page', 'Page URL only')
