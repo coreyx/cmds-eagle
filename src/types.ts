@@ -110,10 +110,14 @@ export interface EagleFolderMapping {
 }
 
 export interface EagleFolderPickerItem {
-	type: 'root' | 'recent' | 'folder';
+	type: 'root' | 'recent' | 'folder' | 'tree-folder' | 'search-folder';
 	id?: string;
 	name: string;
 	path: string;
+	depth?: number;
+	hasChildren?: boolean;
+	isExpanded?: boolean;
+	parentId?: string;
 }
 
 export interface ImageSourceInfo {

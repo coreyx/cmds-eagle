@@ -1108,59 +1108,335 @@ var init_modals = __esm({
         this.onSelect(item.id);
       }
     };
-    EagleFolderPickerModal = class extends import_obsidian2.FuzzySuggestModal {
-      constructor(app, items, onSelect) {
+    EagleFolderPickerModal = class extends import_obsidian2.Modal {
+      constructor(app, folders, recentFolders, flattenedFolders, onSelect) {
         super(app);
         this.resolved = false;
-        this.items = items;
+        this.searchQuery = "";
+        this.expandedFolderIds = /* @__PURE__ */ new Set();
+        this.selectedIndex = 0;
+        this.visibleItems = [];
+        this.rowElements = [];
+        this.folders = folders;
+        this.recentFolders = recentFolders;
+        this.flattenedFolders = flattenedFolders;
         this.onSelect = onSelect;
-        this.setPlaceholder("Select Eagle folder... (Esc to cancel)");
-        this.setInstructions([
-          { command: "\u2191\u2193", purpose: "to navigate" },
-          { command: "\u21B5", purpose: "to select folder" },
-          { command: "esc", purpose: "to cancel upload" }
-        ]);
       }
-      getItems() {
-        return this.items;
+      onOpen() {
+        const { contentEl, modalEl } = this;
+        modalEl.addClass("cmdspace-eagle-picker-modal-window");
+        contentEl.empty();
+        contentEl.addClass("cmdspace-eagle-folder-picker-modal");
+        const headerEl = contentEl.createDiv({ cls: "cmdspace-eagle-picker-header" });
+        headerEl.createDiv({ cls: "cmdspace-eagle-picker-title", text: "Select Eagle Folder" });
+        const searchContainer = headerEl.createDiv({ cls: "cmdspace-eagle-picker-search-container" });
+        this.searchInputEl = searchContainer.createEl("input", {
+          type: "text",
+          cls: "cmdspace-eagle-picker-search-input",
+          placeholder: "Type to search or browse tree... (Esc to cancel)"
+        });
+        this.searchInputEl.addEventListener("input", () => {
+          this.searchQuery = this.searchInputEl.value;
+          this.selectedIndex = 0;
+          this.renderList();
+        });
+        this.searchInputEl.addEventListener("keydown", (e) => {
+          this.handleKeydown(e);
+        });
+        this.listContainerEl = contentEl.createDiv({ cls: "cmdspace-eagle-picker-list-container" });
+        const footerEl = contentEl.createDiv({ cls: "cmdspace-eagle-picker-footer" });
+        const instructionsEl = footerEl.createDiv({ cls: "cmdspace-eagle-picker-instructions" });
+        const addInstruction = (key, label) => {
+          const item = instructionsEl.createDiv({ cls: "cmdspace-eagle-picker-instruction" });
+          item.createEl("kbd", { text: key });
+          item.createSpan({ text: label });
+        };
+        addInstruction("\u2191\u2193", "navigate");
+        addInstruction("\u2192", "expand");
+        addInstruction("\u2190", "collapse");
+        addInstruction("\u21B5", "select");
+        addInstruction("esc", "cancel");
+        this.renderList();
+        setTimeout(() => {
+          this.searchInputEl.focus();
+        }, 20);
       }
-      getItemText(item) {
-        return `${item.name} ${item.path}`;
+      renderList() {
+        this.listContainerEl.empty();
+        this.visibleItems = [];
+        this.rowElements = [];
+        const query = this.searchQuery.trim().toLowerCase();
+        if (query.length > 0) {
+          this.renderSearchResults(query);
+        } else {
+          this.renderTreeView();
+        }
+        if (this.visibleItems.length === 0) {
+          this.listContainerEl.createDiv({
+            cls: "cmdspace-eagle-picker-empty",
+            text: "No matching folders found."
+          });
+          return;
+        }
+        if (this.selectedIndex < 0)
+          this.selectedIndex = 0;
+        if (this.selectedIndex >= this.visibleItems.length) {
+          this.selectedIndex = this.visibleItems.length - 1;
+        }
+        this.updateSelection(false);
       }
-      selectSuggestion(value, evt) {
-        this.resolved = true;
-        super.selectSuggestion(value, evt);
+      renderTreeView() {
+        const rootItem = {
+          type: "root",
+          name: "Library Root (Uncategorized)",
+          path: "Library Root"
+        };
+        this.visibleItems.push(rootItem);
+        this.createRowEl(rootItem, this.visibleItems.length - 1);
+        if (this.recentFolders.length > 0) {
+          this.listContainerEl.createDiv({
+            cls: "cmdspace-eagle-picker-section-header",
+            text: "RECENT FOLDERS"
+          });
+          for (const rf of this.recentFolders) {
+            const recentItem = {
+              type: "recent",
+              id: rf.id,
+              name: rf.name,
+              path: rf.path
+            };
+            this.visibleItems.push(recentItem);
+            this.createRowEl(recentItem, this.visibleItems.length - 1);
+          }
+        }
+        const allHeader = this.listContainerEl.createDiv({
+          cls: "cmdspace-eagle-picker-section-header"
+        });
+        allHeader.createSpan({ text: "ALL FOLDERS" });
+        const actionContainer = allHeader.createDiv({ cls: "cmdspace-eagle-picker-section-actions" });
+        const expandAllBtn = actionContainer.createEl("button", {
+          cls: "cmdspace-eagle-picker-action-btn",
+          text: "Expand all"
+        });
+        expandAllBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.expandAll();
+        });
+        const collapseAllBtn = actionContainer.createEl("button", {
+          cls: "cmdspace-eagle-picker-action-btn",
+          text: "Collapse all"
+        });
+        collapseAllBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.collapseAll();
+        });
+        const addNodes = (folderList, depth, parentId, parentPath = "") => {
+          for (const f of folderList) {
+            const currentPath = parentPath ? `${parentPath} / ${f.name}` : f.name;
+            const hasChildren = Array.isArray(f.children) && f.children.length > 0;
+            const isExpanded = this.expandedFolderIds.has(f.id);
+            const treeItem = {
+              type: "tree-folder",
+              id: f.id,
+              name: f.name,
+              path: currentPath,
+              depth,
+              hasChildren,
+              isExpanded,
+              parentId
+            };
+            this.visibleItems.push(treeItem);
+            this.createRowEl(treeItem, this.visibleItems.length - 1, f);
+            if (hasChildren && isExpanded) {
+              addNodes(f.children, depth + 1, f.id, currentPath);
+            }
+          }
+        };
+        addNodes(this.folders, 0);
       }
-      onChooseItem(item, _evt) {
+      renderSearchResults(query) {
+        this.listContainerEl.createDiv({
+          cls: "cmdspace-eagle-picker-section-header",
+          text: "SEARCH RESULTS"
+        });
+        if ("library root uncategorized".includes(query)) {
+          const rootItem = {
+            type: "root",
+            name: "Library Root (Uncategorized)",
+            path: "Library Root"
+          };
+          this.visibleItems.push(rootItem);
+          this.createRowEl(rootItem, this.visibleItems.length - 1);
+        }
+        for (const f of this.flattenedFolders) {
+          if (f.name.toLowerCase().includes(query) || f.path.toLowerCase().includes(query)) {
+            const searchItem = {
+              type: "search-folder",
+              id: f.id,
+              name: f.name,
+              path: f.path
+            };
+            this.visibleItems.push(searchItem);
+            this.createRowEl(searchItem, this.visibleItems.length - 1);
+          }
+        }
+      }
+      createRowEl(item, index, folderData) {
+        const row = this.listContainerEl.createDiv({ cls: "cmdspace-eagle-tree-row" });
+        this.rowElements.push(row);
+        if (item.type === "tree-folder" && item.depth !== void 0) {
+          row.style.paddingLeft = `${item.depth * 20 + 8}px`;
+        }
+        if (item.type === "tree-folder") {
+          if (item.hasChildren) {
+            const chevron = row.createSpan({
+              cls: "cmdspace-eagle-tree-chevron",
+              text: item.isExpanded ? "\u25BC" : "\u25B6"
+            });
+            chevron.addEventListener("click", (e) => {
+              e.stopPropagation();
+              if (this.expandedFolderIds.has(item.id)) {
+                this.expandedFolderIds.delete(item.id);
+              } else {
+                this.expandedFolderIds.add(item.id);
+              }
+              this.renderList();
+            });
+          } else {
+            row.createSpan({ cls: "cmdspace-eagle-tree-chevron-spacer" });
+          }
+        }
+        const iconEl = row.createSpan({ cls: "cmdspace-eagle-tree-icon" });
+        if (item.type === "root") {
+          iconEl.setText("\u{1F4DA}");
+        } else if (item.type === "recent") {
+          iconEl.setText("\u{1F552}");
+        } else if (item.type === "tree-folder") {
+          iconEl.setText(item.isExpanded ? "\u{1F4C2}" : "\u{1F4C1}");
+        } else {
+          iconEl.setText("\u{1F4C1}");
+        }
+        const nameEl = row.createSpan({ cls: "cmdspace-eagle-tree-name" });
+        nameEl.createSpan({ text: item.name });
+        if (item.type === "root") {
+          nameEl.createSpan({ cls: "cmdspace-eagle-badge cmdspace-eagle-badge-root", text: "Root" });
+        } else if (item.type === "recent") {
+          nameEl.createSpan({ cls: "cmdspace-eagle-badge cmdspace-eagle-badge-recent", text: "Recent" });
+        }
+        if (item.type === "tree-folder" && item.hasChildren && (folderData == null ? void 0 : folderData.children)) {
+          nameEl.createSpan({
+            cls: "cmdspace-eagle-tree-child-count",
+            text: `(${folderData.children.length})`
+          });
+        }
+        if ((item.type === "recent" || item.type === "search-folder") && item.path !== item.name) {
+          row.createSpan({ cls: "cmdspace-eagle-tree-path", text: item.path });
+        }
+        row.addEventListener("mouseenter", () => {
+          this.selectedIndex = index;
+          this.updateSelection(false);
+        });
+        row.addEventListener("click", () => {
+          this.selectItem(item);
+        });
+        return row;
+      }
+      updateSelection(scrollIntoView = true) {
+        for (let i = 0; i < this.rowElements.length; i++) {
+          const el = this.rowElements[i];
+          if (i === this.selectedIndex) {
+            el.addClass("is-selected");
+            if (scrollIntoView) {
+              el.scrollIntoView({ block: "nearest" });
+            }
+          } else {
+            el.removeClass("is-selected");
+          }
+        }
+      }
+      expandAll() {
+        const collectIds = (folders) => {
+          for (const f of folders) {
+            if (Array.isArray(f.children) && f.children.length > 0) {
+              this.expandedFolderIds.add(f.id);
+              collectIds(f.children);
+            }
+          }
+        };
+        collectIds(this.folders);
+        this.renderList();
+      }
+      collapseAll() {
+        this.expandedFolderIds.clear();
+        this.renderList();
+      }
+      handleKeydown(e) {
+        if (this.visibleItems.length === 0)
+          return;
+        switch (e.key) {
+          case "ArrowDown": {
+            e.preventDefault();
+            this.selectedIndex = Math.min(this.selectedIndex + 1, this.visibleItems.length - 1);
+            this.updateSelection(true);
+            break;
+          }
+          case "ArrowUp": {
+            e.preventDefault();
+            this.selectedIndex = Math.max(this.selectedIndex - 1, 0);
+            this.updateSelection(true);
+            break;
+          }
+          case "ArrowRight": {
+            const current = this.visibleItems[this.selectedIndex];
+            if ((current == null ? void 0 : current.type) === "tree-folder" && current.hasChildren) {
+              e.preventDefault();
+              if (!current.isExpanded) {
+                this.expandedFolderIds.add(current.id);
+                this.renderList();
+              } else {
+                this.selectedIndex = Math.min(this.selectedIndex + 1, this.visibleItems.length - 1);
+                this.updateSelection(true);
+              }
+            }
+            break;
+          }
+          case "ArrowLeft": {
+            const current = this.visibleItems[this.selectedIndex];
+            if ((current == null ? void 0 : current.type) === "tree-folder") {
+              e.preventDefault();
+              if (current.isExpanded) {
+                this.expandedFolderIds.delete(current.id);
+                this.renderList();
+              } else if (current.parentId) {
+                const parentIdx = this.visibleItems.findIndex((v) => v.id === current.parentId);
+                if (parentIdx !== -1) {
+                  this.selectedIndex = parentIdx;
+                  this.updateSelection(true);
+                }
+              }
+            }
+            break;
+          }
+          case "Enter": {
+            e.preventDefault();
+            const current = this.visibleItems[this.selectedIndex];
+            if (current) {
+              this.selectItem(current);
+            }
+            break;
+          }
+        }
+      }
+      selectItem(item) {
+        if (this.resolved)
+          return;
         this.resolved = true;
         if (item.type === "root") {
           this.onSelect({ folderId: void 0, folderName: "Library Root", cancelled: false });
         } else {
           this.onSelect({ folderId: item.id, folderName: item.path, cancelled: false });
         }
-      }
-      renderSuggestion(match, el) {
-        const item = match.item;
-        const container = el.createDiv({ cls: "cmdspace-eagle-picker-item" });
-        const iconEl = container.createDiv({ cls: "cmdspace-eagle-picker-icon" });
-        if (item.type === "root") {
-          iconEl.setText("\u{1F4DA}");
-        } else if (item.type === "recent") {
-          iconEl.setText("\u{1F552}");
-        } else {
-          iconEl.setText("\u{1F4C1}");
-        }
-        const infoEl = container.createDiv({ cls: "cmdspace-eagle-picker-info" });
-        const nameRow = infoEl.createDiv({ cls: "cmdspace-eagle-picker-name" });
-        nameRow.createSpan({ text: item.name });
-        if (item.type === "recent") {
-          nameRow.createSpan({ cls: "cmdspace-eagle-badge cmdspace-eagle-badge-recent", text: "Recent" });
-        } else if (item.type === "root") {
-          nameRow.createSpan({ cls: "cmdspace-eagle-badge cmdspace-eagle-badge-root", text: "Root" });
-        }
-        if (item.type !== "root" && item.path !== item.name) {
-          infoEl.createDiv({ cls: "cmdspace-eagle-picker-path", text: item.path });
-        }
+        this.close();
       }
       onClose() {
         if (!this.resolved) {
@@ -1183,13 +1459,6 @@ var init_modals = __esm({
         for (const f of flattened) {
           folderMap.set(f.id, f);
         }
-        const items = [
-          {
-            type: "root",
-            name: "Library Root (Uncategorized)",
-            path: "Library Root"
-          }
-        ];
         const combinedRecentIds = [];
         const seenRecent = /* @__PURE__ */ new Set();
         for (const id of recentFolderIds) {
@@ -1204,29 +1473,23 @@ var init_modals = __esm({
             combinedRecentIds.push(rf.id);
           }
         }
+        const resolvedRecents = [];
         for (const id of combinedRecentIds) {
           const f = folderMap.get(id);
           if (f) {
-            items.push({
-              type: "recent",
-              id: f.id,
-              name: f.name,
-              path: f.path
-            });
+            resolvedRecents.push(f);
           }
         }
-        for (const f of flattened) {
-          items.push({
-            type: "folder",
-            id: f.id,
-            name: f.name,
-            path: f.path
-          });
-        }
         return new Promise((resolve) => {
-          const modal = new EagleFolderPickerModal(app, items, (result) => {
-            resolve(result);
-          });
+          const modal = new EagleFolderPickerModal(
+            app,
+            folders,
+            resolvedRecents,
+            flattened,
+            (result) => {
+              resolve(result);
+            }
+          );
           modal.open();
         });
       }

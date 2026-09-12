@@ -7,12 +7,22 @@
 * **Local File Source Link in Metadata Card:** When "Include local file source in metadata card" is enabled (`includeLocalSourceInMetadataCard`, disabled by default), images dragged or pasted from your operating system's file explorer (Windows File Explorer, macOS Finder) include a clickable `[Source: File](file://...)` link in the metadata card pointing back to the original file. This operates independently from web URL sources.
 * **Eagle Item Link Format Setting:** Added a new setting (`eagleItemLinkFormat`) defaulting to the modern HTTP localhost URL format (`http://localhost:41595/item?id=UUID`) while preserving the classic `eagle://item/UUID` protocol format as an option.
 * **Target Folder 2.0 (Folder Routing Options):** Enhanced the folder assignment settings with a unified dropdown ("When adding an item to Eagle") offering four workflow options:
-  * **Ask:** Presents an interactive folder picker modal before each upload, modeled after the Eagle Chrome extension. It lets you quickly choose "Library Root (Uncategorized)", pick from your most recently used folders, or fuzzy-search the full folder hierarchy. Pressing Esc cancels the upload cleanly.
+  * **Ask:** Presents an interactive modal picker before each upload, modeled after the Eagle Chrome extension:
+    * **Expandable / Collapsible Tree View:** Browse folders as a nested tree with toggleable chevrons (`▶` / `▼`), indentation per depth level, and child folder count badges.
+    * **Expand All / Collapse All:** Quick toggle buttons in the header to expand or collapse your entire folder hierarchy with one click.
+    * **Recent Folders Kept At Top:** Combines recently used folders from Eagle (`/api/folder/listRecent`) with your selection history in Obsidian.
+    * **Library Root Option:** Quick "Library Root (Uncategorized)" option to save without a folder.
+    * **Real-Time Search Filtering:** Type any keywords to filter folders across your entire library with complete breadcrumb paths (`Parent / Child / Folder`).
+    * **Complete Keyboard Navigation:** Navigate up/down with arrow keys, expand with `→`, collapse with `←`, select with `Enter`, and cancel with `Esc`.
   * **Add to Target Folder:** Preserves the previous designated target folder behavior, with a new "Clear" button to easily reset destination back to root.
   * **Mirror Obsidian Folder Hierarchy:** Automatically mirrors the active note's directory path relative to the vault root inside Eagle, dynamically creating intermediate and leaf folders via Eagle's Web API (`/api/folder/create`) as needed.
   * **Use Folder Map:** Lets you configure custom mapping rules between Obsidian folders and Eagle folders in plugin settings, with automatic longest-prefix matching for subdirectories.
 * **Default Eagle Tags:** Added a new setting to automatically append a comma-separated list of tags (e.g., `obsidian, inspiration`) to all newly uploaded Eagle assets.
 * **Obsidian Backlinks in Eagle:** You can now configure the plugin to automatically generate bidirectional backlinks. When an image is uploaded to Eagle, it can save an Obsidian Advanced URI back to the original note. You can choose to place this link in Eagle's URL field (making the standard link button open Obsidian), in the Note field as a markdown link, or both. To ensure these links never break even if you rename the file, the plugin will automatically generate and save a `uid` to the note's frontmatter if one doesn't already exist.
+
+## Folder Picker & Modal Fixes
+
+* **Clean Folder Selection in Ask Mode:** Fixed an issue where selecting a folder in the "Ask" mode picker modal could trigger "Upload cancelled" due to modal dismissal timing. Selection state is now locked before modal closure.
 
 ## Metadata Card & Image Source URL Fixes
 

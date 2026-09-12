@@ -9,6 +9,9 @@ Obsidian plugin to connect [Eagle](https://eagle.cool) asset library with your v
 - **Search & Embed**: Search Eagle library and embed images directly into notes
 - **Cloud Upload**: Upload images to cloud storage (ImgHippo, Cloudflare R2, Amazon S3, WebDAV)
 - **Paste/Drop Integration**: Automatically handle pasted or dropped images
+- **Target Folder Routing**: Route uploads using 4 modes: interactive **Ask** tree picker, designated **Target Folder**, **Mirror Obsidian Folder Hierarchy**, or custom **Folder Map**
+- **Image Source Capture**: Automatically capture webpage origin URLs, direct image asset URLs, or local file links into metadata cards and Eagle Extra Links
+- **Obsidian Backlinks**: Automatically write bidirectional Obsidian Advanced URI backlinks to Eagle notes/URL fields
 - **Batch Convert**: Convert all local images in a note to cloud URLs
 - **Cross-Platform Sync**: Automatically convert image paths between Mac and Windows
 - **Excalidraw Integration**: Paste or drop images onto an Excalidraw canvas — Eagle assets embed the original, and clipboard screenshots are uploaded to your cloud provider (and optionally added to your Eagle library) instead of bloating the vault with attachments
@@ -50,6 +53,14 @@ When pasting or dropping images, choose where to save them.
 ![Search Modal](assets/CMDS-eagle2.gif)
 ![Search Results](assets/CMDS-eagle3.png)
 
+### Target Folder Routing
+
+Control where newly added images are stored in your Eagle library with 4 workflow options under **Settings → When adding an item to Eagle**:
+
+- **Ask**: Prompts before each upload with an interactive modal picker featuring an expandable/collapsible folder tree, real-time search with full breadcrumbs, quick expand/collapse all buttons, recent folder history, and full keyboard navigation.
+- **Add to Target Folder**: Always routes new uploads to a specific designated folder in Eagle (with a "Clear" button to reset to root).
+- **Mirror Obsidian Folder Hierarchy**: Automatically creates and mirrors your active note's relative vault path in Eagle, creating intermediate folders as needed.
+- **Use Folder Map**: Map specific Obsidian vault directories to specific Eagle folders with automatic longest-prefix matching for subdirectories.
 
 ### Cloud Upload
 

@@ -229,35 +229,146 @@
 	cursor: pointer;
 }
 
-/* Target Folder 2.0: Folder Picker Modal */
-.cmdspace-eagle-picker-item {
+/* Target Folder 2.0: Folder Picker Tree Modal */
+.cmdspace-eagle-picker-modal-window {
+	max-width: 650px;
+	width: 85vw;
+}
+
+.cmdspace-eagle-folder-picker-modal {
 	display: flex;
-	align-items: center;
-	gap: 10px;
-	padding: 6px 8px;
+	flex-direction: column;
+	max-height: 75vh;
+	padding: 0;
+}
+
+.cmdspace-eagle-picker-header {
+	padding: 16px 20px 12px 20px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.cmdspace-eagle-picker-title {
+	font-size: 16px;
+	font-weight: 600;
+	margin-bottom: 10px;
+}
+
+.cmdspace-eagle-picker-search-container {
+	position: relative;
 	width: 100%;
 }
 
-.cmdspace-eagle-picker-icon {
-	font-size: 16px;
+.cmdspace-eagle-picker-search-input {
+	width: 100%;
+	font-size: 14px;
+	padding: 8px 12px;
+	border-radius: 6px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-modifier-form-field);
+	color: var(--text-normal);
+}
+
+.cmdspace-eagle-picker-search-input:focus {
+	border-color: var(--interactive-accent);
+	box-shadow: 0 0 0 1px var(--interactive-accent);
+}
+
+.cmdspace-eagle-picker-list-container {
+	flex: 1;
+	overflow-y: auto;
+	padding: 8px 12px;
+	max-height: 420px;
+	min-height: 200px;
+}
+
+.cmdspace-eagle-picker-section-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	font-size: 11px;
+	font-weight: 600;
+	color: var(--text-muted);
+	letter-spacing: 0.5px;
+	text-transform: uppercase;
+	padding: 10px 8px 4px 8px;
+}
+
+.cmdspace-eagle-picker-section-actions {
+	display: flex;
+	gap: 8px;
+}
+
+.cmdspace-eagle-picker-action-btn {
+	background: none;
+	border: none;
+	color: var(--text-muted);
+	cursor: pointer;
+	font-size: 11px;
+	padding: 2px 4px;
+	border-radius: 3px;
+}
+
+.cmdspace-eagle-picker-action-btn:hover {
+	color: var(--text-normal);
+	background: var(--background-modifier-hover);
+}
+
+.cmdspace-eagle-tree-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 6px 8px;
+	border-radius: 4px;
+	cursor: pointer;
+	user-select: none;
+	transition: background 0.1s ease;
+}
+
+.cmdspace-eagle-tree-row:hover {
+	background: var(--background-modifier-hover);
+}
+
+.cmdspace-eagle-tree-row.is-selected {
+	background: var(--nav-item-background-active, var(--interactive-accent-hover));
+	color: var(--text-normal);
+}
+
+.cmdspace-eagle-tree-chevron {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	height: 18px;
+	font-size: 10px;
+	color: var(--text-muted);
+	border-radius: 3px;
+	flex-shrink: 0;
+	cursor: pointer;
+}
+
+.cmdspace-eagle-tree-chevron:hover {
+	color: var(--text-normal);
+	background: var(--background-modifier-hover);
+}
+
+.cmdspace-eagle-tree-chevron-spacer {
+	width: 18px;
+	height: 18px;
+	flex-shrink: 0;
+}
+
+.cmdspace-eagle-tree-icon {
+	font-size: 15px;
 	flex-shrink: 0;
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	width: 24px;
-	height: 24px;
+	width: 20px;
 }
 
-.cmdspace-eagle-picker-info {
-	flex: 1;
-	min-width: 0;
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-}
-
-.cmdspace-eagle-picker-name {
+.cmdspace-eagle-tree-name {
 	font-weight: 500;
+	flex: 1;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -266,9 +377,16 @@
 	gap: 6px;
 }
 
-.cmdspace-eagle-picker-path {
+.cmdspace-eagle-tree-child-count {
 	font-size: 11px;
 	color: var(--text-muted);
+	font-weight: 400;
+}
+
+.cmdspace-eagle-tree-path {
+	font-size: 11px;
+	color: var(--text-muted);
+	margin-left: 8px;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -291,6 +409,48 @@
 .cmdspace-eagle-badge-root {
 	background: var(--background-modifier-border);
 	color: var(--text-muted);
+}
+
+.cmdspace-eagle-picker-empty {
+	padding: 30px;
+	text-align: center;
+	color: var(--text-muted);
+	font-size: 13px;
+}
+
+.cmdspace-eagle-picker-footer {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 10px 16px;
+	border-top: 1px solid var(--background-modifier-border);
+	font-size: 11px;
+	color: var(--text-muted);
+	background: var(--background-secondary);
+	border-bottom-left-radius: var(--modal-radius, 8px);
+	border-bottom-right-radius: var(--modal-radius, 8px);
+}
+
+.cmdspace-eagle-picker-instructions {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex-wrap: wrap;
+}
+
+.cmdspace-eagle-picker-instruction {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.cmdspace-eagle-picker-instruction kbd {
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 3px;
+	padding: 1px 4px;
+	font-size: 10px;
+	font-family: inherit;
 }
 
 /* Target Folder 2.0: Folder Mappings Settings */
