@@ -100,6 +100,22 @@ export type ExtraLinksImageSource = 'none' | 'page' | 'image' | 'both';
 
 export type MetadataCardImageSource = 'none' | 'page' | 'image' | 'both';
 
+export type EagleAddFolderMode = 'ask' | 'target' | 'mirror' | 'map';
+
+export interface EagleFolderMapping {
+	id: string;
+	obsidianFolder: string;
+	eagleFolderId: string;
+	eagleFolderName: string;
+}
+
+export interface EagleFolderPickerItem {
+	type: 'root' | 'recent' | 'folder';
+	id?: string;
+	name: string;
+	path: string;
+}
+
 export interface ImageSourceInfo {
 	pageUrl?: string;
 	imageUrl?: string;
@@ -210,6 +226,9 @@ export interface CMDSPACEEagleSettings {
 	enableDefaultFolder: boolean;
 	defaultFolder: string;
 	defaultFolderName: string;
+	addFolderMode: EagleAddFolderMode;
+	folderMappings: EagleFolderMapping[];
+	recentEagleFolders: string[];
 	enableDefaultTags: boolean;
 	defaultTags: string;
 	enableBacklinks: boolean;
@@ -264,6 +283,9 @@ export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
 	enableDefaultFolder: false,
 	defaultFolder: '',
 	defaultFolderName: '',
+	addFolderMode: 'target',
+	folderMappings: [],
+	recentEagleFolders: [],
 	enableDefaultTags: false,
 	defaultTags: '',
 	enableBacklinks: false,

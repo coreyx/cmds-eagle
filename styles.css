@@ -228,3 +228,109 @@
 	padding: 4px 8px;
 	cursor: pointer;
 }
+
+/* Target Folder 2.0: Folder Picker Modal */
+.cmdspace-eagle-picker-item {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 6px 8px;
+	width: 100%;
+}
+
+.cmdspace-eagle-picker-icon {
+	font-size: 16px;
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+}
+
+.cmdspace-eagle-picker-info {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.cmdspace-eagle-picker-name {
+	font-weight: 500;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.cmdspace-eagle-picker-path {
+	font-size: 11px;
+	color: var(--text-muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.cmdspace-eagle-badge {
+	font-size: 10px;
+	padding: 1px 5px;
+	border-radius: 3px;
+	font-weight: 500;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+}
+
+.cmdspace-eagle-badge-recent {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+.cmdspace-eagle-badge-root {
+	background: var(--background-modifier-border);
+	color: var(--text-muted);
+}
+
+/* Target Folder 2.0: Folder Mappings Settings */
+.cmdspace-eagle-mapping-list {
+	margin: 10px 0;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	overflow: hidden;
+}
+
+.cmdspace-eagle-mapping-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 8px 12px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.cmdspace-eagle-mapping-row:last-child {
+	border-bottom: none;
+}
+
+.cmdspace-eagle-mapping-paths {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: 1;
+	min-width: 0;
+}
+
+.cmdspace-eagle-mapping-vault {
+	font-weight: 500;
+	color: var(--text-normal);
+}
+
+.cmdspace-eagle-mapping-arrow {
+	color: var(--text-muted);
+}
+
+.cmdspace-eagle-mapping-eagle {
+	color: var(--text-accent);
+}
+

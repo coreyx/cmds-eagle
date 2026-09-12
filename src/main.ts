@@ -12,6 +12,8 @@ import {
 	CMDSPACEEagleSettings,
 	DEFAULT_SETTINGS,
 	EagleItem,
+	EagleFolder,
+	EagleAddFolderMode,
 	ImageSourceInfo,
 	MetadataCardImageSource,
 	ComputerProfile,
@@ -27,7 +29,7 @@ import {
 	extractEagleItemId,
 	buildEagleCustomEmbedUrl,
 } from './api';
-import { EagleSearchModal, ImagePasteChoiceModal, EagleLinkChoiceModal } from './modals';
+import { EagleSearchModal, ImagePasteChoiceModal, EagleLinkChoiceModal, EagleFolderPickerModal } from './modals';
 import { CMDSPACEEagleSettingTab } from './settings';
 import { createCloudProvider, getMimeType, getExtFromFilename, CloudProvider } from './cloud-providers';
 import { ClipboardSourceService, extractDomain, cleanUrl, isValidHttpUrl } from './clipboard-source';
@@ -195,6 +197,11 @@ export default class CMDSPACELinkEagle extends Plugin {
 		// Auto-migrate boolean includeSourceInMetadataCard to 'page' | 'none'
 		if (typeof (this.settings as any).includeSourceInMetadataCard === 'boolean') {
 			this.settings.includeSourceInMetadataCard = (this.settings as any).includeSourceInMetadataCard ? 'page' : 'none';
+			await this.saveSettings();
+		}
+		// Auto-migrate Target Folder 2.0: enableDefaultFolder -> addFolderMode
+		if (!(saved as any)?.addFolderMode) {
+			this.settings.addFolderMode = this.settings.enableDefaultFolder ? 'target' : 'target';
 			await this.saveSettings();
 		}
 	}
@@ -647,11 +654,17 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		const name = `Captured from Obsidian - ${new Date().toISOString()}`;
 		const backlinkData = await this.getEagleBacklinkPayload();
 
+		const folderResolution = await this.resolveEagleFolderForUpload();
+		if (folderResolution.cancelled) {
+			new Notice('Capture to Eagle cancelled');
+			return;
+		}
+
 		const success = await this.api.addFromUrl({
 			url: clipboardText,
 			name,
 			tags: this.getDefaultTags(),
-			folderId: this.settings.enableDefaultFolder ? (this.settings.defaultFolder || undefined) : undefined,
+			folderId: folderResolution.folderId,
 			...backlinkData
 		});
 
@@ -1335,6 +1348,11 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			new Notice(`Uploaded to Eagle: ${displayName}`);
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+			if (errorMessage === 'Upload cancelled') {
+				this.replaceTextInDocument(editor, placeholderText, '');
+				new Notice('Upload cancelled');
+				return;
+			}
 			const errorText = `<!-- Failed to upload ${file.name}: ${errorMessage} -->`;
 			this.replaceTextInDocument(editor, placeholderText, errorText);
 			console.error('Failed to upload image:', error);
@@ -1500,11 +1518,18 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			
 			const backlinkData = await this.getEagleBacklinkPayload();
 
+			const folderResolution = await this.resolveEagleFolderForUpload(file);
+			if (folderResolution.cancelled) {
+				this.replaceTextInDocument(editor, placeholderText, originalText);
+				new Notice('Eagle import cancelled');
+				return;
+			}
+
 			const result = await this.api.addFromPath({
 				path: absolutePath,
 				name: filenameWithoutExt,
 				tags: this.getDefaultTags(),
-				folderId: this.settings.enableDefaultFolder ? (this.settings.defaultFolder || undefined) : undefined,
+				folderId: folderResolution.folderId,
 				...backlinkData
 			});
 
@@ -1941,18 +1966,21 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 				let eagleNote = '';
 				if (this.settings.excalidrawImportToEagle) {
 					const backlinkData = await this.getEagleBacklinkPayload();
+					const folderResolution = await this.resolveEagleFolderForUpload();
 
-					const added = await this.api.addFromPath({
-						path: tempPath,
-						name: file.name.replace(/\.[^.]+$/, ''),
-						tags: this.getDefaultTags(),
-						folderId: this.settings.enableDefaultFolder ? (this.settings.defaultFolder || undefined) : undefined,
-						...backlinkData
-					});
-					if (added.success) {
-						eagleNote = ' + Eagle';
-						if (added.itemId) {
-							void this.applyObsidianBacklink(added.itemId);
+					if (!folderResolution.cancelled) {
+						const added = await this.api.addFromPath({
+							path: tempPath,
+							name: file.name.replace(/\.[^.]+$/, ''),
+							tags: this.getDefaultTags(),
+							folderId: folderResolution.folderId,
+							...backlinkData
+						});
+						if (added.success) {
+							eagleNote = ' + Eagle';
+							if (added.itemId) {
+								void this.applyObsidianBacklink(added.itemId);
+							}
 						}
 					}
 				}
@@ -2113,6 +2141,124 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		return parsedTags.length > 0 ? parsedTags : undefined;
 	}
 
+	private async resolveEagleFolderForUpload(activeFile?: TFile | null): Promise<{ folderId?: string; cancelled?: boolean }> {
+		const mode = this.settings.addFolderMode || (this.settings.enableDefaultFolder ? 'target' : 'target');
+
+		switch (mode) {
+			case 'ask': {
+				const result = await EagleFolderPickerModal.pickFolder(
+					this.app,
+					this.api,
+					this.settings.recentEagleFolders || []
+				);
+				if (result.cancelled) {
+					return { cancelled: true };
+				}
+				if (result.folderId) {
+					const existing = this.settings.recentEagleFolders || [];
+					const updated = [result.folderId, ...existing.filter(id => id !== result.folderId)].slice(0, 10);
+					this.settings.recentEagleFolders = updated;
+					void this.saveSettings();
+				}
+				return { folderId: result.folderId, cancelled: false };
+			}
+
+			case 'mirror': {
+				const folderId = await this.resolveMirroredEagleFolder(activeFile);
+				return { folderId, cancelled: false };
+			}
+
+			case 'map': {
+				const folderId = this.resolveMappedEagleFolder(activeFile);
+				return { folderId, cancelled: false };
+			}
+
+			case 'target':
+			default: {
+				const folderId = this.settings.defaultFolder || undefined;
+				return { folderId, cancelled: false };
+			}
+		}
+	}
+
+	private async resolveMirroredEagleFolder(activeFile?: TFile | null): Promise<string | undefined> {
+		const file = activeFile ?? this.app.workspace.getActiveFile();
+		const folderPath = file?.parent?.path;
+		if (!folderPath || folderPath === '/' || folderPath === '.') {
+			return undefined;
+		}
+
+		const segments = folderPath.split('/').map(s => s.trim()).filter(s => s.length > 0);
+		if (segments.length === 0) {
+			return undefined;
+		}
+
+		try {
+			const eagleFolders = await this.api.listFolders();
+			let currentParentId: string | undefined = undefined;
+			let currentLevelFolders = eagleFolders;
+
+			for (const segment of segments) {
+				const matchedFolder = currentLevelFolders.find(f => f.name.toLowerCase() === segment.toLowerCase());
+				if (matchedFolder) {
+					currentParentId = matchedFolder.id;
+					currentLevelFolders = matchedFolder.children || [];
+				} else {
+					const created: EagleFolder | null = await this.api.createFolder({
+						folderName: segment,
+						parent: currentParentId
+					});
+					if (!created || !created.id) {
+						console.warn(`[CMDS Eagle] Failed to create mirrored folder '${segment}' in Eagle`);
+						break;
+					}
+					currentParentId = created.id;
+					currentLevelFolders = [];
+				}
+			}
+
+			return currentParentId;
+		} catch (error) {
+			console.error('[CMDS Eagle] Error during folder hierarchy mirroring:', error);
+			return undefined;
+		}
+	}
+
+	private resolveMappedEagleFolder(activeFile?: TFile | null): string | undefined {
+		const file = activeFile ?? this.app.workspace.getActiveFile();
+		const folderPath = file?.parent?.path?.replace(/^\/+|\/+$/g, '') || '';
+		const mappings = this.settings.folderMappings || [];
+
+		if (!folderPath) {
+			const rootMapping = mappings.find(m => m.obsidianFolder === '' || m.obsidianFolder === '/');
+			return rootMapping ? rootMapping.eagleFolderId : (this.settings.defaultFolder || undefined);
+		}
+
+		if (mappings.length === 0) {
+			return this.settings.defaultFolder || undefined;
+		}
+
+		const normalizedNotePath = folderPath.toLowerCase();
+
+		// 1. Exact match
+		const exact = mappings.find(m => m.obsidianFolder.toLowerCase() === normalizedNotePath);
+		if (exact) {
+			return exact.eagleFolderId;
+		}
+
+		// 2. Longest prefix match for subfolders
+		const sorted = [...mappings].sort((a, b) => b.obsidianFolder.length - a.obsidianFolder.length);
+		for (const mapping of sorted) {
+			const mapPath = mapping.obsidianFolder.toLowerCase();
+			if (normalizedNotePath.startsWith(mapPath + '/')) {
+				return mapping.eagleFolderId;
+			}
+		}
+
+		// 3. Fallback to defaultFolder (or root)
+		return this.settings.defaultFolder || undefined;
+	}
+
 	private async getOrCreateActiveNoteId(activeFile: TFile): Promise<string> {
 		const cache = this.app.metadataCache.getFileCache(activeFile);
 		const idField = this.settings.frontmatterIdField?.trim() || 'id';
@@ -2244,12 +2390,17 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		const filenameWithoutExt = file.name.replace(/\.[^.]+$/, '');
 		const backlinkData = await this.getEagleBacklinkPayload(!!primaryUrl);
 
+		const folderResolution = await this.resolveEagleFolderForUpload();
+		if (folderResolution.cancelled) {
+			throw new Error('Upload cancelled');
+		}
+
 		const result = await this.api.addFromPath({
 			path: tempPath,
 			name: filenameWithoutExt,
 			website: primaryUrl || backlinkData.website,
 			tags: this.getDefaultTags(),
-			folderId: this.settings.enableDefaultFolder ? (this.settings.defaultFolder || undefined) : undefined,
+			folderId: folderResolution.folderId,
 			...backlinkData
 		});
 
@@ -2283,7 +2434,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 				size: file.size,
 				ext: ext,
 				tags: this.getDefaultTags() || [],
-				folders: this.settings.enableDefaultFolder && this.settings.defaultFolder ? [this.settings.defaultFolder] : [],
+				folders: folderResolution.folderId ? [folderResolution.folderId] : [],
 				isDeleted: false,
 				url: primaryUrl || '',
 				annotation: '',

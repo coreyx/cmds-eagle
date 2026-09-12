@@ -160,6 +160,27 @@ export class EagleApiService {
 		}
 	}
 
+	async listRecentFolders(): Promise<EagleFolder[]> {
+		try {
+			const response = await this.get<EagleFolder[]>('/api/folder/listRecent');
+			return response.data ?? [];
+		} catch {
+			return [];
+		}
+	}
+
+	async createFolder(params: { folderName: string; parent?: string }): Promise<EagleFolder | null> {
+		try {
+			const response = await this.post<EagleFolder>('/api/folder/create', params);
+			if (response.status === 'success' && response.data) {
+				return response.data;
+			}
+			return null;
+		} catch {
+			return null;
+		}
+	}
+
 	async getLibraryInfo(): Promise<EagleLibraryInfo | null> {
 		try {
 			const response = await this.get<EagleLibraryInfo>('/api/library/info');

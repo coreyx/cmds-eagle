@@ -58,6 +58,9 @@ var init_types = __esm({
       enableDefaultFolder: false,
       defaultFolder: "",
       defaultFolderName: "",
+      addFolderMode: "target",
+      folderMappings: [],
+      recentEagleFolders: [],
       enableDefaultTags: false,
       defaultTags: "",
       enableBacklinks: false,
@@ -329,6 +332,26 @@ var init_api = __esm({
           return (_a = response.data) != null ? _a : [];
         } catch (e) {
           return [];
+        }
+      }
+      async listRecentFolders() {
+        var _a;
+        try {
+          const response = await this.get("/api/folder/listRecent");
+          return (_a = response.data) != null ? _a : [];
+        } catch (e) {
+          return [];
+        }
+      }
+      async createFolder(params) {
+        try {
+          const response = await this.post("/api/folder/create", params);
+          if (response.status === "success" && response.data) {
+            return response.data;
+          }
+          return null;
+        } catch (e) {
+          return null;
         }
       }
       async getLibraryInfo() {
@@ -658,12 +681,26 @@ var init_api = __esm({
 // src/modals.ts
 var modals_exports = {};
 __export(modals_exports, {
+  AddFolderMappingModal: () => AddFolderMappingModal,
   EagleFolderModal: () => EagleFolderModal,
+  EagleFolderPickerModal: () => EagleFolderPickerModal,
   EagleLinkChoiceModal: () => EagleLinkChoiceModal,
   EagleSearchModal: () => EagleSearchModal,
-  ImagePasteChoiceModal: () => ImagePasteChoiceModal
+  ImagePasteChoiceModal: () => ImagePasteChoiceModal,
+  flattenEagleFolders: () => flattenEagleFolders
 });
-var import_obsidian2, EagleSearchModal, EagleFolderModal, ImagePasteChoiceModal, EagleLinkChoiceModal;
+function flattenEagleFolders(items, parentPath = "") {
+  const flattened = [];
+  for (const item of items) {
+    const currentPath = parentPath ? `${parentPath} / ${item.name}` : item.name;
+    flattened.push({ id: item.id, name: item.name, path: currentPath });
+    if (item.children && item.children.length > 0) {
+      flattened.push(...flattenEagleFolders(item.children, currentPath));
+    }
+  }
+  return flattened;
+}
+var import_obsidian2, EagleSearchModal, EagleFolderModal, EagleFolderPickerModal, AddFolderMappingModal, ImagePasteChoiceModal, EagleLinkChoiceModal;
 var init_modals = __esm({
   "src/modals.ts"() {
     import_obsidian2 = require("obsidian");
@@ -1071,6 +1108,209 @@ var init_modals = __esm({
         this.onSelect(item.id);
       }
     };
+    EagleFolderPickerModal = class extends import_obsidian2.FuzzySuggestModal {
+      constructor(app, items, onSelect) {
+        super(app);
+        this.resolved = false;
+        this.items = items;
+        this.onSelect = onSelect;
+        this.setPlaceholder("Select Eagle folder... (Esc to cancel)");
+        this.setInstructions([
+          { command: "\u2191\u2193", purpose: "to navigate" },
+          { command: "\u21B5", purpose: "to select folder" },
+          { command: "esc", purpose: "to cancel upload" }
+        ]);
+      }
+      getItems() {
+        return this.items;
+      }
+      getItemText(item) {
+        return `${item.name} ${item.path}`;
+      }
+      selectSuggestion(value, evt) {
+        this.resolved = true;
+        super.selectSuggestion(value, evt);
+      }
+      onChooseItem(item, _evt) {
+        this.resolved = true;
+        if (item.type === "root") {
+          this.onSelect({ folderId: void 0, folderName: "Library Root", cancelled: false });
+        } else {
+          this.onSelect({ folderId: item.id, folderName: item.path, cancelled: false });
+        }
+      }
+      renderSuggestion(match, el) {
+        const item = match.item;
+        const container = el.createDiv({ cls: "cmdspace-eagle-picker-item" });
+        const iconEl = container.createDiv({ cls: "cmdspace-eagle-picker-icon" });
+        if (item.type === "root") {
+          iconEl.setText("\u{1F4DA}");
+        } else if (item.type === "recent") {
+          iconEl.setText("\u{1F552}");
+        } else {
+          iconEl.setText("\u{1F4C1}");
+        }
+        const infoEl = container.createDiv({ cls: "cmdspace-eagle-picker-info" });
+        const nameRow = infoEl.createDiv({ cls: "cmdspace-eagle-picker-name" });
+        nameRow.createSpan({ text: item.name });
+        if (item.type === "recent") {
+          nameRow.createSpan({ cls: "cmdspace-eagle-badge cmdspace-eagle-badge-recent", text: "Recent" });
+        } else if (item.type === "root") {
+          nameRow.createSpan({ cls: "cmdspace-eagle-badge cmdspace-eagle-badge-root", text: "Root" });
+        }
+        if (item.type !== "root" && item.path !== item.name) {
+          infoEl.createDiv({ cls: "cmdspace-eagle-picker-path", text: item.path });
+        }
+      }
+      onClose() {
+        if (!this.resolved) {
+          this.resolved = true;
+          this.onSelect({ cancelled: true });
+        }
+      }
+      static async pickFolder(app, api, recentFolderIds = []) {
+        const connected = await api.isConnected();
+        if (!connected) {
+          new import_obsidian2.Notice("Eagle is not running. Please start Eagle and try again.");
+          return { cancelled: true };
+        }
+        const [folders, recentFolders] = await Promise.all([
+          api.listFolders(),
+          api.listRecentFolders()
+        ]);
+        const flattened = flattenEagleFolders(folders);
+        const folderMap = /* @__PURE__ */ new Map();
+        for (const f of flattened) {
+          folderMap.set(f.id, f);
+        }
+        const items = [
+          {
+            type: "root",
+            name: "Library Root (Uncategorized)",
+            path: "Library Root"
+          }
+        ];
+        const combinedRecentIds = [];
+        const seenRecent = /* @__PURE__ */ new Set();
+        for (const id of recentFolderIds) {
+          if (id && folderMap.has(id) && !seenRecent.has(id)) {
+            seenRecent.add(id);
+            combinedRecentIds.push(id);
+          }
+        }
+        for (const rf of recentFolders) {
+          if ((rf == null ? void 0 : rf.id) && folderMap.has(rf.id) && !seenRecent.has(rf.id)) {
+            seenRecent.add(rf.id);
+            combinedRecentIds.push(rf.id);
+          }
+        }
+        for (const id of combinedRecentIds) {
+          const f = folderMap.get(id);
+          if (f) {
+            items.push({
+              type: "recent",
+              id: f.id,
+              name: f.name,
+              path: f.path
+            });
+          }
+        }
+        for (const f of flattened) {
+          items.push({
+            type: "folder",
+            id: f.id,
+            name: f.name,
+            path: f.path
+          });
+        }
+        return new Promise((resolve) => {
+          const modal = new EagleFolderPickerModal(app, items, (result) => {
+            resolve(result);
+          });
+          modal.open();
+        });
+      }
+    };
+    AddFolderMappingModal = class extends import_obsidian2.Modal {
+      constructor(app, api, onSave) {
+        super(app);
+        this.obsidianFolder = "";
+        this.selectedEagleFolderId = "";
+        this.selectedEagleFolderName = "";
+        this.api = api;
+        this.onSave = onSave;
+      }
+      onOpen() {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.createEl("h2", { text: "Add Folder Mapping" });
+        const folders = this.app.vault.getAllLoadedFiles().filter((f) => f instanceof import_obsidian2.TFolder).map((f) => f.path).filter((p) => p && p !== "/");
+        new import_obsidian2.Setting(contentEl).setName("Obsidian folder").setDesc("Path of the folder in your Obsidian vault (e.g. Work/Projects).").addText((text) => {
+          text.setPlaceholder("Obsidian/Folder/Path").setValue(this.obsidianFolder).onChange((val) => {
+            this.obsidianFolder = val.trim().replace(/^\/+|\/+$/g, "");
+          });
+          if (folders.length > 0) {
+            const datalistId = "obsidian-vault-folders-list";
+            let datalist = document.getElementById(datalistId);
+            if (!datalist) {
+              datalist = document.createElement("datalist");
+              datalist.id = datalistId;
+              document.body.appendChild(datalist);
+            }
+            datalist.empty();
+            folders.forEach((f) => {
+              const option = document.createElement("option");
+              option.value = f;
+              datalist == null ? void 0 : datalist.appendChild(option);
+            });
+            text.inputEl.setAttribute("list", datalistId);
+          }
+        });
+        const eagleFolderSetting = new import_obsidian2.Setting(contentEl).setName("Eagle folder").setDesc(this.selectedEagleFolderName || "No Eagle folder selected").addButton((btn) => {
+          btn.setButtonText("Select Folder").onClick(async () => {
+            const folders2 = await this.api.listFolders();
+            if (!folders2 || folders2.length === 0) {
+              new import_obsidian2.Notice("No folders found in Eagle or Eagle is not running.");
+              return;
+            }
+            const flattened = flattenEagleFolders(folders2);
+            const folderModal = new EagleFolderModal(this.app, flattened, (folderId) => {
+              const chosen = flattened.find((f) => f.id === folderId);
+              if (chosen) {
+                this.selectedEagleFolderId = chosen.id;
+                this.selectedEagleFolderName = chosen.path;
+                eagleFolderSetting.setDesc(chosen.path);
+              }
+            });
+            folderModal.open();
+          });
+        });
+        new import_obsidian2.Setting(contentEl).addButton((btn) => {
+          btn.setButtonText("Save Mapping").setCta().onClick(() => {
+            if (!this.obsidianFolder) {
+              new import_obsidian2.Notice("Please specify an Obsidian folder path.");
+              return;
+            }
+            if (!this.selectedEagleFolderId) {
+              new import_obsidian2.Notice("Please select a target Eagle folder.");
+              return;
+            }
+            this.onSave({
+              id: Date.now().toString(36) + Math.random().toString(36).substring(2, 7),
+              obsidianFolder: this.obsidianFolder,
+              eagleFolderId: this.selectedEagleFolderId,
+              eagleFolderName: this.selectedEagleFolderName
+            });
+            this.close();
+          });
+        }).addButton((btn) => {
+          btn.setButtonText("Cancel").onClick(() => this.close());
+        });
+      }
+      onClose() {
+        this.contentEl.empty();
+      }
+    };
     ImagePasteChoiceModal = class extends import_obsidian2.Modal {
       constructor(app, cloudProviderName = "Cloud") {
         super(app);
@@ -1318,32 +1558,22 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian3.PluginSettingTab {
         await this.plugin.saveSettings();
       }));
     }
-    new import_obsidian3.Setting(containerEl).setName("Eagle target folder").setHeading();
-    new import_obsidian3.Setting(containerEl).setName("Save new attachments to a specific Eagle folder").setDesc("When pasting or dropping images into Eagle, save them to a designated folder instead of the root library.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableDefaultFolder).onChange(async (value) => {
-      this.plugin.settings.enableDefaultFolder = value;
+    new import_obsidian3.Setting(containerEl).setName("Eagle folder").setHeading();
+    new import_obsidian3.Setting(containerEl).setName("When adding an item to Eagle").setDesc("Choose how newly added images and attachments are routed to folders in your Eagle library.").addDropdown((dropdown) => dropdown.addOption("ask", "Ask").addOption("target", "Add to Target Folder").addOption("mirror", "Mirror Obsidian Folder Hierarchy").addOption("map", "Use Folder Map").setValue(this.plugin.settings.addFolderMode || (this.plugin.settings.enableDefaultFolder ? "target" : "target")).onChange(async (value) => {
+      this.plugin.settings.addFolderMode = value;
       await this.plugin.saveSettings();
       this.display();
     }));
-    if (this.plugin.settings.enableDefaultFolder) {
-      new import_obsidian3.Setting(containerEl).setName("Target Folder").setDesc(this.plugin.settings.defaultFolderName || "No folder selected").addButton((button) => button.setButtonText("Select Folder").onClick(async () => {
+    if (this.plugin.settings.addFolderMode === "target") {
+      new import_obsidian3.Setting(containerEl).setName("Target folder").setDesc(this.plugin.settings.defaultFolderName || "No folder selected (Root library)").addButton((button) => button.setButtonText("Select Folder").onClick(async () => {
         const api = new EagleApiService(this.plugin.settings);
         const folders = await api.listFolders();
         if (!folders || folders.length === 0) {
           new import_obsidian3.Notice("No folders found or Eagle is not connected.");
           return;
         }
-        const flattened = [];
-        const flatten = (items, parentPath = "") => {
-          for (const item of items) {
-            const currentPath = parentPath ? `${parentPath} / ${item.name}` : item.name;
-            flattened.push({ id: item.id, name: item.name, path: currentPath });
-            if (item.children && item.children.length > 0) {
-              flatten(item.children, currentPath);
-            }
-          }
-        };
-        flatten(folders);
-        const { EagleFolderModal: EagleFolderModal2 } = await Promise.resolve().then(() => (init_modals(), modals_exports));
+        const { flattenEagleFolders: flattenEagleFolders2, EagleFolderModal: EagleFolderModal2 } = await Promise.resolve().then(() => (init_modals(), modals_exports));
+        const flattened = flattenEagleFolders2(folders);
         const modal = new EagleFolderModal2(this.app, flattened, async (folderId) => {
           const selected = flattened.find((f) => f.id === folderId);
           if (selected) {
@@ -1354,7 +1584,70 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian3.PluginSettingTab {
           }
         });
         modal.open();
+      })).addButton((button) => button.setButtonText("Clear").onClick(async () => {
+        this.plugin.settings.defaultFolder = "";
+        this.plugin.settings.defaultFolderName = "";
+        await this.plugin.saveSettings();
+        this.display();
       }));
+    } else if (this.plugin.settings.addFolderMode === "ask") {
+      const recentCount = (this.plugin.settings.recentEagleFolders || []).length;
+      const desc = recentCount > 0 ? `Prompts you with a searchable folder picker before each upload, featuring ${recentCount} recently used folder(s).` : "Prompts you with a searchable folder picker before each upload, featuring your recently used folders.";
+      const askSetting = new import_obsidian3.Setting(containerEl).setName("Folder prompt").setDesc(desc);
+      if (recentCount > 0) {
+        askSetting.addButton((button) => button.setButtonText("Clear Recent History").onClick(async () => {
+          this.plugin.settings.recentEagleFolders = [];
+          await this.plugin.saveSettings();
+          new import_obsidian3.Notice("Recent Eagle folders cleared.");
+          this.display();
+        }));
+      }
+    } else if (this.plugin.settings.addFolderMode === "mirror") {
+      new import_obsidian3.Setting(containerEl).setName("Folder hierarchy mirroring").setDesc("Automatically creates and mirrors the active note\u2019s folder hierarchy inside Eagle relative to the vault and library roots. If the note is at the vault root, attachments are placed in the root library.");
+    } else if (this.plugin.settings.addFolderMode === "map") {
+      new import_obsidian3.Setting(containerEl).setName("Folder mappings").setDesc("Map Obsidian vault folders to corresponding Eagle folders. Subfolders automatically inherit their parent folder mapping unless specifically mapped.").addButton((button) => button.setButtonText("Add Folder Mapping").setCta().onClick(async () => {
+        const api = new EagleApiService(this.plugin.settings);
+        const connected = await api.isConnected();
+        if (!connected) {
+          new import_obsidian3.Notice("Eagle is not running. Please start Eagle and try again.");
+          return;
+        }
+        const { AddFolderMappingModal: AddFolderMappingModal2 } = await Promise.resolve().then(() => (init_modals(), modals_exports));
+        const modal = new AddFolderMappingModal2(this.app, api, async (newMapping) => {
+          this.plugin.settings.folderMappings = this.plugin.settings.folderMappings || [];
+          const existingIndex = this.plugin.settings.folderMappings.findIndex(
+            (m) => m.obsidianFolder.toLowerCase() === newMapping.obsidianFolder.toLowerCase()
+          );
+          if (existingIndex >= 0) {
+            this.plugin.settings.folderMappings[existingIndex] = newMapping;
+          } else {
+            this.plugin.settings.folderMappings.push(newMapping);
+          }
+          await this.plugin.saveSettings();
+          this.display();
+        });
+        modal.open();
+      }));
+      const mappings = this.plugin.settings.folderMappings || [];
+      if (mappings.length > 0) {
+        const listEl = containerEl.createDiv({ cls: "cmdspace-eagle-mapping-list" });
+        for (const mapping of mappings) {
+          const rowEl = listEl.createDiv({ cls: "cmdspace-eagle-mapping-row" });
+          const pathsEl = rowEl.createDiv({ cls: "cmdspace-eagle-mapping-paths" });
+          pathsEl.createSpan({ cls: "cmdspace-eagle-mapping-vault", text: mapping.obsidianFolder || "/" });
+          pathsEl.createSpan({ cls: "cmdspace-eagle-mapping-arrow", text: " \u2794 " });
+          pathsEl.createSpan({ cls: "cmdspace-eagle-mapping-eagle", text: mapping.eagleFolderName || mapping.eagleFolderId });
+          const btn = rowEl.createEl("button", { text: "Delete", cls: "mod-warning" });
+          btn.onclick = async () => {
+            this.plugin.settings.folderMappings = (this.plugin.settings.folderMappings || []).filter((m) => m.id !== mapping.id);
+            await this.plugin.saveSettings();
+            this.display();
+          };
+        }
+      } else {
+        const emptyEl = containerEl.createDiv({ cls: "cmdspace-eagle-mapping-empty" });
+        emptyEl.createEl("p", { text: 'No folder mappings configured yet. Click "Add Folder Mapping" to create one.', cls: "cmds-eagle-muted" });
+      }
     }
     new import_obsidian3.Setting(containerEl).setName("Eagle tags").setHeading();
     new import_obsidian3.Setting(containerEl).setName("Add default tags to new Eagle attachments").setDesc("Automatically append specific tags to images you paste or drop into Eagle.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableDefaultTags).onChange(async (value) => {
@@ -2748,6 +3041,10 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
       this.settings.includeSourceInMetadataCard = this.settings.includeSourceInMetadataCard ? "page" : "none";
       await this.saveSettings();
     }
+    if (!(saved == null ? void 0 : saved.addFolderMode)) {
+      this.settings.addFolderMode = this.settings.enableDefaultFolder ? "target" : "target";
+      await this.saveSettings();
+    }
   }
   async saveSettings() {
     await this.saveData(this.settings);
@@ -3095,11 +3392,16 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     }
     const name = `Captured from Obsidian - ${new Date().toISOString()}`;
     const backlinkData = await this.getEagleBacklinkPayload();
+    const folderResolution = await this.resolveEagleFolderForUpload();
+    if (folderResolution.cancelled) {
+      new import_obsidian5.Notice("Capture to Eagle cancelled");
+      return;
+    }
     const success = await this.api.addFromUrl({
       url: clipboardText,
       name,
       tags: this.getDefaultTags(),
-      folderId: this.settings.enableDefaultFolder ? this.settings.defaultFolder || void 0 : void 0,
+      folderId: folderResolution.folderId,
       ...backlinkData
     });
     if (success) {
@@ -3685,6 +3987,11 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       new import_obsidian5.Notice(`Uploaded to Eagle: ${displayName}`);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      if (errorMessage === "Upload cancelled") {
+        this.replaceTextInDocument(editor, placeholderText, "");
+        new import_obsidian5.Notice("Upload cancelled");
+        return;
+      }
       const errorText = `<!-- Failed to upload ${file.name}: ${errorMessage} -->`;
       this.replaceTextInDocument(editor, placeholderText, errorText);
       console.error("Failed to upload image:", error);
@@ -3820,11 +4127,17 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       const absolutePath = this.getAbsolutePath(file.path);
       const filenameWithoutExt = file.basename;
       const backlinkData = await this.getEagleBacklinkPayload();
+      const folderResolution = await this.resolveEagleFolderForUpload(file);
+      if (folderResolution.cancelled) {
+        this.replaceTextInDocument(editor, placeholderText, originalText);
+        new import_obsidian5.Notice("Eagle import cancelled");
+        return;
+      }
       const result = await this.api.addFromPath({
         path: absolutePath,
         name: filenameWithoutExt,
         tags: this.getDefaultTags(),
-        folderId: this.settings.enableDefaultFolder ? this.settings.defaultFolder || void 0 : void 0,
+        folderId: folderResolution.folderId,
         ...backlinkData
       });
       if (!result.success || !result.itemId) {
@@ -4191,17 +4504,20 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
         let eagleNote = "";
         if (this.settings.excalidrawImportToEagle) {
           const backlinkData = await this.getEagleBacklinkPayload();
-          const added = await this.api.addFromPath({
-            path: tempPath,
-            name: file.name.replace(/\.[^.]+$/, ""),
-            tags: this.getDefaultTags(),
-            folderId: this.settings.enableDefaultFolder ? this.settings.defaultFolder || void 0 : void 0,
-            ...backlinkData
-          });
-          if (added.success) {
-            eagleNote = " + Eagle";
-            if (added.itemId) {
-              void this.applyObsidianBacklink(added.itemId);
+          const folderResolution = await this.resolveEagleFolderForUpload();
+          if (!folderResolution.cancelled) {
+            const added = await this.api.addFromPath({
+              path: tempPath,
+              name: file.name.replace(/\.[^.]+$/, ""),
+              tags: this.getDefaultTags(),
+              folderId: folderResolution.folderId,
+              ...backlinkData
+            });
+            if (added.success) {
+              eagleNote = " + Eagle";
+              if (added.itemId) {
+                void this.applyObsidianBacklink(added.itemId);
+              }
             }
           }
         }
@@ -4329,6 +4645,106 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     const parsedTags = this.settings.defaultTags.split(",").map((tag) => tag.trim()).filter((tag) => tag.length > 0);
     return parsedTags.length > 0 ? parsedTags : void 0;
   }
+  async resolveEagleFolderForUpload(activeFile) {
+    const mode = this.settings.addFolderMode || (this.settings.enableDefaultFolder ? "target" : "target");
+    switch (mode) {
+      case "ask": {
+        const result = await EagleFolderPickerModal.pickFolder(
+          this.app,
+          this.api,
+          this.settings.recentEagleFolders || []
+        );
+        if (result.cancelled) {
+          return { cancelled: true };
+        }
+        if (result.folderId) {
+          const existing = this.settings.recentEagleFolders || [];
+          const updated = [result.folderId, ...existing.filter((id) => id !== result.folderId)].slice(0, 10);
+          this.settings.recentEagleFolders = updated;
+          void this.saveSettings();
+        }
+        return { folderId: result.folderId, cancelled: false };
+      }
+      case "mirror": {
+        const folderId = await this.resolveMirroredEagleFolder(activeFile);
+        return { folderId, cancelled: false };
+      }
+      case "map": {
+        const folderId = this.resolveMappedEagleFolder(activeFile);
+        return { folderId, cancelled: false };
+      }
+      case "target":
+      default: {
+        const folderId = this.settings.defaultFolder || void 0;
+        return { folderId, cancelled: false };
+      }
+    }
+  }
+  async resolveMirroredEagleFolder(activeFile) {
+    var _a;
+    const file = activeFile != null ? activeFile : this.app.workspace.getActiveFile();
+    const folderPath = (_a = file == null ? void 0 : file.parent) == null ? void 0 : _a.path;
+    if (!folderPath || folderPath === "/" || folderPath === ".") {
+      return void 0;
+    }
+    const segments = folderPath.split("/").map((s) => s.trim()).filter((s) => s.length > 0);
+    if (segments.length === 0) {
+      return void 0;
+    }
+    try {
+      const eagleFolders = await this.api.listFolders();
+      let currentParentId = void 0;
+      let currentLevelFolders = eagleFolders;
+      for (const segment of segments) {
+        const matchedFolder = currentLevelFolders.find((f) => f.name.toLowerCase() === segment.toLowerCase());
+        if (matchedFolder) {
+          currentParentId = matchedFolder.id;
+          currentLevelFolders = matchedFolder.children || [];
+        } else {
+          const created = await this.api.createFolder({
+            folderName: segment,
+            parent: currentParentId
+          });
+          if (!created || !created.id) {
+            console.warn(`[CMDS Eagle] Failed to create mirrored folder '${segment}' in Eagle`);
+            break;
+          }
+          currentParentId = created.id;
+          currentLevelFolders = [];
+        }
+      }
+      return currentParentId;
+    } catch (error) {
+      console.error("[CMDS Eagle] Error during folder hierarchy mirroring:", error);
+      return void 0;
+    }
+  }
+  resolveMappedEagleFolder(activeFile) {
+    var _a, _b;
+    const file = activeFile != null ? activeFile : this.app.workspace.getActiveFile();
+    const folderPath = ((_b = (_a = file == null ? void 0 : file.parent) == null ? void 0 : _a.path) == null ? void 0 : _b.replace(/^\/+|\/+$/g, "")) || "";
+    const mappings = this.settings.folderMappings || [];
+    if (!folderPath) {
+      const rootMapping = mappings.find((m) => m.obsidianFolder === "" || m.obsidianFolder === "/");
+      return rootMapping ? rootMapping.eagleFolderId : this.settings.defaultFolder || void 0;
+    }
+    if (mappings.length === 0) {
+      return this.settings.defaultFolder || void 0;
+    }
+    const normalizedNotePath = folderPath.toLowerCase();
+    const exact = mappings.find((m) => m.obsidianFolder.toLowerCase() === normalizedNotePath);
+    if (exact) {
+      return exact.eagleFolderId;
+    }
+    const sorted = [...mappings].sort((a, b) => b.obsidianFolder.length - a.obsidianFolder.length);
+    for (const mapping of sorted) {
+      const mapPath = mapping.obsidianFolder.toLowerCase();
+      if (normalizedNotePath.startsWith(mapPath + "/")) {
+        return mapping.eagleFolderId;
+      }
+    }
+    return this.settings.defaultFolder || void 0;
+  }
   async getOrCreateActiveNoteId(activeFile) {
     var _a, _b, _c, _d, _e, _f;
     const cache = this.app.metadataCache.getFileCache(activeFile);
@@ -4438,12 +4854,16 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     const primaryUrl = sourceInfo && this.settings.enableImageSourceUrl ? this.clipboardSourceService.resolvePrimaryUrl(sourceInfo, this.settings.imageSourceUrlPriority) : null;
     const filenameWithoutExt = file.name.replace(/\.[^.]+$/, "");
     const backlinkData = await this.getEagleBacklinkPayload(!!primaryUrl);
+    const folderResolution = await this.resolveEagleFolderForUpload();
+    if (folderResolution.cancelled) {
+      throw new Error("Upload cancelled");
+    }
     const result = await this.api.addFromPath({
       path: tempPath,
       name: filenameWithoutExt,
       website: primaryUrl || backlinkData.website,
       tags: this.getDefaultTags(),
-      folderId: this.settings.enableDefaultFolder ? this.settings.defaultFolder || void 0 : void 0,
+      folderId: folderResolution.folderId,
       ...backlinkData
     });
     if (!result.success || !result.itemId) {
@@ -4472,7 +4892,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
         size: file.size,
         ext,
         tags: this.getDefaultTags() || [],
-        folders: this.settings.enableDefaultFolder && this.settings.defaultFolder ? [this.settings.defaultFolder] : [],
+        folders: folderResolution.folderId ? [folderResolution.folderId] : [],
         isDeleted: false,
         url: primaryUrl || "",
         annotation: "",

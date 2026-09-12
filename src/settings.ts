@@ -11,6 +11,8 @@ import {
 	ImageSourceUrlPriority,
 	ExtraLinksImageSource,
 	MetadataCardImageSource,
+	EagleAddFolderMode,
+	EagleFolderMapping,
 	SearchScope,
 	SUPPORTED_IMAGE_EXTENSIONS,
 	SUPPORTED_VIDEO_EXTENSIONS,
@@ -197,23 +199,27 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 					}));
 		}
 
-		new Setting(containerEl).setName('Eagle target folder').setHeading();
+		new Setting(containerEl).setName('Eagle folder').setHeading();
 
 		new Setting(containerEl)
-			.setName('Save new attachments to a specific Eagle folder')
-			.setDesc('When pasting or dropping images into Eagle, save them to a designated folder instead of the root library.')
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.enableDefaultFolder)
-				.onChange(async (value) => {
-					this.plugin.settings.enableDefaultFolder = value;
+			.setName('When adding an item to Eagle')
+			.setDesc('Choose how newly added images and attachments are routed to folders in your Eagle library.')
+			.addDropdown(dropdown => dropdown
+				.addOption('ask', 'Ask')
+				.addOption('target', 'Add to Target Folder')
+				.addOption('mirror', 'Mirror Obsidian Folder Hierarchy')
+				.addOption('map', 'Use Folder Map')
+				.setValue(this.plugin.settings.addFolderMode || (this.plugin.settings.enableDefaultFolder ? 'target' : 'target'))
+				.onChange(async (value: EagleAddFolderMode) => {
+					this.plugin.settings.addFolderMode = value;
 					await this.plugin.saveSettings();
-					this.display(); // re-render to show/hide the folder selection
+					this.display();
 				}));
 
-		if (this.plugin.settings.enableDefaultFolder) {
+		if (this.plugin.settings.addFolderMode === 'target') {
 			new Setting(containerEl)
-				.setName('Target Folder')
-				.setDesc(this.plugin.settings.defaultFolderName || 'No folder selected')
+				.setName('Target folder')
+				.setDesc(this.plugin.settings.defaultFolderName || 'No folder selected (Root library)')
 				.addButton(button => button
 					.setButtonText('Select Folder')
 					.onClick(async () => {
@@ -225,20 +231,9 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 							return;
 						}
 
-						// Flatten the folder hierarchy
-						const flattened: { id: string, name: string, path: string }[] = [];
-						const flatten = (items: import('./types').EagleFolder[], parentPath = '') => {
-							for (const item of items) {
-								const currentPath = parentPath ? `${parentPath} / ${item.name}` : item.name;
-								flattened.push({ id: item.id, name: item.name, path: currentPath });
-								if (item.children && item.children.length > 0) {
-									flatten(item.children, currentPath);
-								}
-							}
-						};
-						flatten(folders);
+						const { flattenEagleFolders, EagleFolderModal } = await import('./modals');
+						const flattened = flattenEagleFolders(folders);
 
-						const { EagleFolderModal } = await import('./modals');
 						const modal = new EagleFolderModal(this.app, flattened, async (folderId) => {
 							const selected = flattened.find(f => f.id === folderId);
 							if (selected) {
@@ -249,7 +244,91 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 							}
 						});
 						modal.open();
+					}))
+				.addButton(button => button
+					.setButtonText('Clear')
+					.onClick(async () => {
+						this.plugin.settings.defaultFolder = '';
+						this.plugin.settings.defaultFolderName = '';
+						await this.plugin.saveSettings();
+						this.display();
 					}));
+		} else if (this.plugin.settings.addFolderMode === 'ask') {
+			const recentCount = (this.plugin.settings.recentEagleFolders || []).length;
+			const desc = recentCount > 0
+				? `Prompts you with a searchable folder picker before each upload, featuring ${recentCount} recently used folder(s).`
+				: 'Prompts you with a searchable folder picker before each upload, featuring your recently used folders.';
+
+			const askSetting = new Setting(containerEl)
+				.setName('Folder prompt')
+				.setDesc(desc);
+
+			if (recentCount > 0) {
+				askSetting.addButton(button => button
+					.setButtonText('Clear Recent History')
+					.onClick(async () => {
+						this.plugin.settings.recentEagleFolders = [];
+						await this.plugin.saveSettings();
+						new Notice('Recent Eagle folders cleared.');
+						this.display();
+					}));
+			}
+		} else if (this.plugin.settings.addFolderMode === 'mirror') {
+			new Setting(containerEl)
+				.setName('Folder hierarchy mirroring')
+				.setDesc('Automatically creates and mirrors the active note’s folder hierarchy inside Eagle relative to the vault and library roots. If the note is at the vault root, attachments are placed in the root library.');
+		} else if (this.plugin.settings.addFolderMode === 'map') {
+			new Setting(containerEl)
+				.setName('Folder mappings')
+				.setDesc('Map Obsidian vault folders to corresponding Eagle folders. Subfolders automatically inherit their parent folder mapping unless specifically mapped.')
+				.addButton(button => button
+					.setButtonText('Add Folder Mapping')
+					.setCta()
+					.onClick(async () => {
+						const api = new EagleApiService(this.plugin.settings);
+						const connected = await api.isConnected();
+						if (!connected) {
+							new Notice('Eagle is not running. Please start Eagle and try again.');
+							return;
+						}
+						const { AddFolderMappingModal } = await import('./modals');
+						const modal = new AddFolderMappingModal(this.app, api, async (newMapping) => {
+							this.plugin.settings.folderMappings = this.plugin.settings.folderMappings || [];
+							const existingIndex = this.plugin.settings.folderMappings.findIndex(
+								m => m.obsidianFolder.toLowerCase() === newMapping.obsidianFolder.toLowerCase()
+							);
+							if (existingIndex >= 0) {
+								this.plugin.settings.folderMappings[existingIndex] = newMapping;
+							} else {
+								this.plugin.settings.folderMappings.push(newMapping);
+							}
+							await this.plugin.saveSettings();
+							this.display();
+						});
+						modal.open();
+					}));
+
+			const mappings = this.plugin.settings.folderMappings || [];
+			if (mappings.length > 0) {
+				const listEl = containerEl.createDiv({ cls: 'cmdspace-eagle-mapping-list' });
+				for (const mapping of mappings) {
+					const rowEl = listEl.createDiv({ cls: 'cmdspace-eagle-mapping-row' });
+					const pathsEl = rowEl.createDiv({ cls: 'cmdspace-eagle-mapping-paths' });
+					pathsEl.createSpan({ cls: 'cmdspace-eagle-mapping-vault', text: mapping.obsidianFolder || '/' });
+					pathsEl.createSpan({ cls: 'cmdspace-eagle-mapping-arrow', text: ' ➔ ' });
+					pathsEl.createSpan({ cls: 'cmdspace-eagle-mapping-eagle', text: mapping.eagleFolderName || mapping.eagleFolderId });
+
+					const btn = rowEl.createEl('button', { text: 'Delete', cls: 'mod-warning' });
+					btn.onclick = async () => {
+						this.plugin.settings.folderMappings = (this.plugin.settings.folderMappings || []).filter(m => m.id !== mapping.id);
+						await this.plugin.saveSettings();
+						this.display();
+					};
+				}
+			} else {
+				const emptyEl = containerEl.createDiv({ cls: 'cmdspace-eagle-mapping-empty' });
+				emptyEl.createEl('p', { text: 'No folder mappings configured yet. Click "Add Folder Mapping" to create one.', cls: 'cmds-eagle-muted' });
+			}
 		}
 
 		new Setting(containerEl).setName('Eagle tags').setHeading();
