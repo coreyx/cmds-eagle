@@ -73,6 +73,7 @@ var init_types = __esm({
       imageSourceUrlPriority: "page-first",
       extraLinksImageSource: "none",
       includeSourceInMetadataCard: true,
+      includeLocalSourceInMetadataCard: false,
       r2WorkerUrl: "",
       r2ApiKey: "",
       r2PublicUrl: "",
@@ -1275,12 +1276,16 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian3.PluginSettingTab {
         this.plugin.settings.imageSourceUrlPriority = value;
         await this.plugin.saveSettings();
       }));
-      new import_obsidian3.Setting(containerEl).setName("Add image source to Extra Links").setDesc("Push the captured image source URLs into Eagle's Extra Links panel alongside any Obsidian backlinks.").addDropdown((dropdown) => dropdown.addOption("none", "None (do not add to Extra Links)").addOption("page", "Page URL only").addOption("image", "Image src URL only").addOption("both", "Both Page URL and Image src").setValue(this.plugin.settings.extraLinksImageSource).onChange(async (value) => {
+      new import_obsidian3.Setting(containerEl).setName("Add image source to Extra Links").setDesc("Push the captured image source URLs into Eagle's Extra Links panel alongside any Obsidian backlinks. Requries Extra Links plugin for Eagle.").addDropdown((dropdown) => dropdown.addOption("none", "None (do not add to Extra Links)").addOption("page", "Page URL only").addOption("image", "Image src URL only").addOption("both", "Both Page URL and Image src").setValue(this.plugin.settings.extraLinksImageSource).onChange(async (value) => {
         this.plugin.settings.extraLinksImageSource = value;
         await this.plugin.saveSettings();
       }));
       new import_obsidian3.Setting(containerEl).setName("Include source in metadata card").setDesc("When embedding an image with metadata card enabled, include a clickable markdown link to the captured source URL.").addToggle((toggle) => toggle.setValue(this.plugin.settings.includeSourceInMetadataCard).onChange(async (value) => {
         this.plugin.settings.includeSourceInMetadataCard = value;
+        await this.plugin.saveSettings();
+      }));
+      new import_obsidian3.Setting(containerEl).setName("Include local file source in metadata card").setDesc("When embedding an image dragged or pasted from File Explorer or Finder, include a clickable file:// link to the original local file.").addToggle((toggle) => toggle.setValue(this.plugin.settings.includeLocalSourceInMetadataCard).onChange(async (value) => {
+        this.plugin.settings.includeLocalSourceInMetadataCard = value;
         await this.plugin.saveSettings();
       }));
     }
@@ -2455,8 +2460,18 @@ var WindowsClipboardProvider = class {
           pageUrl = cleanUrl(chromiumSource);
         }
       }
-      if (pageUrl || imageUrl) {
-        return { pageUrl, imageUrl };
+      let localFilePath;
+      const rawFilePath = safelyReadClipboard(() => {
+        return clipboard.read("FileNameW") || clipboard.read("FileName");
+      });
+      if (rawFilePath && typeof rawFilePath === "string") {
+        const cleaned = cleanUrl(rawFilePath);
+        if (/^[A-Za-z]:[\\/]/.test(cleaned) || cleaned.startsWith("\\\\")) {
+          localFilePath = cleaned;
+        }
+      }
+      if (pageUrl || imageUrl || localFilePath) {
+        return { pageUrl, imageUrl, localFilePath };
       }
     } catch (err) {
       console.warn("[CMDS Eagle] Error reading Windows clipboard source:", err);
@@ -2519,8 +2534,22 @@ var MacOSClipboardProvider = class {
           }
         }
       }
-      if (pageUrl || imageUrl) {
-        return { pageUrl, imageUrl };
+      let localFilePath;
+      const fileUrl = safelyReadClipboard(() => {
+        return clipboard.read("public.file-url");
+      });
+      if (fileUrl && typeof fileUrl === "string") {
+        const cleaned = cleanUrl(fileUrl);
+        if (cleaned.startsWith("file://")) {
+          try {
+            localFilePath = decodeURIComponent(new URL(cleaned).pathname);
+          } catch (e) {
+            localFilePath = cleaned.replace(/^file:\/\//, "");
+          }
+        }
+      }
+      if (pageUrl || imageUrl || localFilePath) {
+        return { pageUrl, imageUrl, localFilePath };
       }
     } catch (err) {
       console.warn("[CMDS Eagle] Error reading macOS clipboard source:", err);
@@ -2725,7 +2754,7 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     new import_obsidian5.Notice(`Inserted link to: ${item.name}`);
   }
   async insertItemLink(editor, item) {
-    const sourceUrl = await this.resolveMetadataSourceUrl(item);
+    const sources = await this.resolveMetadataSources(item);
     if (this.settings.insertAsEmbed) {
       const filePath = await this.api.getOriginalFilePath(item);
       if (filePath) {
@@ -2733,7 +2762,7 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
         const filename = `${item.name}.${item.ext}`;
         let output = `![${filename}](${fileUrl})`;
         if (this.settings.insertThumbnail) {
-          output += "\n\n" + this.buildMetadataCard(item, sourceUrl);
+          output += "\n\n" + this.buildMetadataCard(item, sources);
         }
         editor.replaceSelection(output);
         return;
@@ -2741,33 +2770,60 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     }
     const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
     if (this.settings.insertThumbnail) {
-      const card = this.buildLinkCard(item, sourceUrl);
+      const card = this.buildLinkCard(item, sources);
       editor.replaceSelection(card);
     } else {
       const link = this.settings.linkFormat === "wikilink" ? `[[${linkUrl}|${item.name}]]` : `[${item.name}](${linkUrl})`;
       editor.replaceSelection(link);
     }
   }
-  async resolveMetadataSourceUrl(item, fallbackSourceUrl) {
-    if (item.url) {
-      const clean = cleanUrl(item.url);
-      if (/^https?:\/\//i.test(clean)) {
-        return clean;
-      }
+  extractLocalFilePath(file, sourceInfo) {
+    const directPath = file.path;
+    if (directPath && typeof directPath === "string" && directPath.trim().length > 0) {
+      return directPath.trim();
     }
-    if (fallbackSourceUrl) {
-      const clean = cleanUrl(fallbackSourceUrl);
-      if (/^https?:\/\//i.test(clean)) {
-        return clean;
-      }
-    }
-    const extraSource = await this.api.getExtraLinkWebSource(item.id);
-    if (extraSource) {
-      return extraSource;
+    if ((sourceInfo == null ? void 0 : sourceInfo.localFilePath) && typeof sourceInfo.localFilePath === "string" && sourceInfo.localFilePath.trim().length > 0) {
+      return sourceInfo.localFilePath.trim();
     }
     return null;
   }
-  buildMetadataCard(item, resolvedSourceUrl) {
+  async resolveMetadataSources(item, fallbackWebUrl, localFilePath) {
+    let webUrl = null;
+    let localFileUrl = null;
+    if (item.url) {
+      const clean = cleanUrl(item.url);
+      if (/^https?:\/\//i.test(clean)) {
+        webUrl = clean;
+      } else if (/^file:\/\//i.test(clean) && !localFilePath) {
+        localFileUrl = clean;
+      }
+    }
+    if (!webUrl && fallbackWebUrl) {
+      const clean = cleanUrl(fallbackWebUrl);
+      if (/^https?:\/\//i.test(clean)) {
+        webUrl = clean;
+      }
+    }
+    if (!webUrl) {
+      const extraSource = await this.api.getExtraLinkWebSource(item.id);
+      if (extraSource) {
+        webUrl = extraSource;
+      }
+    }
+    if (localFilePath) {
+      try {
+        localFileUrl = this.pathToFileUrl(localFilePath);
+      } catch (e) {
+        console.warn("[CMDS Eagle] Failed to convert local file path to file URL:", e);
+      }
+    }
+    return { webUrl, localFileUrl };
+  }
+  async resolveMetadataSourceUrl(item, fallbackSourceUrl) {
+    const sources = await this.resolveMetadataSources(item, fallbackSourceUrl);
+    return sources.webUrl;
+  }
+  buildMetadataCard(item, resolvedSources) {
     const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
     const tags = item.tags.filter((t) => !t.startsWith("r2:") && t !== "r2-cloud" && t !== "cloud-upload").map((t) => `#${this.normalizeTag(t)}`).join(" ");
     const dimensions = item.width && item.height ? `${item.width}\xD7${item.height}` : "N/A";
@@ -2777,15 +2833,20 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     if (cloudUrl) {
       linkSection += ` | [Cloud](${cloudUrl})`;
     }
-    const sourceUrl = resolvedSourceUrl ? cleanUrl(resolvedSourceUrl) : item.url && /^https?:\/\//i.test(cleanUrl(item.url)) ? cleanUrl(item.url) : null;
+    const sources = typeof resolvedSources === "string" ? { webUrl: resolvedSources } : resolvedSources || {};
+    const sourceUrl = sources.webUrl ? cleanUrl(sources.webUrl) : item.url && /^https?:\/\//i.test(cleanUrl(item.url)) ? cleanUrl(item.url) : null;
+    const localFileUrl = sources.localFileUrl ? cleanUrl(sources.localFileUrl) : item.url && /^file:\/\//i.test(cleanUrl(item.url)) ? cleanUrl(item.url) : null;
     if (this.settings.includeSourceInMetadataCard && sourceUrl) {
       const domain = extractDomain(sourceUrl);
       linkSection += ` | [Source: ${domain || "Web"}](${sourceUrl})`;
     }
+    if (this.settings.includeLocalSourceInMetadataCard && localFileUrl) {
+      linkSection += ` | [Source: File](${localFileUrl})`;
+    }
     return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)} | ${dimensions} | ${isUploaded ? "\u2601\uFE0F" : "\u{1F4C1}"} | ${tags || "No tags"}
 > ${linkSection}`;
   }
-  buildLinkCard(item, resolvedSourceUrl) {
+  buildLinkCard(item, resolvedSources) {
     const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
     const tags = item.tags.filter((t) => !t.startsWith("r2:") && t !== "r2-cloud").map((t) => `#${this.normalizeTag(t)}`).join(" ");
     const dimensions = item.width && item.height ? `${item.width}\xD7${item.height}` : "N/A";
@@ -2802,10 +2863,15 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     if (cloudUrl) {
       linkSection += ` | [Cloud URL](${cloudUrl})`;
     }
-    const sourceUrl = resolvedSourceUrl ? cleanUrl(resolvedSourceUrl) : item.url && /^https?:\/\//i.test(cleanUrl(item.url)) ? cleanUrl(item.url) : null;
+    const sources = typeof resolvedSources === "string" ? { webUrl: resolvedSources } : resolvedSources || {};
+    const sourceUrl = sources.webUrl ? cleanUrl(sources.webUrl) : item.url && /^https?:\/\//i.test(cleanUrl(item.url)) ? cleanUrl(item.url) : null;
+    const localFileUrl = sources.localFileUrl ? cleanUrl(sources.localFileUrl) : item.url && /^file:\/\//i.test(cleanUrl(item.url)) ? cleanUrl(item.url) : null;
     if (this.settings.includeSourceInMetadataCard && sourceUrl) {
       const domain = extractDomain(sourceUrl);
       linkSection += ` | [Source: ${domain || "Web"}](${sourceUrl})`;
+    }
+    if (this.settings.includeLocalSourceInMetadataCard && localFileUrl) {
+      linkSection += ` | [Source: File](${localFileUrl})`;
     }
     return `> [!cmdspace-eagle] ${item.name}
 > 
@@ -3310,13 +3376,14 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       return;
     }
     let sourceInfo = null;
-    if (this.settings.enableImageSourceUrl) {
+    if (this.settings.enableImageSourceUrl || this.settings.includeLocalSourceInMetadataCard) {
       sourceInfo = await this.clipboardSourceService.getSourceInfo();
     }
     const filesCopy = Array.from(files);
     if (this.settings.imagePasteBehavior === "eagle") {
       for (const file of filesCopy) {
-        await this.uploadFileWithProgress(file, editor, sourceInfo);
+        const localPath = this.extractLocalFilePath(file, sourceInfo);
+        await this.uploadFileWithProgress(file, editor, sourceInfo, localPath);
       }
       return;
     }
@@ -3336,7 +3403,8 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     }
     if (response.choice === "eagle") {
       for (const file of filesCopy) {
-        await this.uploadFileWithProgress(file, editor, sourceInfo);
+        const localPath = this.extractLocalFilePath(file, sourceInfo);
+        await this.uploadFileWithProgress(file, editor, sourceInfo, localPath);
       }
     } else if (response.choice === "local") {
       for (const file of filesCopy) {
@@ -3363,17 +3431,29 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       return;
     }
     let sourceInfo = null;
-    if (this.settings.enableImageSourceUrl && evt.dataTransfer) {
+    if ((this.settings.enableImageSourceUrl || this.settings.includeLocalSourceInMetadataCard) && evt.dataTransfer) {
       const uriList = evt.dataTransfer.getData("text/uri-list");
       const html = evt.dataTransfer.getData("text/html");
       let pageUrl;
       let imageUrl;
-      if (uriList && isValidHttpUrl(uriList)) {
-        const cleaned = cleanUrl(uriList);
-        if (/\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(cleaned)) {
-          imageUrl = cleaned;
-        } else {
-          pageUrl = cleaned;
+      let localFilePath;
+      if (uriList) {
+        if (isValidHttpUrl(uriList)) {
+          const cleaned = cleanUrl(uriList);
+          if (/\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(cleaned)) {
+            imageUrl = cleaned;
+          } else {
+            pageUrl = cleaned;
+          }
+        } else if (uriList.startsWith("file://")) {
+          try {
+            localFilePath = decodeURIComponent(new URL(uriList.trim().split("\r\n")[0]).pathname);
+            if (/^\/[A-Za-z]:/.test(localFilePath)) {
+              localFilePath = localFilePath.slice(1);
+            }
+          } catch (e) {
+            localFilePath = uriList.trim().split("\r\n")[0].replace(/^file:\/\//, "");
+          }
         }
       }
       if (html) {
@@ -3385,14 +3465,15 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
           }
         }
       }
-      if (pageUrl || imageUrl) {
-        sourceInfo = { pageUrl, imageUrl };
+      if (pageUrl || imageUrl || localFilePath) {
+        sourceInfo = { pageUrl, imageUrl, localFilePath };
       }
     }
     const filesCopy = Array.from(files);
     if (this.settings.imagePasteBehavior === "eagle") {
       for (const file of filesCopy) {
-        await this.uploadFileWithProgress(file, editor, sourceInfo);
+        const localPath = this.extractLocalFilePath(file, sourceInfo);
+        await this.uploadFileWithProgress(file, editor, sourceInfo, localPath);
       }
       return;
     }
@@ -3412,7 +3493,8 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     }
     if (response.choice === "eagle") {
       for (const file of filesCopy) {
-        await this.uploadFileWithProgress(file, editor, sourceInfo);
+        const localPath = this.extractLocalFilePath(file, sourceInfo);
+        await this.uploadFileWithProgress(file, editor, sourceInfo, localPath);
       }
     } else if (response.choice === "local") {
       for (const file of filesCopy) {
@@ -3469,18 +3551,19 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       new import_obsidian5.Notice(`Failed to save: ${file.name}`);
     }
   }
-  async uploadFileWithProgress(file, editor, sourceInfo) {
+  async uploadFileWithProgress(file, editor, sourceInfo, localFilePath) {
     const pasteId = this.generatePasteId();
     const placeholderText = `![Uploading ${file.name}...](${pasteId})`;
     editor.replaceSelection(placeholderText);
     try {
+      const effectiveLocalPath = localFilePath || this.extractLocalFilePath(file, sourceInfo);
       const { url: imageUrl, item } = await this.uploadImageToEagle(file, sourceInfo);
       const displayName = item ? `${item.name}.${item.ext}` : file.name;
       let markdownImage = `![${displayName}](${imageUrl})`;
       if (item && this.settings.insertThumbnail) {
         const fallbackSourceUrl = sourceInfo && this.settings.enableImageSourceUrl ? this.clipboardSourceService.resolvePrimaryUrl(sourceInfo, this.settings.imageSourceUrlPriority) : null;
-        const sourceUrl = await this.resolveMetadataSourceUrl(item, fallbackSourceUrl);
-        markdownImage += "\n\n" + this.buildMetadataCard(item, sourceUrl);
+        const sources = await this.resolveMetadataSources(item, fallbackSourceUrl, effectiveLocalPath);
+        markdownImage += "\n\n" + this.buildMetadataCard(item, sources);
       }
       this.replaceTextInDocument(editor, placeholderText, markdownImage);
       new import_obsidian5.Notice(`Uploaded to Eagle: ${displayName}`);
@@ -3795,7 +3878,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
   }
   async insertEagleEmbed(editor, item, useThumbnail) {
     const filename = `${item.name}.${item.ext}`;
-    const sourceUrl = await this.resolveMetadataSourceUrl(item);
+    const sources = await this.resolveMetadataSources(item);
     if (this.settings.eagleEmbedUrlMode === "custom-url") {
       const libraryName = await this.api.getLibraryName() || "Main";
       const embedUrl = buildEagleCustomEmbedUrl(
@@ -3808,7 +3891,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       );
       let markdown = `![${filename}](${embedUrl})`;
       if (this.settings.insertThumbnail) {
-        markdown += "\n\n" + this.buildMetadataCard(item, sourceUrl);
+        markdown += "\n\n" + this.buildMetadataCard(item, sources);
       }
       editor.replaceSelection(markdown);
       new import_obsidian5.Notice(`Embedded: ${filename}`);
@@ -3825,7 +3908,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       const fileUrl = this.pathToFileUrl(filePath);
       let markdown = `![${filename}](${fileUrl})`;
       if (this.settings.insertThumbnail) {
-        markdown += "\n\n" + this.buildMetadataCard(item, sourceUrl);
+        markdown += "\n\n" + this.buildMetadataCard(item, sources);
       }
       editor.replaceSelection(markdown);
       new import_obsidian5.Notice(`Embedded: ${filename}`);
@@ -3858,8 +3941,8 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
         const filename2 = `${item.name}.${item.ext}`;
         let markdown = `![${filename2}](${this.pathToFileUrl(originalPath)})`;
         if (this.settings.insertThumbnail) {
-          const sourceUrl = await this.resolveMetadataSourceUrl(item);
-          markdown += "\n\n" + this.buildMetadataCard(item, sourceUrl);
+          const sources = await this.resolveMetadataSources(item);
+          markdown += "\n\n" + this.buildMetadataCard(item, sources);
         }
         editor.replaceSelection(markdown);
         new import_obsidian5.Notice(`Embedded: ${filename2}`);

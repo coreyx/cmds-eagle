@@ -101,6 +101,7 @@ export type ExtraLinksImageSource = 'none' | 'page' | 'image' | 'both';
 export interface ImageSourceInfo {
 	pageUrl?: string;
 	imageUrl?: string;
+	localFilePath?: string;
 }
 
 export interface EagleExtraLink {
@@ -222,6 +223,7 @@ export interface CMDSPACEEagleSettings {
 	imageSourceUrlPriority: ImageSourceUrlPriority;
 	extraLinksImageSource: ExtraLinksImageSource;
 	includeSourceInMetadataCard: boolean;
+	includeLocalSourceInMetadataCard: boolean;
 	r2WorkerUrl: string;
 	r2ApiKey: string;
 	r2PublicUrl: string;
@@ -275,6 +277,7 @@ export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
 	imageSourceUrlPriority: 'page-first',
 	extraLinksImageSource: 'none',
 	includeSourceInMetadataCard: true,
+	includeLocalSourceInMetadataCard: false,
 	r2WorkerUrl: '',
 	r2ApiKey: '',
 	r2PublicUrl: '',

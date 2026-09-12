@@ -139,6 +139,16 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 						this.plugin.settings.includeSourceInMetadataCard = value;
 						await this.plugin.saveSettings();
 					}));
+
+			new Setting(containerEl)
+				.setName('Include local file source in metadata card')
+				.setDesc('When embedding an image dragged or pasted from File Explorer or Finder, include a clickable file:// link to the original local file.')
+				.addToggle(toggle => toggle
+					.setValue(this.plugin.settings.includeLocalSourceInMetadataCard)
+					.onChange(async (value) => {
+						this.plugin.settings.includeLocalSourceInMetadataCard = value;
+						await this.plugin.saveSettings();
+					}));
 		}
 
 		new Setting(containerEl).setName('Eagle link paste').setHeading();

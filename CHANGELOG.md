@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 - **Image Source URL Capture on Paste & Drop**: Captures origin webpage URLs and direct image asset URLs from clipboard or browser drag-and-drop (`CF_HTML`, `Chromium internal source URL`, `org.chromium.source-url`, `com.apple.webarchive`) and routes them to Eagle's website field and/or Extra Links panel.
 - **Source Link in Metadata Card**: Added setting to display a clickable `[Source: domain](url)` link in the image metadata card when embedding.
+- **Local File Source Link in Metadata Card**: Added setting (`includeLocalSourceInMetadataCard`, defaults to `false`) to optionally display a clickable `[Source: File](file://...)` link in the metadata card when images are dragged or pasted directly from the operating system's file manager (Windows File Explorer, macOS Finder).
 - **Eagle Item Link Format**: Added a setting (`eagleItemLinkFormat`) defaulting to HTTP localhost format (`http://localhost:41595/item?id=UUID`) with `eagle://item/UUID` protocol as a selectable option.
 - **Eagle Target Folder**: Added a new setting to designate a specific folder in your Eagle library for new attachments. When enabled, a new "Select Folder" button provides a searchable dropdown of your entire Eagle folder hierarchy.
 - **Default Eagle Tags**: Added a setting to automatically append a comma-separated list of tags to every image uploaded to Eagle.

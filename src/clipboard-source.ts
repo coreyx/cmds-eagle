@@ -248,8 +248,20 @@ export class WindowsClipboardProvider implements IClipboardSourceProvider {
 				}
 			}
 
-			if (pageUrl || imageUrl) {
-				return { pageUrl, imageUrl };
+			// 3. Check for local file path from Windows File Explorer
+			let localFilePath: string | undefined;
+			const rawFilePath = safelyReadClipboard(() => {
+				return clipboard.read('FileNameW') || clipboard.read('FileName');
+			});
+			if (rawFilePath && typeof rawFilePath === 'string') {
+				const cleaned = cleanUrl(rawFilePath);
+				if (/^[A-Za-z]:[\\/]/.test(cleaned) || cleaned.startsWith('\\\\')) {
+					localFilePath = cleaned;
+				}
+			}
+
+			if (pageUrl || imageUrl || localFilePath) {
+				return { pageUrl, imageUrl, localFilePath };
 			}
 		} catch (err) {
 			console.warn('[CMDS Eagle] Error reading Windows clipboard source:', err);
@@ -333,8 +345,24 @@ export class MacOSClipboardProvider implements IClipboardSourceProvider {
 				}
 			}
 
-			if (pageUrl || imageUrl) {
-				return { pageUrl, imageUrl };
+			// 5. Check for local file path from macOS Finder
+			let localFilePath: string | undefined;
+			const fileUrl = safelyReadClipboard(() => {
+				return clipboard.read('public.file-url');
+			});
+			if (fileUrl && typeof fileUrl === 'string') {
+				const cleaned = cleanUrl(fileUrl);
+				if (cleaned.startsWith('file://')) {
+					try {
+						localFilePath = decodeURIComponent(new URL(cleaned).pathname);
+					} catch {
+						localFilePath = cleaned.replace(/^file:\/\//, '');
+					}
+				}
+			}
+
+			if (pageUrl || imageUrl || localFilePath) {
+				return { pageUrl, imageUrl, localFilePath };
 			}
 		} catch (err) {
 			console.warn('[CMDS Eagle] Error reading macOS clipboard source:', err);
