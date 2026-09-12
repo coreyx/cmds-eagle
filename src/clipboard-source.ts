@@ -63,6 +63,21 @@ export function isValidHttpUrl(urlStr?: string | null): boolean {
 }
 
 /**
+ * Checks whether a URL points directly to an image file based on its file extension,
+ * ignoring URL query parameters, hash fragments, and casing.
+ */
+export function isDirectImageUrl(urlStr?: string | null): boolean {
+	if (!urlStr) return false;
+	const cleaned = cleanUrl(urlStr);
+	try {
+		const parsed = new URL(cleaned);
+		return /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico|tiff?|jfif|pjpeg|pjp)$/i.test(parsed.pathname);
+	} catch {
+		return /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico|tiff?|jfif|pjpeg|pjp)(\?.*)?$/i.test(cleaned);
+	}
+}
+
+/**
  * Lightweight in-memory Apple Binary Property List (bplist00) decoder
  * specialized for extracting WebResourceURL from Safari com.apple.webarchive buffers.
  */
@@ -222,13 +237,41 @@ export class WindowsClipboardProvider implements IClipboardSourceProvider {
 			if (buf && buf.length > 0) {
 				const text = buf.toString('utf8');
 
-				// Extract SourceURL header
-				const pageMatch = text.match(/SourceURL:(https?:\/\/[^\r\n]+)/i);
+				// 1. Extract SourceURL header
+				const pageMatch = text.match(/SourceURL:\s*(https?:\/\/[^\r\n<>"']+)/i);
 				if (pageMatch && pageMatch[1] && isValidHttpUrl(pageMatch[1])) {
-					pageUrl = cleanUrl(pageMatch[1]);
+					const cleaned = cleanUrl(pageMatch[1]);
+					if (isDirectImageUrl(cleaned)) {
+						if (!imageUrl) imageUrl = cleaned;
+					} else {
+						pageUrl = cleaned;
+					}
 				}
 
-				// Extract <img src="..." alt="...">
+				// 2. Extract <base href="...">
+				const baseMatch = text.match(/<base\b[^>]*?\bhref\s*=\s*["']([^"']+)["']/i);
+				if (baseMatch && isValidHttpUrl(baseMatch[1])) {
+					const cleaned = cleanUrl(baseMatch[1]);
+					if (!isDirectImageUrl(cleaned) && !pageUrl) {
+						pageUrl = cleaned;
+					}
+				}
+
+				// 3. Extract <a href="...">
+				const aMatch = text.match(/<a\b[^>]*?\bhref\s*=\s*["']([^"']+)["']/i);
+				if (aMatch && aMatch[1]) {
+					const href = aMatch[1].replace(/&amp;/g, '&').trim();
+					if (isValidHttpUrl(href)) {
+						const cleaned = cleanUrl(href);
+						if (isDirectImageUrl(cleaned)) {
+							if (!imageUrl) imageUrl = cleaned;
+						} else if (!pageUrl) {
+							pageUrl = cleaned;
+						}
+					}
+				}
+
+				// 4. Extract <img src="..." alt="...">
 				const imgMatch = text.match(/<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/i) ||
 					text.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) ||
 					text.match(/<img[^>]+src=([^\s>]+)/i);
@@ -238,7 +281,10 @@ export class WindowsClipboardProvider implements IClipboardSourceProvider {
 						decoded = 'https:' + decoded;
 					}
 					if (isValidHttpUrl(decoded)) {
-						imageUrl = cleanUrl(decoded);
+						const cleaned = cleanUrl(decoded);
+						if (!imageUrl) {
+							imageUrl = cleaned;
+						}
 					}
 				}
 
@@ -250,16 +296,30 @@ export class WindowsClipboardProvider implements IClipboardSourceProvider {
 			}
 
 			// 2. Check "Chromium internal source URL" if page URL wasn't found in CF_HTML
-			if (!pageUrl) {
-				const chromiumSource = safelyReadClipboard(() => {
-					return clipboard.read('Chromium internal source URL');
-				});
-				if (isValidHttpUrl(chromiumSource)) {
-					pageUrl = cleanUrl(chromiumSource);
+			const chromiumSource = safelyReadClipboard(() => {
+				return clipboard.read('Chromium internal source URL');
+			});
+			if (isValidHttpUrl(chromiumSource)) {
+				const cleaned = cleanUrl(chromiumSource);
+				if (isDirectImageUrl(cleaned)) {
+					if (!imageUrl) imageUrl = cleaned;
+				} else if (!pageUrl) {
+					pageUrl = cleaned;
 				}
 			}
 
-			// 3. Check for local file path from Windows File Explorer
+			// 3. Fallback: check clipboard text if pageUrl is still missing
+			if (!pageUrl) {
+				const textContent = safelyReadClipboard(() => clipboard.readText());
+				if (isValidHttpUrl(textContent)) {
+					const cleaned = cleanUrl(textContent);
+					if (!isDirectImageUrl(cleaned)) {
+						pageUrl = cleaned;
+					}
+				}
+			}
+
+			// 4. Check for local file path from Windows File Explorer
 			let localFilePath: string | undefined;
 			const rawFilePath = safelyReadClipboard(() => {
 				return clipboard.read('FileNameW') || clipboard.read('FileName');
@@ -268,6 +328,14 @@ export class WindowsClipboardProvider implements IClipboardSourceProvider {
 				const cleaned = cleanUrl(rawFilePath);
 				if (/^[A-Za-z]:[\\/]/.test(cleaned) || cleaned.startsWith('\\\\')) {
 					localFilePath = cleaned;
+				}
+			}
+
+			// 5. Final safeguard: direct image URLs must never masquerade as pageUrl
+			if (pageUrl) {
+				if (isDirectImageUrl(pageUrl) || pageUrl === imageUrl) {
+					if (!imageUrl) imageUrl = pageUrl;
+					pageUrl = undefined;
 				}
 			}
 
@@ -305,12 +373,51 @@ export class MacOSClipboardProvider implements IClipboardSourceProvider {
 			// 1. Chromium family: org.chromium.source-url
 			const chromiumUrl = safelyReadClipboard(() => clipboard.read('org.chromium.source-url'));
 			if (isValidHttpUrl(chromiumUrl)) {
-				pageUrl = cleanUrl(chromiumUrl);
+				const cleaned = cleanUrl(chromiumUrl);
+				if (isDirectImageUrl(cleaned)) {
+					if (!imageUrl) imageUrl = cleaned;
+				} else {
+					pageUrl = cleaned;
+				}
 			}
 
-			// 2. Read public.html for <img src="..." alt="..."> and possible SourceURL
+			// 2. Read public.html for <img src="..." alt="...">, <a href="...">, <base href="...">, and possible SourceURL
 			const html = safelyReadClipboard(() => clipboard.read('public.html'));
 			if (html && typeof html === 'string') {
+				// SourceURL header
+				const pageMatch = html.match(/SourceURL:\s*(https?:\/\/[^\r\n<>"']+)/i);
+				if (pageMatch && pageMatch[1] && isValidHttpUrl(pageMatch[1])) {
+					const cleaned = cleanUrl(pageMatch[1]);
+					if (isDirectImageUrl(cleaned)) {
+						if (!imageUrl) imageUrl = cleaned;
+					} else if (!pageUrl) {
+						pageUrl = cleaned;
+					}
+				}
+
+				// <base href="...">
+				const baseMatch = html.match(/<base\b[^>]*?\bhref\s*=\s*["']([^"']+)["']/i);
+				if (baseMatch && isValidHttpUrl(baseMatch[1])) {
+					const cleaned = cleanUrl(baseMatch[1]);
+					if (!isDirectImageUrl(cleaned) && !pageUrl) {
+						pageUrl = cleaned;
+					}
+				}
+
+				// <a href="...">
+				const aMatch = html.match(/<a\b[^>]*?\bhref\s*=\s*["']([^"']+)["']/i);
+				if (aMatch && aMatch[1]) {
+					const href = aMatch[1].replace(/&amp;/g, '&').trim();
+					if (isValidHttpUrl(href)) {
+						const cleaned = cleanUrl(href);
+						if (isDirectImageUrl(cleaned)) {
+							if (!imageUrl) imageUrl = cleaned;
+						} else if (!pageUrl) {
+							pageUrl = cleaned;
+						}
+					}
+				}
+
 				const imgMatch = html.match(/<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/i) ||
 					html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) ||
 					html.match(/<img[^>]+src=([^\s>]+)/i);
@@ -320,7 +427,10 @@ export class MacOSClipboardProvider implements IClipboardSourceProvider {
 						decoded = 'https:' + decoded;
 					}
 					if (isValidHttpUrl(decoded)) {
-						imageUrl = cleanUrl(decoded);
+						const cleaned = cleanUrl(decoded);
+						if (!imageUrl) {
+							imageUrl = cleaned;
+						}
 					}
 				}
 
@@ -328,13 +438,6 @@ export class MacOSClipboardProvider implements IClipboardSourceProvider {
 					html.match(/<img[^>]+alt=["']([^"']*)["']/i);
 				if (altMatch && altMatch[1]) {
 					altText = altMatch[1].trim();
-				}
-
-				if (!pageUrl) {
-					const pageMatch = html.match(/SourceURL:(https?:\/\/[^\r\n]+)/i);
-					if (pageMatch && pageMatch[1] && isValidHttpUrl(pageMatch[1])) {
-						pageUrl = cleanUrl(pageMatch[1]);
-					}
 				}
 			}
 
@@ -345,8 +448,8 @@ export class MacOSClipboardProvider implements IClipboardSourceProvider {
 					const safariUrl = BplistParser.extractSourceUrl(webArchiveBuf);
 					if (isValidHttpUrl(safariUrl)) {
 						const cleanedSafari = cleanUrl(safariUrl);
-						if (!imageUrl && /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(cleanedSafari)) {
-							imageUrl = cleanedSafari;
+						if (isDirectImageUrl(cleanedSafari)) {
+							if (!imageUrl) imageUrl = cleanedSafari;
 						} else if (!pageUrl) {
 							pageUrl = cleanedSafari;
 						}
@@ -359,7 +462,7 @@ export class MacOSClipboardProvider implements IClipboardSourceProvider {
 				const publicUrl = safelyReadClipboard(() => clipboard.read('public.url'));
 				if (isValidHttpUrl(publicUrl)) {
 					const cleanedPublic = cleanUrl(publicUrl);
-					if (/\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(cleanedPublic)) {
+					if (isDirectImageUrl(cleanedPublic)) {
 						imageUrl = cleanedPublic;
 					} else {
 						pageUrl = cleanedPublic;
@@ -367,7 +470,18 @@ export class MacOSClipboardProvider implements IClipboardSourceProvider {
 				}
 			}
 
-			// 5. Check for local file path from macOS Finder
+			// 5. Fallback: check clipboard text if pageUrl is still missing
+			if (!pageUrl) {
+				const textContent = safelyReadClipboard(() => clipboard.readText());
+				if (isValidHttpUrl(textContent)) {
+					const cleaned = cleanUrl(textContent);
+					if (!isDirectImageUrl(cleaned)) {
+						pageUrl = cleaned;
+					}
+				}
+			}
+
+			// 6. Check for local file path from macOS Finder
 			let localFilePath: string | undefined;
 			const fileUrl = safelyReadClipboard(() => {
 				return clipboard.read('public.file-url');
@@ -380,6 +494,14 @@ export class MacOSClipboardProvider implements IClipboardSourceProvider {
 					} catch {
 						localFilePath = cleaned.replace(/^file:\/\//, '');
 					}
+				}
+			}
+
+			// 7. Final safeguard: direct image URLs must never masquerade as pageUrl
+			if (pageUrl) {
+				if (isDirectImageUrl(pageUrl) || pageUrl === imageUrl) {
+					if (!imageUrl) imageUrl = pageUrl;
+					pageUrl = undefined;
 				}
 			}
 
@@ -434,17 +556,24 @@ export class ClipboardSourceService {
 	resolvePrimaryUrl(info: ImageSourceInfo | null, priority: ImageSourceUrlPriority): string | null {
 		if (!info) return null;
 
+		const validPageUrl = (info.pageUrl && !isDirectImageUrl(info.pageUrl) && info.pageUrl !== info.imageUrl)
+			? info.pageUrl
+			: null;
+		const validImageUrl = (info.imageUrl && info.imageUrl !== validPageUrl)
+			? info.imageUrl
+			: (info.pageUrl && isDirectImageUrl(info.pageUrl) ? info.pageUrl : null);
+
 		switch (priority) {
 			case 'page-first':
-				return info.pageUrl || info.imageUrl || null;
+				return validPageUrl || validImageUrl || null;
 			case 'image-first':
-				return info.imageUrl || info.pageUrl || null;
+				return validImageUrl || validPageUrl || null;
 			case 'page-only':
-				return info.pageUrl || null;
+				return validPageUrl || null;
 			case 'image-only':
-				return info.imageUrl || null;
+				return validImageUrl || null;
 			default:
-				return info.pageUrl || info.imageUrl || null;
+				return validPageUrl || validImageUrl || null;
 		}
 	}
 }

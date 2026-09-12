@@ -35,6 +35,9 @@
 
 ## Metadata Card & Image Source URL Fixes
 
+* **Origin Webpage URL Extraction on Drag & Drop:** Fixed an issue where dragging an image directly from a webpage into Obsidian only recorded the direct image asset URL in Eagle's website field instead of the origin webpage URL when "Source URL priority (Eagle website field)" was set to "Webpage URL (fallback to image URL)".
+  * The drop handler now parses multi-line `text/uri-list` payloads (RFC 2483), extracts surrounding `<a href="...">` and `<base href="...">` links from HTML payloads, and automatically checks the system clipboard text so that copying a webpage's address before dropping an image reliably attaches the page URL.
+  * Added direct image URL detection (`isDirectImageUrl`) across clipboard and drag handlers so image CDN URLs are never misclassified as webpage URLs, ensuring Eagle's website field and Extra Links panel always distinguish between the source webpage and the direct image.
 * **Null Byte Sanitization:** Fixed an issue where copying images in Chromium browsers on Windows placed a trailing null byte (`\0`) into the source URL. Because CommonMark rejects control characters in links, this previously broke markdown link rendering in Obsidian. All URLs are now sanitized upon capture.
 * **In-Memory Fallback:** The metadata card generator now directly receives the in-memory captured source URL rather than waiting for and relying solely on Eagle's asynchronous database write round-trip, eliminating race conditions where the source link was skipped.
 * **Extra Links Resolution:** If Eagle's primary URL field holds an Obsidian backlink, the metadata card now automatically inspects the item's Extra Links on disk to locate the web source URL.

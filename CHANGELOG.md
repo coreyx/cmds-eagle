@@ -33,6 +33,10 @@ All notable changes to this project will be documented in this file.
 - **Docs**: Added a "Development & Testing" section to the `README.md` with instructions for compiling, installing, and testing local builds.
 
 ### Fixed
+- **Webpage Origin URL Extraction on Drag & Drop**: Fixed an issue where dragging and dropping an image from a web browser into Obsidian stored only the direct image URL (e.g., from an image CDN) in Eagle's website field instead of the origin webpage URL when "Source URL priority (Eagle website field)" was configured to "Webpage URL (fallback to image URL)":
+  - Added `isDirectImageUrl` classification to identify image asset URLs (e.g., `.png`, `.jpg`, `.jpeg`, `.webp`, `.svg`, etc., taking query parameters like `?imwidth=1600` into account) and prevent them from masquerading as `pageUrl`.
+  - Upgraded drag-and-drop parsing in `handleDrop` to process multi-line `text/uri-list` payloads (RFC 2483), extract `<a href="...">` and `<base href="...">` from HTML payloads, and automatically fall back to the system clipboard text (`clipboard.readText()`) if the webpage URL was copied from the browser address bar.
+  - Updated `resolvePrimaryUrl` and Eagle's Extra Links service so that `page-only` and `page-first` priority options accurately distinguish between genuine origin webpage URLs and direct image asset URLs.
 - **Image Name Resolution on Paste/Drop**: Fixed an issue where images pasted or dragged from web browsers were genericly named "image" (due to Chromium clipboard assigning `image.png`). The plugin now automatically resolves the real asset filename from the source image URL path (e.g., resolving `2600_HomeforEveryone` from `https://.../2600_HomeforEveryone.jpg`) to pre-populate the Name field in the Ask modal and name the Eagle asset.
 - **Folder Picker Selection**: Fixed an issue in the Ask mode folder picker where choosing a folder could prematurely trigger "Upload cancelled" due to modal dismissal timing.
 - **Metadata Card Image Source Link**: Resolved an issue where the source link was not added to the metadata card even when "Include source in metadata card" was enabled:

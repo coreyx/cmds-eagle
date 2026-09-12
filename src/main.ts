@@ -34,7 +34,7 @@ import {
 import { EagleSearchModal, ImagePasteChoiceModal, EagleLinkChoiceModal, EagleFolderPickerModal } from './modals';
 import { CMDSPACEEagleSettingTab } from './settings';
 import { createCloudProvider, getMimeType, getExtFromFilename, CloudProvider } from './cloud-providers';
-import { ClipboardSourceService, extractDomain, cleanUrl, isValidHttpUrl } from './clipboard-source';
+import { ClipboardSourceService, extractDomain, cleanUrl, isValidHttpUrl, isDirectImageUrl } from './clipboard-source';
 
 // Minimal shape of the Excalidraw plugin's view that we drive.
 // (The Excalidraw plugin is an optional peer, so we don't import its types.)
@@ -317,7 +317,12 @@ export default class CMDSPACELinkEagle extends Plugin {
 		// 1. Check sourceInfo if provided as object
 		if (sourceInfoOrUrl && typeof sourceInfoOrUrl === 'object') {
 			if (sourceInfoOrUrl.pageUrl) {
-				pageUrl = cleanUrl(sourceInfoOrUrl.pageUrl);
+				const cleaned = cleanUrl(sourceInfoOrUrl.pageUrl);
+				if (!isDirectImageUrl(cleaned) && cleaned !== sourceInfoOrUrl.imageUrl) {
+					pageUrl = cleaned;
+				} else if (!imageUrl) {
+					imageUrl = cleaned;
+				}
 			}
 			if (sourceInfoOrUrl.imageUrl) {
 				imageUrl = cleanUrl(sourceInfoOrUrl.imageUrl);
@@ -1180,33 +1185,40 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 
 		let sourceInfo: ImageSourceInfo | null = null;
 		if (evt.dataTransfer) {
-			const uriList = evt.dataTransfer.getData('text/uri-list');
-			const html = evt.dataTransfer.getData('text/html');
-			const textPlain = evt.dataTransfer.getData('text/plain')?.trim();
+			const dt = evt.dataTransfer;
+			const uriList = dt.getData('text/uri-list');
+			const html = dt.getData('text/html');
+			const textPlain = dt.getData('text/plain')?.trim();
 			let pageUrl: string | undefined;
 			let imageUrl: string | undefined;
 			let localFilePath: string | undefined;
+			let altText: string | undefined;
 
+			// 1. Process text/uri-list (RFC 2483 multi-line support)
 			if (uriList) {
-				if (isValidHttpUrl(uriList)) {
-					const cleaned = cleanUrl(uriList);
-					if (/\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(cleaned)) {
-						imageUrl = cleaned;
-					} else {
-						pageUrl = cleaned;
-					}
-				} else if (uriList.startsWith('file://')) {
-					try {
-						localFilePath = decodeURIComponent(new URL(uriList.trim().split('\r\n')[0]).pathname);
-						if (/^\/[A-Za-z]:/.test(localFilePath)) {
-							localFilePath = localFilePath.slice(1);
+				const lines = uriList.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0 && !l.startsWith('#'));
+				for (const line of lines) {
+					if (isValidHttpUrl(line)) {
+						const cleaned = cleanUrl(line);
+						if (isDirectImageUrl(cleaned)) {
+							if (!imageUrl) imageUrl = cleaned;
+						} else if (!pageUrl) {
+							pageUrl = cleaned;
 						}
-					} catch {
-						localFilePath = uriList.trim().split('\r\n')[0].replace(/^file:\/\//, '');
+					} else if (line.startsWith('file://') && !localFilePath) {
+						try {
+							localFilePath = decodeURIComponent(new URL(line).pathname);
+							if (/^\/[A-Za-z]:/.test(localFilePath)) {
+								localFilePath = localFilePath.slice(1);
+							}
+						} catch {
+							localFilePath = line.replace(/^file:\/\//, '');
+						}
 					}
 				}
 			}
 
+			// 2. Process text/plain
 			if (textPlain && !localFilePath) {
 				if (/^[A-Za-z]:[\\/]/.test(textPlain) || textPlain.startsWith('\\\\') || textPlain.startsWith('/')) {
 					localFilePath = textPlain;
@@ -1219,11 +1231,82 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 					} catch {
 						localFilePath = textPlain.split('\r\n')[0].replace(/^file:\/\//, '');
 					}
+				} else if (isValidHttpUrl(textPlain)) {
+					const cleaned = cleanUrl(textPlain);
+					if (isDirectImageUrl(cleaned)) {
+						if (!imageUrl) imageUrl = cleaned;
+					} else if (!pageUrl) {
+						pageUrl = cleaned;
+					}
 				}
 			}
 
-			let altText: string | undefined;
+			// 3. Process additional dataTransfer types (e.g. text/x-moz-url)
+			if (dt.types) {
+				for (const type of dt.types) {
+					if (type === 'text/x-moz-url') {
+						const mozUrlData = dt.getData('text/x-moz-url');
+						if (mozUrlData) {
+							const mozFirstLine = mozUrlData.split(/\r?\n/)[0].trim();
+							if (isValidHttpUrl(mozFirstLine)) {
+								const cleaned = cleanUrl(mozFirstLine);
+								if (isDirectImageUrl(cleaned)) {
+									if (!imageUrl) imageUrl = cleaned;
+								} else if (!pageUrl) {
+									pageUrl = cleaned;
+								}
+							}
+						}
+					}
+				}
+			}
+
+			// 4. Process text/html
 			if (html) {
+				// SourceURL header in HTML if present
+				const sourceUrlMatch = html.match(/SourceURL:\s*(https?:\/\/[^\r\n<>"']+)/i);
+				if (sourceUrlMatch && isValidHttpUrl(sourceUrlMatch[1])) {
+					const cleaned = cleanUrl(sourceUrlMatch[1]);
+					if (isDirectImageUrl(cleaned)) {
+						if (!imageUrl) imageUrl = cleaned;
+					} else if (!pageUrl) {
+						pageUrl = cleaned;
+					}
+				}
+
+				// <base href="...">
+				const baseMatch = html.match(/<base\b[^>]*?\bhref\s*=\s*["']([^"']+)["']/i);
+				if (baseMatch && isValidHttpUrl(baseMatch[1])) {
+					const cleaned = cleanUrl(baseMatch[1]);
+					if (!isDirectImageUrl(cleaned) && !pageUrl) {
+						pageUrl = cleaned;
+					}
+				}
+
+				// <a href="...">
+				const aMatch = html.match(/<a\b[^>]*?\bhref\s*=\s*["']([^"']+)["']/i);
+				if (aMatch && aMatch[1]) {
+					const href = aMatch[1].replace(/&amp;/g, '&').trim();
+					if (isValidHttpUrl(href)) {
+						const cleaned = cleanUrl(href);
+						if (isDirectImageUrl(cleaned)) {
+							if (!imageUrl) imageUrl = cleaned;
+						} else if (!pageUrl) {
+							pageUrl = cleaned;
+						}
+					}
+				}
+
+				// Canonical / data-url / data-page-url
+				const dataUrlMatch = html.match(/\b(?:data-url|data-page-url|data-source|data-origin)\s*=\s*["'](https?:\/\/[^"']+)["']/i);
+				if (dataUrlMatch && isValidHttpUrl(dataUrlMatch[1])) {
+					const cleaned = cleanUrl(dataUrlMatch[1]);
+					if (!isDirectImageUrl(cleaned) && !pageUrl) {
+						pageUrl = cleaned;
+					}
+				}
+
+				// <img src="..." alt="...">
 				const imgMatch = html.match(/<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/i) ||
 					html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) ||
 					html.match(/<img[^>]+src=([^\s>]+)/i);
@@ -1233,7 +1316,10 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 						decoded = 'https:' + decoded;
 					}
 					if (isValidHttpUrl(decoded)) {
-						imageUrl = cleanUrl(decoded);
+						const cleaned = cleanUrl(decoded);
+						if (!imageUrl) {
+							imageUrl = cleaned;
+						}
 					}
 				}
 
@@ -1241,6 +1327,31 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 					html.match(/<img[^>]+alt=["']([^"']*)["']/i);
 				if (altMatch && altMatch[1]) {
 					altText = altMatch[1].trim();
+				}
+			}
+
+			// 5. Fallback: check system clipboard for webpage URL if pageUrl is still missing
+			if (!pageUrl) {
+				try {
+					const electron = (window as any).require
+						? (window as any).require('electron')
+						: require('electron');
+					if (electron?.clipboard) {
+						const clipText = cleanUrl(electron.clipboard.readText());
+						if (isValidHttpUrl(clipText) && !isDirectImageUrl(clipText)) {
+							pageUrl = clipText;
+						}
+					}
+				} catch {
+					// ignore
+				}
+			}
+
+			// 6. Safeguard: direct image URLs must never masquerade as pageUrl
+			if (pageUrl) {
+				if (isDirectImageUrl(pageUrl) || pageUrl === imageUrl) {
+					if (!imageUrl) imageUrl = pageUrl;
+					pageUrl = undefined;
 				}
 			}
 
@@ -2586,11 +2697,13 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		const linksToPush: Array<{ title: string; url: string }> = [];
 
 		if ((mode === 'page' || mode === 'both') && sourceInfo.pageUrl) {
-			const domain = extractDomain(sourceInfo.pageUrl);
-			linksToPush.push({
-				title: domain ? `Source Page: ${domain}` : 'Source Page',
-				url: sourceInfo.pageUrl
-			});
+			if (!isDirectImageUrl(sourceInfo.pageUrl) && sourceInfo.pageUrl !== sourceInfo.imageUrl) {
+				const domain = extractDomain(sourceInfo.pageUrl);
+				linksToPush.push({
+					title: domain ? `Source Page: ${domain}` : 'Source Page',
+					url: sourceInfo.pageUrl
+				});
+			}
 		}
 
 		if ((mode === 'image' || mode === 'both') && sourceInfo.imageUrl) {

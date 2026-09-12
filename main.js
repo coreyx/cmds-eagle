@@ -3245,6 +3245,17 @@ function isValidHttpUrl(urlStr) {
   const trimmed = cleanUrl(urlStr);
   return /^https?:\/\/[^\s<>"'\0\x01-\x1f]+$/i.test(trimmed);
 }
+function isDirectImageUrl(urlStr) {
+  if (!urlStr)
+    return false;
+  const cleaned = cleanUrl(urlStr);
+  try {
+    const parsed = new URL(cleaned);
+    return /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico|tiff?|jfif|pjpeg|pjp)$/i.test(parsed.pathname);
+  } catch (e) {
+    return /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico|tiff?|jfif|pjpeg|pjp)(\?.*)?$/i.test(cleaned);
+  }
+}
 var BplistParser = class {
   static extractSourceUrl(buf) {
     var _a, _b;
@@ -3381,9 +3392,35 @@ var WindowsClipboardProvider = class {
       let altText;
       if (buf && buf.length > 0) {
         const text = buf.toString("utf8");
-        const pageMatch = text.match(/SourceURL:(https?:\/\/[^\r\n]+)/i);
+        const pageMatch = text.match(/SourceURL:\s*(https?:\/\/[^\r\n<>"']+)/i);
         if (pageMatch && pageMatch[1] && isValidHttpUrl(pageMatch[1])) {
-          pageUrl = cleanUrl(pageMatch[1]);
+          const cleaned = cleanUrl(pageMatch[1]);
+          if (isDirectImageUrl(cleaned)) {
+            if (!imageUrl)
+              imageUrl = cleaned;
+          } else {
+            pageUrl = cleaned;
+          }
+        }
+        const baseMatch = text.match(/<base\b[^>]*?\bhref\s*=\s*["']([^"']+)["']/i);
+        if (baseMatch && isValidHttpUrl(baseMatch[1])) {
+          const cleaned = cleanUrl(baseMatch[1]);
+          if (!isDirectImageUrl(cleaned) && !pageUrl) {
+            pageUrl = cleaned;
+          }
+        }
+        const aMatch = text.match(/<a\b[^>]*?\bhref\s*=\s*["']([^"']+)["']/i);
+        if (aMatch && aMatch[1]) {
+          const href = aMatch[1].replace(/&amp;/g, "&").trim();
+          if (isValidHttpUrl(href)) {
+            const cleaned = cleanUrl(href);
+            if (isDirectImageUrl(cleaned)) {
+              if (!imageUrl)
+                imageUrl = cleaned;
+            } else if (!pageUrl) {
+              pageUrl = cleaned;
+            }
+          }
         }
         const imgMatch = text.match(/<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/i) || text.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) || text.match(/<img[^>]+src=([^\s>]+)/i);
         if (imgMatch && imgMatch[1]) {
@@ -3392,7 +3429,10 @@ var WindowsClipboardProvider = class {
             decoded = "https:" + decoded;
           }
           if (isValidHttpUrl(decoded)) {
-            imageUrl = cleanUrl(decoded);
+            const cleaned = cleanUrl(decoded);
+            if (!imageUrl) {
+              imageUrl = cleaned;
+            }
           }
         }
         const altMatch = text.match(/<img\b[^>]*?\balt\s*=\s*["']([^"']*)["']/i) || text.match(/<img[^>]+alt=["']([^"']*)["']/i);
@@ -3400,12 +3440,25 @@ var WindowsClipboardProvider = class {
           altText = altMatch[1].trim();
         }
       }
+      const chromiumSource = safelyReadClipboard(() => {
+        return clipboard.read("Chromium internal source URL");
+      });
+      if (isValidHttpUrl(chromiumSource)) {
+        const cleaned = cleanUrl(chromiumSource);
+        if (isDirectImageUrl(cleaned)) {
+          if (!imageUrl)
+            imageUrl = cleaned;
+        } else if (!pageUrl) {
+          pageUrl = cleaned;
+        }
+      }
       if (!pageUrl) {
-        const chromiumSource = safelyReadClipboard(() => {
-          return clipboard.read("Chromium internal source URL");
-        });
-        if (isValidHttpUrl(chromiumSource)) {
-          pageUrl = cleanUrl(chromiumSource);
+        const textContent = safelyReadClipboard(() => clipboard.readText());
+        if (isValidHttpUrl(textContent)) {
+          const cleaned = cleanUrl(textContent);
+          if (!isDirectImageUrl(cleaned)) {
+            pageUrl = cleaned;
+          }
         }
       }
       let localFilePath;
@@ -3416,6 +3469,13 @@ var WindowsClipboardProvider = class {
         const cleaned = cleanUrl(rawFilePath);
         if (/^[A-Za-z]:[\\/]/.test(cleaned) || cleaned.startsWith("\\\\")) {
           localFilePath = cleaned;
+        }
+      }
+      if (pageUrl) {
+        if (isDirectImageUrl(pageUrl) || pageUrl === imageUrl) {
+          if (!imageUrl)
+            imageUrl = pageUrl;
+          pageUrl = void 0;
         }
       }
       if (pageUrl || imageUrl || localFilePath || altText) {
@@ -3440,10 +3500,46 @@ var MacOSClipboardProvider = class {
       let altText;
       const chromiumUrl = safelyReadClipboard(() => clipboard.read("org.chromium.source-url"));
       if (isValidHttpUrl(chromiumUrl)) {
-        pageUrl = cleanUrl(chromiumUrl);
+        const cleaned = cleanUrl(chromiumUrl);
+        if (isDirectImageUrl(cleaned)) {
+          if (!imageUrl)
+            imageUrl = cleaned;
+        } else {
+          pageUrl = cleaned;
+        }
       }
       const html = safelyReadClipboard(() => clipboard.read("public.html"));
       if (html && typeof html === "string") {
+        const pageMatch = html.match(/SourceURL:\s*(https?:\/\/[^\r\n<>"']+)/i);
+        if (pageMatch && pageMatch[1] && isValidHttpUrl(pageMatch[1])) {
+          const cleaned = cleanUrl(pageMatch[1]);
+          if (isDirectImageUrl(cleaned)) {
+            if (!imageUrl)
+              imageUrl = cleaned;
+          } else if (!pageUrl) {
+            pageUrl = cleaned;
+          }
+        }
+        const baseMatch = html.match(/<base\b[^>]*?\bhref\s*=\s*["']([^"']+)["']/i);
+        if (baseMatch && isValidHttpUrl(baseMatch[1])) {
+          const cleaned = cleanUrl(baseMatch[1]);
+          if (!isDirectImageUrl(cleaned) && !pageUrl) {
+            pageUrl = cleaned;
+          }
+        }
+        const aMatch = html.match(/<a\b[^>]*?\bhref\s*=\s*["']([^"']+)["']/i);
+        if (aMatch && aMatch[1]) {
+          const href = aMatch[1].replace(/&amp;/g, "&").trim();
+          if (isValidHttpUrl(href)) {
+            const cleaned = cleanUrl(href);
+            if (isDirectImageUrl(cleaned)) {
+              if (!imageUrl)
+                imageUrl = cleaned;
+            } else if (!pageUrl) {
+              pageUrl = cleaned;
+            }
+          }
+        }
         const imgMatch = html.match(/<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/i) || html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) || html.match(/<img[^>]+src=([^\s>]+)/i);
         if (imgMatch && imgMatch[1]) {
           let decoded = imgMatch[1].replace(/&amp;/g, "&").trim();
@@ -3451,18 +3547,15 @@ var MacOSClipboardProvider = class {
             decoded = "https:" + decoded;
           }
           if (isValidHttpUrl(decoded)) {
-            imageUrl = cleanUrl(decoded);
+            const cleaned = cleanUrl(decoded);
+            if (!imageUrl) {
+              imageUrl = cleaned;
+            }
           }
         }
         const altMatch = html.match(/<img\b[^>]*?\balt\s*=\s*["']([^"']*)["']/i) || html.match(/<img[^>]+alt=["']([^"']*)["']/i);
         if (altMatch && altMatch[1]) {
           altText = altMatch[1].trim();
-        }
-        if (!pageUrl) {
-          const pageMatch = html.match(/SourceURL:(https?:\/\/[^\r\n]+)/i);
-          if (pageMatch && pageMatch[1] && isValidHttpUrl(pageMatch[1])) {
-            pageUrl = cleanUrl(pageMatch[1]);
-          }
         }
       }
       if (!pageUrl || !imageUrl) {
@@ -3471,8 +3564,9 @@ var MacOSClipboardProvider = class {
           const safariUrl = BplistParser.extractSourceUrl(webArchiveBuf);
           if (isValidHttpUrl(safariUrl)) {
             const cleanedSafari = cleanUrl(safariUrl);
-            if (!imageUrl && /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(cleanedSafari)) {
-              imageUrl = cleanedSafari;
+            if (isDirectImageUrl(cleanedSafari)) {
+              if (!imageUrl)
+                imageUrl = cleanedSafari;
             } else if (!pageUrl) {
               pageUrl = cleanedSafari;
             }
@@ -3483,10 +3577,19 @@ var MacOSClipboardProvider = class {
         const publicUrl = safelyReadClipboard(() => clipboard.read("public.url"));
         if (isValidHttpUrl(publicUrl)) {
           const cleanedPublic = cleanUrl(publicUrl);
-          if (/\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(cleanedPublic)) {
+          if (isDirectImageUrl(cleanedPublic)) {
             imageUrl = cleanedPublic;
           } else {
             pageUrl = cleanedPublic;
+          }
+        }
+      }
+      if (!pageUrl) {
+        const textContent = safelyReadClipboard(() => clipboard.readText());
+        if (isValidHttpUrl(textContent)) {
+          const cleaned = cleanUrl(textContent);
+          if (!isDirectImageUrl(cleaned)) {
+            pageUrl = cleaned;
           }
         }
       }
@@ -3502,6 +3605,13 @@ var MacOSClipboardProvider = class {
           } catch (e) {
             localFilePath = cleaned.replace(/^file:\/\//, "");
           }
+        }
+      }
+      if (pageUrl) {
+        if (isDirectImageUrl(pageUrl) || pageUrl === imageUrl) {
+          if (!imageUrl)
+            imageUrl = pageUrl;
+          pageUrl = void 0;
         }
       }
       if (pageUrl || imageUrl || localFilePath || altText) {
@@ -3541,17 +3651,19 @@ var ClipboardSourceService = class {
   resolvePrimaryUrl(info, priority) {
     if (!info)
       return null;
+    const validPageUrl = info.pageUrl && !isDirectImageUrl(info.pageUrl) && info.pageUrl !== info.imageUrl ? info.pageUrl : null;
+    const validImageUrl = info.imageUrl && info.imageUrl !== validPageUrl ? info.imageUrl : info.pageUrl && isDirectImageUrl(info.pageUrl) ? info.pageUrl : null;
     switch (priority) {
       case "page-first":
-        return info.pageUrl || info.imageUrl || null;
+        return validPageUrl || validImageUrl || null;
       case "image-first":
-        return info.imageUrl || info.pageUrl || null;
+        return validImageUrl || validPageUrl || null;
       case "page-only":
-        return info.pageUrl || null;
+        return validPageUrl || null;
       case "image-only":
-        return info.imageUrl || null;
+        return validImageUrl || null;
       default:
-        return info.pageUrl || info.imageUrl || null;
+        return validPageUrl || validImageUrl || null;
     }
   }
 };
@@ -3778,7 +3890,12 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     let localFileUrl = null;
     if (sourceInfoOrUrl && typeof sourceInfoOrUrl === "object") {
       if (sourceInfoOrUrl.pageUrl) {
-        pageUrl = cleanUrl(sourceInfoOrUrl.pageUrl);
+        const cleaned = cleanUrl(sourceInfoOrUrl.pageUrl);
+        if (!isDirectImageUrl(cleaned) && cleaned !== sourceInfoOrUrl.imageUrl) {
+          pageUrl = cleaned;
+        } else if (!imageUrl) {
+          imageUrl = cleaned;
+        }
       }
       if (sourceInfoOrUrl.imageUrl) {
         imageUrl = cleanUrl(sourceInfoOrUrl.imageUrl);
@@ -4494,28 +4611,34 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     }
     let sourceInfo = null;
     if (evt.dataTransfer) {
-      const uriList = evt.dataTransfer.getData("text/uri-list");
-      const html = evt.dataTransfer.getData("text/html");
-      const textPlain = (_a = evt.dataTransfer.getData("text/plain")) == null ? void 0 : _a.trim();
+      const dt = evt.dataTransfer;
+      const uriList = dt.getData("text/uri-list");
+      const html = dt.getData("text/html");
+      const textPlain = (_a = dt.getData("text/plain")) == null ? void 0 : _a.trim();
       let pageUrl;
       let imageUrl;
       let localFilePath;
+      let altText;
       if (uriList) {
-        if (isValidHttpUrl(uriList)) {
-          const cleaned = cleanUrl(uriList);
-          if (/\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(cleaned)) {
-            imageUrl = cleaned;
-          } else {
-            pageUrl = cleaned;
-          }
-        } else if (uriList.startsWith("file://")) {
-          try {
-            localFilePath = decodeURIComponent(new URL(uriList.trim().split("\r\n")[0]).pathname);
-            if (/^\/[A-Za-z]:/.test(localFilePath)) {
-              localFilePath = localFilePath.slice(1);
+        const lines = uriList.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#"));
+        for (const line of lines) {
+          if (isValidHttpUrl(line)) {
+            const cleaned = cleanUrl(line);
+            if (isDirectImageUrl(cleaned)) {
+              if (!imageUrl)
+                imageUrl = cleaned;
+            } else if (!pageUrl) {
+              pageUrl = cleaned;
             }
-          } catch (e) {
-            localFilePath = uriList.trim().split("\r\n")[0].replace(/^file:\/\//, "");
+          } else if (line.startsWith("file://") && !localFilePath) {
+            try {
+              localFilePath = decodeURIComponent(new URL(line).pathname);
+              if (/^\/[A-Za-z]:/.test(localFilePath)) {
+                localFilePath = localFilePath.slice(1);
+              }
+            } catch (e) {
+              localFilePath = line.replace(/^file:\/\//, "");
+            }
           }
         }
       }
@@ -4531,10 +4654,73 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
           } catch (e) {
             localFilePath = textPlain.split("\r\n")[0].replace(/^file:\/\//, "");
           }
+        } else if (isValidHttpUrl(textPlain)) {
+          const cleaned = cleanUrl(textPlain);
+          if (isDirectImageUrl(cleaned)) {
+            if (!imageUrl)
+              imageUrl = cleaned;
+          } else if (!pageUrl) {
+            pageUrl = cleaned;
+          }
         }
       }
-      let altText;
+      if (dt.types) {
+        for (const type of dt.types) {
+          if (type === "text/x-moz-url") {
+            const mozUrlData = dt.getData("text/x-moz-url");
+            if (mozUrlData) {
+              const mozFirstLine = mozUrlData.split(/\r?\n/)[0].trim();
+              if (isValidHttpUrl(mozFirstLine)) {
+                const cleaned = cleanUrl(mozFirstLine);
+                if (isDirectImageUrl(cleaned)) {
+                  if (!imageUrl)
+                    imageUrl = cleaned;
+                } else if (!pageUrl) {
+                  pageUrl = cleaned;
+                }
+              }
+            }
+          }
+        }
+      }
       if (html) {
+        const sourceUrlMatch = html.match(/SourceURL:\s*(https?:\/\/[^\r\n<>"']+)/i);
+        if (sourceUrlMatch && isValidHttpUrl(sourceUrlMatch[1])) {
+          const cleaned = cleanUrl(sourceUrlMatch[1]);
+          if (isDirectImageUrl(cleaned)) {
+            if (!imageUrl)
+              imageUrl = cleaned;
+          } else if (!pageUrl) {
+            pageUrl = cleaned;
+          }
+        }
+        const baseMatch = html.match(/<base\b[^>]*?\bhref\s*=\s*["']([^"']+)["']/i);
+        if (baseMatch && isValidHttpUrl(baseMatch[1])) {
+          const cleaned = cleanUrl(baseMatch[1]);
+          if (!isDirectImageUrl(cleaned) && !pageUrl) {
+            pageUrl = cleaned;
+          }
+        }
+        const aMatch = html.match(/<a\b[^>]*?\bhref\s*=\s*["']([^"']+)["']/i);
+        if (aMatch && aMatch[1]) {
+          const href = aMatch[1].replace(/&amp;/g, "&").trim();
+          if (isValidHttpUrl(href)) {
+            const cleaned = cleanUrl(href);
+            if (isDirectImageUrl(cleaned)) {
+              if (!imageUrl)
+                imageUrl = cleaned;
+            } else if (!pageUrl) {
+              pageUrl = cleaned;
+            }
+          }
+        }
+        const dataUrlMatch = html.match(/\b(?:data-url|data-page-url|data-source|data-origin)\s*=\s*["'](https?:\/\/[^"']+)["']/i);
+        if (dataUrlMatch && isValidHttpUrl(dataUrlMatch[1])) {
+          const cleaned = cleanUrl(dataUrlMatch[1]);
+          if (!isDirectImageUrl(cleaned) && !pageUrl) {
+            pageUrl = cleaned;
+          }
+        }
         const imgMatch = html.match(/<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/i) || html.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i) || html.match(/<img[^>]+src=([^\s>]+)/i);
         if (imgMatch && imgMatch[1]) {
           let decoded = imgMatch[1].replace(/&amp;/g, "&").trim();
@@ -4542,12 +4728,34 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
             decoded = "https:" + decoded;
           }
           if (isValidHttpUrl(decoded)) {
-            imageUrl = cleanUrl(decoded);
+            const cleaned = cleanUrl(decoded);
+            if (!imageUrl) {
+              imageUrl = cleaned;
+            }
           }
         }
         const altMatch = html.match(/<img\b[^>]*?\balt\s*=\s*["']([^"']*)["']/i) || html.match(/<img[^>]+alt=["']([^"']*)["']/i);
         if (altMatch && altMatch[1]) {
           altText = altMatch[1].trim();
+        }
+      }
+      if (!pageUrl) {
+        try {
+          const electron = window.require ? window.require("electron") : require("electron");
+          if (electron == null ? void 0 : electron.clipboard) {
+            const clipText = cleanUrl(electron.clipboard.readText());
+            if (isValidHttpUrl(clipText) && !isDirectImageUrl(clipText)) {
+              pageUrl = clipText;
+            }
+          }
+        } catch (e) {
+        }
+      }
+      if (pageUrl) {
+        if (isDirectImageUrl(pageUrl) || pageUrl === imageUrl) {
+          if (!imageUrl)
+            imageUrl = pageUrl;
+          pageUrl = void 0;
         }
       }
       if (pageUrl || imageUrl || localFilePath || altText) {
@@ -5669,11 +5877,13 @@ ${updates.annotation}`;
       return;
     const linksToPush = [];
     if ((mode === "page" || mode === "both") && sourceInfo.pageUrl) {
-      const domain = extractDomain(sourceInfo.pageUrl);
-      linksToPush.push({
-        title: domain ? `Source Page: ${domain}` : "Source Page",
-        url: sourceInfo.pageUrl
-      });
+      if (!isDirectImageUrl(sourceInfo.pageUrl) && sourceInfo.pageUrl !== sourceInfo.imageUrl) {
+        const domain = extractDomain(sourceInfo.pageUrl);
+        linksToPush.push({
+          title: domain ? `Source Page: ${domain}` : "Source Page",
+          url: sourceInfo.pageUrl
+        });
+      }
     }
     if ((mode === "image" || mode === "both") && sourceInfo.imageUrl) {
       if (sourceInfo.imageUrl !== sourceInfo.pageUrl) {
