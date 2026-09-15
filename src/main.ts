@@ -2327,6 +2327,9 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 				const fileName = context.fileName || resolveImageFileName(context.file, context.sourceInfo);
 				const initialAltText = context.sourceInfo?.altText;
 				const initialTags = this.getDefaultTags() || [];
+				const activeFile = context.activeFile || this.app.workspace.getActiveFile();
+				const folderPath = activeFile?.parent?.path;
+				const activeFolderPath = (!folderPath || folderPath === '/' || folderPath === '.') ? '' : folderPath;
 
 				const result = await EagleFolderPickerModal.pickFolder(
 					this.app,
@@ -2337,6 +2340,10 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 						fileName,
 						initialAltText,
 						initialTags,
+						activeFolderPath,
+						onMirror: async () => {
+							return await this.resolveMirroredEagleFolder(activeFile);
+						},
 					}
 				);
 

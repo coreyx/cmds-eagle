@@ -142,13 +142,17 @@ export interface EagleFolderPickerResult {
 	annotation?: string;
 	tags?: string[];
 	star?: number;
+	mirrored?: boolean;
 }
 
 export interface EagleFolderPickerContext {
-	previewUrl?: string;
+	file?: File;
 	fileName?: string;
 	initialAltText?: string;
 	initialTags?: string[];
+	previewUrl?: string;
+	activeFolderPath?: string;
+	onMirror?: () => Promise<string | undefined>;
 }
 
 export interface EagleExtraLink {

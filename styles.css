@@ -296,6 +296,57 @@
 	margin-bottom: 10px;
 }
 
+.cmdspace-eagle-picker-mirror-bar {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-bottom: 12px;
+	padding: 8px 12px;
+	border-radius: 6px;
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+}
+
+.cmdspace-eagle-picker-mirror-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 13px;
+	font-weight: 500;
+	padding: 5px 12px;
+	border-radius: 5px;
+	border: 1px solid var(--interactive-accent);
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	cursor: pointer;
+	transition: background-color 0.15s ease, opacity 0.15s ease;
+	flex-shrink: 0;
+}
+
+.cmdspace-eagle-picker-mirror-btn:hover:not(:disabled) {
+	background: var(--interactive-accent-hover);
+}
+
+.cmdspace-eagle-picker-mirror-btn.is-loading,
+.cmdspace-eagle-picker-mirror-btn:disabled {
+	opacity: 0.65;
+	cursor: not-allowed;
+}
+
+.cmdspace-eagle-picker-mirror-icon {
+	font-size: 13px;
+	line-height: 1;
+}
+
+.cmdspace-eagle-picker-mirror-path {
+	font-size: 12px;
+	color: var(--text-muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	flex: 1;
+}
+
 .cmdspace-eagle-picker-search-container {
 	position: relative;
 	width: 100%;

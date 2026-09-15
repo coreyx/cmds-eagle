@@ -714,6 +714,7 @@ export class EagleFolderPickerModal extends Modal {
 	private searchInputEl!: HTMLInputElement;
 	private listContainerEl!: HTMLElement;
 	private rowElements: HTMLElement[] = [];
+	private executeMirror?: () => Promise<void>;
 
 	constructor(
 		app: App,
@@ -895,6 +896,78 @@ export class EagleFolderPickerModal extends Modal {
 		const headerEl = rightPane.createDiv({ cls: 'cmdspace-eagle-picker-header' });
 		headerEl.createDiv({ cls: 'cmdspace-eagle-picker-title', text: 'Select Eagle Folder' });
 
+		// Mirror button action bar
+		const activePath = this.context?.activeFolderPath?.trim();
+		const pathDisplay = activePath ? activePath.replace(/\//g, ' / ') : 'Library Root';
+
+		const mirrorBar = headerEl.createDiv({ cls: 'cmdspace-eagle-picker-mirror-bar' });
+		const mirrorBtn = mirrorBar.createEl('button', {
+			cls: 'cmdspace-eagle-picker-mirror-btn',
+			type: 'button',
+		});
+		mirrorBtn.createSpan({ cls: 'cmdspace-eagle-picker-mirror-icon', text: '🪞' });
+		const mirrorBtnText = mirrorBtn.createSpan({ cls: 'cmdspace-eagle-picker-mirror-btn-text', text: 'Mirror' });
+		mirrorBtn.title = activePath
+			? `Mirror to Eagle folder: ${pathDisplay} (Alt+M)`
+			: 'Mirror to Library Root (Alt+M)';
+
+		mirrorBar.createDiv({
+			cls: 'cmdspace-eagle-picker-mirror-path',
+			text: pathDisplay,
+			title: activePath
+				? `Mirror vault path: ${pathDisplay} (Alt+M)`
+				: 'Mirror to Library Root (Alt+M)',
+		});
+
+		let isMirroring = false;
+		const executeMirror = async () => {
+			if (this.resolved || isMirroring) return;
+			if (!this.context?.onMirror) {
+				this.selectItem({
+					type: 'root',
+					name: 'Library Root',
+					path: 'Library Root',
+				});
+				return;
+			}
+
+			isMirroring = true;
+			mirrorBtn.addClass('is-loading');
+			mirrorBtnText.setText('Mirroring...');
+			mirrorBtn.disabled = true;
+
+			try {
+				const folderId = await this.context.onMirror();
+				this.resolved = true;
+				this.onSelect({
+					folderId,
+					folderName: activePath || 'Library Root',
+					cancelled: false,
+					name: this.itemName.trim() || this.initialFileName,
+					annotation: this.itemDescription.trim() || undefined,
+					tags: this.itemTags.length > 0 ? this.itemTags : undefined,
+					star: this.starRating > 0 ? this.starRating : undefined,
+					mirrored: true,
+				});
+				this.close();
+			} catch (err) {
+				console.error('[CMDS Eagle] Error executing mirror from picker:', err);
+				new Notice('Failed to mirror folder hierarchy in Eagle.');
+				isMirroring = false;
+				mirrorBtn.removeClass('is-loading');
+				mirrorBtnText.setText('Mirror');
+				mirrorBtn.disabled = false;
+			}
+		};
+
+		this.executeMirror = executeMirror;
+
+		mirrorBtn.addEventListener('click', (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			void executeMirror();
+		});
+
 		const searchContainer = headerEl.createDiv({ cls: 'cmdspace-eagle-picker-search-container' });
 		this.searchInputEl = searchContainer.createEl('input', {
 			type: 'text',
@@ -910,6 +983,15 @@ export class EagleFolderPickerModal extends Modal {
 
 		this.searchInputEl.addEventListener('keydown', (e: KeyboardEvent) => {
 			this.handleKeydown(e);
+		});
+
+		// Modal-wide shortcut for Alt+M / Cmd+M
+		modalEl.addEventListener('keydown', (e: KeyboardEvent) => {
+			if ((e.altKey || e.metaKey) && (e.key === 'm' || e.key === 'M')) {
+				e.preventDefault();
+				e.stopPropagation();
+				void executeMirror();
+			}
 		});
 
 		// Scrollable List container
@@ -929,6 +1011,7 @@ export class EagleFolderPickerModal extends Modal {
 		addInstruction('→', 'expand');
 		addInstruction('←', 'collapse');
 		addInstruction('↵', 'select folder & save');
+		addInstruction('alt+m', 'mirror folder');
 		addInstruction('esc', 'cancel');
 
 		// Initial render
@@ -1191,6 +1274,15 @@ export class EagleFolderPickerModal extends Modal {
 	}
 
 	private handleKeydown(e: KeyboardEvent): void {
+		if ((e.altKey || e.metaKey) && (e.key === 'm' || e.key === 'M')) {
+			e.preventDefault();
+			e.stopPropagation();
+			if (this.executeMirror) {
+				void this.executeMirror();
+			}
+			return;
+		}
+
 		if (this.visibleItems.length === 0) return;
 
 		switch (e.key) {

@@ -1363,6 +1363,7 @@ var init_modals = __esm({
         this.itemTags = [...(context == null ? void 0 : context.initialTags) || []];
       }
       onOpen() {
+        var _a, _b;
         const { contentEl, modalEl } = this;
         modalEl.addClass("cmdspace-eagle-picker-modal-window");
         contentEl.empty();
@@ -1492,6 +1493,67 @@ var init_modals = __esm({
         const rightPane = splitContainer.createDiv({ cls: "cmdspace-eagle-picker-right-pane" });
         const headerEl = rightPane.createDiv({ cls: "cmdspace-eagle-picker-header" });
         headerEl.createDiv({ cls: "cmdspace-eagle-picker-title", text: "Select Eagle Folder" });
+        const activePath = (_b = (_a = this.context) == null ? void 0 : _a.activeFolderPath) == null ? void 0 : _b.trim();
+        const pathDisplay = activePath ? activePath.replace(/\//g, " / ") : "Library Root";
+        const mirrorBar = headerEl.createDiv({ cls: "cmdspace-eagle-picker-mirror-bar" });
+        const mirrorBtn = mirrorBar.createEl("button", {
+          cls: "cmdspace-eagle-picker-mirror-btn",
+          type: "button"
+        });
+        mirrorBtn.createSpan({ cls: "cmdspace-eagle-picker-mirror-icon", text: "\u{1FA9E}" });
+        const mirrorBtnText = mirrorBtn.createSpan({ cls: "cmdspace-eagle-picker-mirror-btn-text", text: "Mirror" });
+        mirrorBtn.title = activePath ? `Mirror to Eagle folder: ${pathDisplay} (Alt+M)` : "Mirror to Library Root (Alt+M)";
+        mirrorBar.createDiv({
+          cls: "cmdspace-eagle-picker-mirror-path",
+          text: pathDisplay,
+          title: activePath ? `Mirror vault path: ${pathDisplay} (Alt+M)` : "Mirror to Library Root (Alt+M)"
+        });
+        let isMirroring = false;
+        const executeMirror = async () => {
+          var _a2;
+          if (this.resolved || isMirroring)
+            return;
+          if (!((_a2 = this.context) == null ? void 0 : _a2.onMirror)) {
+            this.selectItem({
+              type: "root",
+              name: "Library Root",
+              path: "Library Root"
+            });
+            return;
+          }
+          isMirroring = true;
+          mirrorBtn.addClass("is-loading");
+          mirrorBtnText.setText("Mirroring...");
+          mirrorBtn.disabled = true;
+          try {
+            const folderId = await this.context.onMirror();
+            this.resolved = true;
+            this.onSelect({
+              folderId,
+              folderName: activePath || "Library Root",
+              cancelled: false,
+              name: this.itemName.trim() || this.initialFileName,
+              annotation: this.itemDescription.trim() || void 0,
+              tags: this.itemTags.length > 0 ? this.itemTags : void 0,
+              star: this.starRating > 0 ? this.starRating : void 0,
+              mirrored: true
+            });
+            this.close();
+          } catch (err) {
+            console.error("[CMDS Eagle] Error executing mirror from picker:", err);
+            new import_obsidian2.Notice("Failed to mirror folder hierarchy in Eagle.");
+            isMirroring = false;
+            mirrorBtn.removeClass("is-loading");
+            mirrorBtnText.setText("Mirror");
+            mirrorBtn.disabled = false;
+          }
+        };
+        this.executeMirror = executeMirror;
+        mirrorBtn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          void executeMirror();
+        });
         const searchContainer = headerEl.createDiv({ cls: "cmdspace-eagle-picker-search-container" });
         this.searchInputEl = searchContainer.createEl("input", {
           type: "text",
@@ -1506,6 +1568,13 @@ var init_modals = __esm({
         this.searchInputEl.addEventListener("keydown", (e) => {
           this.handleKeydown(e);
         });
+        modalEl.addEventListener("keydown", (e) => {
+          if ((e.altKey || e.metaKey) && (e.key === "m" || e.key === "M")) {
+            e.preventDefault();
+            e.stopPropagation();
+            void executeMirror();
+          }
+        });
         this.listContainerEl = rightPane.createDiv({ cls: "cmdspace-eagle-picker-list-container" });
         const footerEl = contentEl.createDiv({ cls: "cmdspace-eagle-picker-footer" });
         const instructionsEl = footerEl.createDiv({ cls: "cmdspace-eagle-picker-instructions" });
@@ -1518,6 +1587,7 @@ var init_modals = __esm({
         addInstruction("\u2192", "expand");
         addInstruction("\u2190", "collapse");
         addInstruction("\u21B5", "select folder & save");
+        addInstruction("alt+m", "mirror folder");
         addInstruction("esc", "cancel");
         this.renderList();
         setTimeout(() => {
@@ -1734,6 +1804,14 @@ var init_modals = __esm({
         this.renderList();
       }
       handleKeydown(e) {
+        if ((e.altKey || e.metaKey) && (e.key === "m" || e.key === "M")) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (this.executeMirror) {
+            void this.executeMirror();
+          }
+          return;
+        }
         if (this.visibleItems.length === 0)
           return;
         switch (e.key) {
@@ -5540,7 +5618,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     return parsedTags.length > 0 ? parsedTags : void 0;
   }
   async resolveEagleFolderForUpload(contextOrFile) {
-    var _a;
+    var _a, _b;
     const context = contextOrFile instanceof import_obsidian5.TFile ? { activeFile: contextOrFile } : contextOrFile || {};
     const mode = this.settings.addFolderMode || (this.settings.enableDefaultFolder ? "target" : "target");
     switch (mode) {
@@ -5559,6 +5637,9 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
         const fileName = context.fileName || resolveImageFileName(context.file, context.sourceInfo);
         const initialAltText = (_a = context.sourceInfo) == null ? void 0 : _a.altText;
         const initialTags = this.getDefaultTags() || [];
+        const activeFile = context.activeFile || this.app.workspace.getActiveFile();
+        const folderPath = (_b = activeFile == null ? void 0 : activeFile.parent) == null ? void 0 : _b.path;
+        const activeFolderPath = !folderPath || folderPath === "/" || folderPath === "." ? "" : folderPath;
         const result = await EagleFolderPickerModal.pickFolder(
           this.app,
           this.api,
@@ -5567,7 +5648,11 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
             previewUrl,
             fileName,
             initialAltText,
-            initialTags
+            initialTags,
+            activeFolderPath,
+            onMirror: async () => {
+              return await this.resolveMirroredEagleFolder(activeFile);
+            }
           }
         );
         if (createdBlobUrl && previewUrl) {

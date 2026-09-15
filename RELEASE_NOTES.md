@@ -1,7 +1,12 @@
 # Release Notes
 
 ## New Features
-
+ 
+* **Mirror Folder Button in Eagle Folder Picker:** When pasting or dragging and dropping content into Obsidian and choosing "Eagle (Local)" (or when folder routing is set to "Ask"), the folder picker modal (`EagleFolderPickerModal`) now includes a prominent **"🪞 Mirror"** action bar in the right-pane header:
+  * **One-Click Vault Mirroring:** Dynamically replicates the active note's directory hierarchy inside Eagle. If any intermediate or leaf folders in that hierarchy do not already exist, the plugin automatically creates them via Eagle's Web API (`/api/folder/create`).
+  * **Live Breadcrumb Preview:** Displays a real-time path badge (e.g., `Work / Projects / Alpha` or `Library Root`) showing exactly where the asset will land.
+  * **Full Metadata Preservation:** Any custom name, description/annotation, 5-star rating, and tag pills configured in the picker's left pane are cleanly bundled and pushed to Eagle alongside the mirrored folder destination.
+  * **Keyboard Shortcut:** Trigger mirroring instantly with `Alt+M` (or `Cmd+M` on macOS) from anywhere within the picker modal.
 * **Image Source URL Capture:** When copying and pasting (or dragging and dropping) images directly from web browsers into Obsidian, the plugin now automatically captures the origin webpage URL and the direct image asset URL. These can be pushed directly to Eagle's primary website field and/or stored in Eagle's Extra Links panel.
 * **Source Link in Metadata Card:** Updated the "Include source in metadata card" setting to a 4-way dropdown (`none`, `page`, `image`, `both`), matching the options in "Add image source to Extra Links". Users can now optionally add the origin webpage URL (`[Source: domain]`), the direct image URL (`[Direct: domain]`), both, or none to the embedded metadata card.
 * **Local File Source Link in Metadata Card:** When "Include local file source in metadata card" is enabled (`includeLocalSourceInMetadataCard`, disabled by default), images dragged or pasted from your operating system's file explorer (Windows File Explorer, macOS Finder) include a clickable `[Source: File](file://...)` link in the metadata card pointing back to the original file. This operates independently from web URL sources.

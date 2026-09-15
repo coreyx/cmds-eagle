@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Mirror Folder Button in Folder Picker**: Added a dedicated `🪞 Mirror` button in the `EagleFolderPickerModal` header during paste and drag-and-drop import workflows:
+  - **Dynamic Hierarchy Mirroring**: Automatically replicates the active note's vault folder hierarchy in Eagle, recursively creating missing parent and subfolders via Eagle's `/api/folder/create` Web API as needed.
+  - **Live Breadcrumb Preview**: Displays an inline path preview (e.g. `Work / Projects / Alpha` or `Library Root`) showing the exact destination folder before clicking.
+  - **Metadata Preservation**: Ensures all metadata entered in the picker's left pane (name, description/alt text, 5-star rating, and tags) is preserved and uploaded with the asset.
+  - **Keyboard Shortcut**: Full keyboard accessibility via `Alt+M` (or `Cmd+M` on macOS) to mirror and upload in a single keystroke.
 - **Image Source URL Capture on Paste & Drop**: Captures origin webpage URLs and direct image asset URLs from clipboard or browser drag-and-drop (`CF_HTML`, `Chromium internal source URL`, `org.chromium.source-url`, `com.apple.webarchive`) and routes them to Eagle's website field and/or Extra Links panel.
 - **Source Link in Metadata Card**: Added a 4-way dropdown setting (`none`, `page`, `image`, `both`, defaulting to `page`), allowing users to include the origin webpage URL (`[Source: domain]`), the direct image URL (`[Direct: domain]`), both, or neither in embedded image metadata cards.
 - **Local File Source Link in Metadata Card**: Added setting (`includeLocalSourceInMetadataCard`, defaults to `false`) to optionally display a clickable `[Source: File](file://...)` link in the metadata card when images are dragged or pasted directly from the operating system's file manager (Windows File Explorer, macOS Finder).
