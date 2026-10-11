@@ -2446,15 +2446,14 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian3.PluginSettingTab {
     const footerEl = containerEl.createEl("div", { attr: { style: "text-align: center; color: var(--text-muted); font-size: 12px;" } });
     footerEl.createEl("div", { text: `Eagle Bridge v${this.plugin.manifest.version}`, attr: { style: "margin-bottom: 8px;" } });
     const linksEl = footerEl.createEl("div");
-    linksEl.createSpan({ text: "CMDSPACE " });
-    const eduLink = linksEl.createEl("a", { text: "Education", href: "https://class.cmdspace.kr/" });
-    eduLink.setAttr("target", "_blank");
-    linksEl.createSpan({ text: " \xB7 " });
-    const ytLink = linksEl.createEl("a", { text: "YouTube", href: "https://www.youtube.com/@cmdspace" });
-    ytLink.setAttr("target", "_blank");
-    linksEl.createSpan({ text: " \xB7 " });
-    const ghLink = linksEl.createEl("a", { text: "GitHub", href: "https://github.com/johnfkoo951/cmds-eagle" });
+    linksEl.createSpan({ text: "Corey Struzan \xB7 " });
+    const ghLink = linksEl.createEl("a", { text: "GitHub", href: "https://github.com/coreyx/cmds-eagle" });
     ghLink.setAttr("target", "_blank");
+    const creditEl = footerEl.createEl("div", { attr: { style: "margin-top: 4px;" } });
+    creditEl.createSpan({ text: "Based on " });
+    const upstreamLink = creditEl.createEl("a", { text: "CMDS Eagle", href: "https://github.com/johnfkoo951/cmds-eagle" });
+    upstreamLink.setAttr("target", "_blank");
+    creditEl.createSpan({ text: " by Yohan Koo" });
   }
   renderCloudProviderSettings(containerEl) {
     const provider = this.plugin.settings.activeCloudProvider;
