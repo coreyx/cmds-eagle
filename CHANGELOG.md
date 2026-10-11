@@ -4,7 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-10-11
+
+### Changed
+- **Renamed to Eagle Bridge**: The plugin is now **Eagle Bridge** with plugin ID `eagle-bridge` (previously CMDS Eagle, `cmds-eagle`). It installs to `.obsidian/plugins/eagle-bridge/` as a separate plugin; to carry settings over, copy `data.json` from `.obsidian/plugins/cmds-eagle/`.
+- **Maintainer and Links**: The plugin author is now Corey Struzan, and the settings footer links to this fork's GitHub repository with a credit to the original CMDS Eagle by Yohan Koo.
+
 ### Added
+- **Configurable Root Folder for Mirrored Hierarchy**: Added a "Place mirrored folders under a root folder" toggle and Eagle folder selector (with "Select Folder" and "Clear" buttons), shown in both **Mirror Obsidian Folder Hierarchy** and **Ask** modes:
+  - **Nested Mirroring**: When enabled, mirrored vault folder hierarchies are created under the designated Eagle folder instead of at the library root; notes at the vault root place attachments directly in the designated folder.
+  - **Prefixed Breadcrumb Preview**: The folder picker's Mirror button badge and tooltip include the root folder name (e.g. `Obsidian Attachments / Work / Projects`).
+  - **Missing Folder Fallback**: If the configured root folder no longer exists in Eagle, a notice is shown and mirroring falls back to the library root.
 - **Mirror Folder Button in Folder Picker**: Added a dedicated `🪞 Mirror` button in the `EagleFolderPickerModal` header during paste and drag-and-drop import workflows:
   - **Dynamic Hierarchy Mirroring**: Automatically replicates the active note's vault folder hierarchy in Eagle, recursively creating missing parent and subfolders via Eagle's `/api/folder/create` Web API as needed.
   - **Live Breadcrumb Preview**: Displays an inline path preview (e.g. `Work / Projects / Alpha` or `Library Root`) showing the exact destination folder before clicking.
@@ -36,6 +46,7 @@ All notable changes to this project will be documented in this file.
 - **Default Eagle Tags**: Added a setting to automatically append a comma-separated list of tags to every image uploaded to Eagle.
 - **Obsidian Backlinks in Eagle**: Added a setting to automatically generate an Obsidian Advanced URI backlink to the current note when adding a new image to Eagle. The backlink can be saved to the image's URL field, Note field, or both. If the active note lacks a unique identifier (`uid`), one is automatically generated and saved to its frontmatter to ensure the link never breaks.
 - **Docs**: Added a "Development & Testing" section to the `README.md` with instructions for compiling, installing, and testing local builds.
+- **Docs**: Added a "From BRAT" section to the `README.md` with instructions for installing this fork's releases via BRAT.
 
 ### Fixed
 - **Webpage Origin URL Extraction on Drag & Drop**: Fixed an issue where dragging and dropping an image from a web browser into Obsidian stored only the direct image URL (e.g., from an image CDN) in Eagle's website field instead of the origin webpage URL when "Source URL priority (Eagle website field)" was configured to "Webpage URL (fallback to image URL)":

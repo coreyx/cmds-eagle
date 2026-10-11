@@ -1,7 +1,14 @@
 # Release Notes
 
-## New Features
+## 1.8.0 - 2026-10-11
+
+### Now Called Eagle Bridge
+
+This fork of CMDS Eagle is now developed independently under a new name, **Eagle Bridge**, with its own plugin ID (`eagle-bridge`). Install it with BRAT from `https://github.com/coreyx/obsidian-eagle-bridge` (see the README). It installs alongside CMDS Eagle as a separate plugin, so disable CMDS Eagle, and copy `data.json` from `.obsidian/plugins/cmds-eagle/` to `.obsidian/plugins/eagle-bridge/` if you want to keep your settings. The settings footer now links to this fork's GitHub repository and credits the original CMDS Eagle by Yohan Koo.
+
+### New Features
  
+* **Root Folder for Mirrored Folders:** A new "Place mirrored folders under a root folder" setting lets you pick one Eagle folder (for example `Obsidian Attachments`) to hold everything the plugin mirrors from your vault, so mirrored folders no longer land at the top level of your Eagle library. It applies to both **Mirror Obsidian Folder Hierarchy** mode and the **Mirror** button in the **Ask** folder picker, whose path preview now shows the full destination including the root folder. If the chosen folder is later removed from Eagle, the plugin tells you and falls back to the library root.
 * **Mirror Folder Button in Eagle Folder Picker:** When pasting or dragging and dropping content into Obsidian and choosing "Eagle (Local)" (or when folder routing is set to "Ask"), the folder picker modal (`EagleFolderPickerModal`) now includes a prominent **"🪞 Mirror"** action bar in the right-pane header:
   * **One-Click Vault Mirroring:** Dynamically replicates the active note's directory hierarchy inside Eagle. If any intermediate or leaf folders in that hierarchy do not already exist, the plugin automatically creates them via Eagle's Web API (`/api/folder/create`).
   * **Live Breadcrumb Preview:** Displays a real-time path badge (e.g., `Work / Projects / Alpha` or `Library Root`) showing exactly where the asset will land.
@@ -33,12 +40,12 @@
 * **Default Eagle Tags:** Added a new setting to automatically append a comma-separated list of tags (e.g., `obsidian, inspiration`) to all newly uploaded Eagle assets.
 * **Obsidian Backlinks in Eagle:** You can now configure the plugin to automatically generate bidirectional backlinks. When an image is uploaded to Eagle, it can save an Obsidian Advanced URI back to the original note. You can choose to place this link in Eagle's URL field (making the standard link button open Obsidian), in the Note field as a markdown link, or both. To ensure these links never break even if you rename the file, the plugin will automatically generate and save a `uid` to the note's frontmatter if one doesn't already exist.
 
-## Folder Picker & Modal Fixes
+### Folder Picker & Modal Fixes
 
 * **Automatic Image Name Extraction:** Fixed an issue where images copied or dragged from websites resulted in the Name field being populated with generic "image" (due to Chromium clipboard defaulting to `image.png`). The plugin now automatically resolves the real filename directly from the source image's URL path (e.g. `2600_HomeforEveryone` from `https://.../2600_HomeforEveryone.jpg`).
 * **Clean Folder Selection in Ask Mode:** Fixed an issue where selecting a folder in the "Ask" mode picker modal could trigger "Upload cancelled" due to modal dismissal timing. Selection state is now locked before modal closure.
 
-## Metadata Card & Image Source URL Fixes
+### Metadata Card & Image Source URL Fixes
 
 * **Origin Webpage URL Extraction on Drag & Drop:** Fixed an issue where dragging an image directly from a webpage into Obsidian only recorded the direct image asset URL in Eagle's website field instead of the origin webpage URL when "Source URL priority (Eagle website field)" was set to "Webpage URL (fallback to image URL)".
   * The drop handler now parses multi-line `text/uri-list` payloads (RFC 2483), extracts surrounding `<a href="...">` and `<base href="...">` links from HTML payloads, and automatically checks the system clipboard text so that copying a webpage's address before dropping an image reliably attaches the page URL.
@@ -48,7 +55,7 @@
 * **Extra Links Resolution:** If Eagle's primary URL field holds an Obsidian backlink, the metadata card now automatically inspects the item's Extra Links on disk to locate the web source URL.
 * **Browser Drag & Drop Support:** The drag-and-drop handler now inspects browser `dataTransfer` payloads (`text/uri-list` and `text/html`) so dragging an image directly from a web page into Obsidian captures the source URL just like copy & paste.
 
-## WebDAV Improvements and Fixes
+### WebDAV Improvements and Fixes
 
 This release focuses on heavily improving the stability and compatibility of the WebDAV cloud provider, ensuring it works flawlessly with servers like Nextcloud, Synology, and rclone:
 
@@ -57,11 +64,12 @@ This release focuses on heavily improving the stability and compatibility of the
 * **Better Path Handling:** Fixed edge cases with URL formatting so that trailing and leading slashes are handled gracefully, preventing broken URLs.
 * **Clearer Error Messages:** When things do go wrong with deep folder structures, the plugin now provides much clearer error messages to help you configure your path correctly.
 
-## Local Image Paste & Drop Fixes
+### Local Image Paste & Drop Fixes
 
 * **Missing Metadata Cards:** Fixed a bug where uploading a new image to Eagle via paste or drop ignored the "Include metadata card" setting. Newly added images will now correctly append the Eagle metadata block (type, size, tags, Eagle link) immediately after they finish uploading.
 * **Vault (Local) Double Slash Fix:** Resolved a bug where pasting or dropping an image and choosing the "Vault (Local)" option would generate invalid markdown paths with two leading slashes (e.g., `//image.png`) if the vault root was used. This previously caused Obsidian to display a markdown error block. Paths are now correctly normalized so images render instantly.
 
-## Developer Documentation
+### Documentation
 
 * **New README Section:** Added explicit instructions to the README on how to compile, install, and test local development builds directly inside an Obsidian vault.
+* **BRAT Installation:** Added instructions to the README for installing and updating this fork's releases with BRAT.
