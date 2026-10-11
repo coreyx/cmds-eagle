@@ -898,7 +898,13 @@ export class EagleFolderPickerModal extends Modal {
 
 		// Mirror button action bar
 		const activePath = this.context?.activeFolderPath?.trim();
-		const pathDisplay = activePath ? activePath.replace(/\//g, ' / ') : 'Library Root';
+		const rootName = this.context?.mirrorRootFolderName?.trim();
+		let pathDisplay: string;
+		if (rootName) {
+			pathDisplay = activePath ? `${rootName} / ${activePath.replace(/\//g, ' / ')}` : rootName;
+		} else {
+			pathDisplay = activePath ? activePath.replace(/\//g, ' / ') : 'Library Root';
+		}
 
 		const mirrorBar = headerEl.createDiv({ cls: 'cmdspace-eagle-picker-mirror-bar' });
 		const mirrorBtn = mirrorBar.createEl('button', {
@@ -907,16 +913,12 @@ export class EagleFolderPickerModal extends Modal {
 		});
 		mirrorBtn.createSpan({ cls: 'cmdspace-eagle-picker-mirror-icon', text: '🪞' });
 		const mirrorBtnText = mirrorBtn.createSpan({ cls: 'cmdspace-eagle-picker-mirror-btn-text', text: 'Mirror' });
-		mirrorBtn.title = activePath
-			? `Mirror to Eagle folder: ${pathDisplay} (Alt+M)`
-			: 'Mirror to Library Root (Alt+M)';
+		mirrorBtn.title = `Mirror to Eagle folder: ${pathDisplay} (Alt+M)`;
 
 		mirrorBar.createDiv({
 			cls: 'cmdspace-eagle-picker-mirror-path',
 			text: pathDisplay,
-			title: activePath
-				? `Mirror vault path: ${pathDisplay} (Alt+M)`
-				: 'Mirror to Library Root (Alt+M)',
+			title: `Mirror to Eagle folder: ${pathDisplay} (Alt+M)`,
 		});
 
 		let isMirroring = false;
@@ -941,7 +943,7 @@ export class EagleFolderPickerModal extends Modal {
 				this.resolved = true;
 				this.onSelect({
 					folderId,
-					folderName: activePath || 'Library Root',
+					folderName: pathDisplay,
 					cancelled: false,
 					name: this.itemName.trim() || this.initialFileName,
 					annotation: this.itemDescription.trim() || undefined,

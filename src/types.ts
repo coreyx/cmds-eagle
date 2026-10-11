@@ -152,6 +152,7 @@ export interface EagleFolderPickerContext {
 	initialTags?: string[];
 	previewUrl?: string;
 	activeFolderPath?: string;
+	mirrorRootFolderName?: string;
 	onMirror?: () => Promise<string | undefined>;
 }
 
@@ -260,6 +261,9 @@ export interface CMDSPACEEagleSettings {
 	defaultFolder: string;
 	defaultFolderName: string;
 	addFolderMode: EagleAddFolderMode;
+	enableMirrorRootFolder: boolean;
+	mirrorRootFolder: string;
+	mirrorRootFolderName: string;
 	folderMappings: EagleFolderMapping[];
 	recentEagleFolders: string[];
 	enableDefaultTags: boolean;
@@ -317,6 +321,9 @@ export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
 	defaultFolder: '',
 	defaultFolderName: '',
 	addFolderMode: 'target',
+	enableMirrorRootFolder: false,
+	mirrorRootFolder: '',
+	mirrorRootFolderName: '',
 	folderMappings: [],
 	recentEagleFolders: [],
 	enableDefaultTags: false,

@@ -921,3 +921,8 @@
 	flex-shrink: 0;
 }
 
+.cmdspace-eagle-setting-required {
+	color: var(--text-error) !important;
+	font-weight: 500;
+}
+

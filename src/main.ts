@@ -2330,6 +2330,9 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 				const activeFile = context.activeFile || this.app.workspace.getActiveFile();
 				const folderPath = activeFile?.parent?.path;
 				const activeFolderPath = (!folderPath || folderPath === '/' || folderPath === '.') ? '' : folderPath;
+				const mirrorRootFolderName = (this.settings.enableMirrorRootFolder && this.settings.mirrorRootFolder)
+					? (this.settings.mirrorRootFolderName || 'Mirrored Root')
+					: undefined;
 
 				const result = await EagleFolderPickerModal.pickFolder(
 					this.app,
@@ -2341,6 +2344,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 						initialAltText,
 						initialTags,
 						activeFolderPath,
+						mirrorRootFolderName,
 						onMirror: async () => {
 							return await this.resolveMirroredEagleFolder(activeFile);
 						},
@@ -2385,22 +2389,52 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		}
 	}
 
+	private findFolderInTree(folders: EagleFolder[], targetId: string): EagleFolder | null {
+		for (const folder of folders) {
+			if (folder.id === targetId) {
+				return folder;
+			}
+			if (folder.children && folder.children.length > 0) {
+				const found = this.findFolderInTree(folder.children, targetId);
+				if (found) return found;
+			}
+		}
+		return null;
+	}
+
 	private async resolveMirroredEagleFolder(activeFile?: TFile | null): Promise<string | undefined> {
 		const file = activeFile ?? this.app.workspace.getActiveFile();
 		const folderPath = file?.parent?.path;
-		if (!folderPath || folderPath === '/' || folderPath === '.') {
-			return undefined;
+		const isVaultRoot = !folderPath || folderPath === '/' || folderPath === '.';
+
+		const isRootFolderEnabled = this.settings.enableMirrorRootFolder && !!this.settings.mirrorRootFolder;
+		const rootFolderId = isRootFolderEnabled ? this.settings.mirrorRootFolder : undefined;
+
+		if (isVaultRoot) {
+			return rootFolderId;
 		}
 
 		const segments = folderPath.split('/').map(s => s.trim()).filter(s => s.length > 0);
 		if (segments.length === 0) {
-			return undefined;
+			return rootFolderId;
 		}
 
 		try {
 			const eagleFolders = await this.api.listFolders();
-			let currentParentId: string | undefined = undefined;
+			let currentParentId: string | undefined = rootFolderId;
 			let currentLevelFolders = eagleFolders;
+
+			if (rootFolderId) {
+				const rootFolderNode = this.findFolderInTree(eagleFolders, rootFolderId);
+				if (!rootFolderNode) {
+					console.warn(`[CMDS Eagle] Configured mirror root folder ID '${rootFolderId}' not found in Eagle. Falling back to library root.`);
+					new Notice('Configured Eagle mirror root folder was not found. Using Library Root.');
+					currentParentId = undefined;
+					currentLevelFolders = eagleFolders;
+				} else {
+					currentLevelFolders = rootFolderNode.children || [];
+				}
+			}
 
 			for (const segment of segments) {
 				const matchedFolder = currentLevelFolders.find(f => f.name.toLowerCase() === segment.toLowerCase());
@@ -2424,7 +2458,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			return currentParentId;
 		} catch (error) {
 			console.error('[CMDS Eagle] Error during folder hierarchy mirroring:', error);
-			return undefined;
+			return rootFolderId;
 		}
 	}
 

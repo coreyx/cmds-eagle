@@ -273,10 +273,12 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 						this.display();
 					}));
 			}
+			this.renderMirrorRootFolderSettings(containerEl, true);
 		} else if (this.plugin.settings.addFolderMode === 'mirror') {
 			new Setting(containerEl)
 				.setName('Folder hierarchy mirroring')
 				.setDesc('Automatically creates and mirrors the active note’s folder hierarchy inside Eagle relative to the vault and library roots. If the note is at the vault root, attachments are placed in the root library.');
+			this.renderMirrorRootFolderSettings(containerEl, false);
 		} else if (this.plugin.settings.addFolderMode === 'map') {
 			new Setting(containerEl)
 				.setName('Folder mappings')
@@ -1053,5 +1055,77 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 		}
 
 		return 'unknown';
+	}
+
+	private renderMirrorRootFolderSettings(containerEl: HTMLElement, isAskMode: boolean = false): void {
+		const toggleDesc = isAskMode
+			? 'When using the "Mirror" button in the folder picker, nest the mirrored folder hierarchy under a designated Eagle root folder instead of the library root.'
+			: 'Nest the mirrored folder hierarchy under a designated Eagle root folder instead of the library root.';
+
+		new Setting(containerEl)
+			.setName('Place mirrored folders under a root folder')
+			.setDesc(toggleDesc)
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.enableMirrorRootFolder)
+				.onChange(async (value) => {
+					this.plugin.settings.enableMirrorRootFolder = value;
+					await this.plugin.saveSettings();
+					this.display();
+				}));
+
+		if (this.plugin.settings.enableMirrorRootFolder) {
+			const isConfigured = !!this.plugin.settings.mirrorRootFolder && !!this.plugin.settings.mirrorRootFolderName;
+			const descText = isConfigured
+				? this.plugin.settings.mirrorRootFolderName
+				: 'No folder selected (Required)';
+
+			const rootSetting = new Setting(containerEl)
+				.setName('Mirrored root folder')
+				.setDesc(descText);
+
+			if (!isConfigured) {
+				rootSetting.descEl.addClass('cmdspace-eagle-setting-required');
+			}
+
+			rootSetting
+				.addButton(button => button
+					.setButtonText('Select Folder')
+					.onClick(async () => {
+						const api = new EagleApiService(this.plugin.settings);
+						const connected = await api.isConnected();
+						if (!connected) {
+							new Notice('Eagle is not running. Please start Eagle and try again.');
+							return;
+						}
+
+						const folders = await api.listFolders();
+						if (!folders || folders.length === 0) {
+							new Notice('No folders found in your Eagle library.');
+							return;
+						}
+
+						const { flattenEagleFolders, EagleFolderModal } = await import('./modals');
+						const flattened = flattenEagleFolders(folders);
+
+						const modal = new EagleFolderModal(this.app, flattened, async (folderId) => {
+							const selected = flattened.find(f => f.id === folderId);
+							if (selected) {
+								this.plugin.settings.mirrorRootFolder = selected.id;
+								this.plugin.settings.mirrorRootFolderName = selected.path;
+								await this.plugin.saveSettings();
+								this.display();
+							}
+						});
+						modal.open();
+					}))
+				.addButton(button => button
+					.setButtonText('Clear')
+					.onClick(async () => {
+						this.plugin.settings.mirrorRootFolder = '';
+						this.plugin.settings.mirrorRootFolderName = '';
+						await this.plugin.saveSettings();
+						this.display();
+					}));
+		}
 	}
 }

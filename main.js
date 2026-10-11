@@ -59,6 +59,9 @@ var init_types = __esm({
       defaultFolder: "",
       defaultFolderName: "",
       addFolderMode: "target",
+      enableMirrorRootFolder: false,
+      mirrorRootFolder: "",
+      mirrorRootFolderName: "",
       folderMappings: [],
       recentEagleFolders: [],
       enableDefaultTags: false,
@@ -1363,7 +1366,7 @@ var init_modals = __esm({
         this.itemTags = [...(context == null ? void 0 : context.initialTags) || []];
       }
       onOpen() {
-        var _a, _b;
+        var _a, _b, _c, _d;
         const { contentEl, modalEl } = this;
         modalEl.addClass("cmdspace-eagle-picker-modal-window");
         contentEl.empty();
@@ -1494,7 +1497,13 @@ var init_modals = __esm({
         const headerEl = rightPane.createDiv({ cls: "cmdspace-eagle-picker-header" });
         headerEl.createDiv({ cls: "cmdspace-eagle-picker-title", text: "Select Eagle Folder" });
         const activePath = (_b = (_a = this.context) == null ? void 0 : _a.activeFolderPath) == null ? void 0 : _b.trim();
-        const pathDisplay = activePath ? activePath.replace(/\//g, " / ") : "Library Root";
+        const rootName = (_d = (_c = this.context) == null ? void 0 : _c.mirrorRootFolderName) == null ? void 0 : _d.trim();
+        let pathDisplay;
+        if (rootName) {
+          pathDisplay = activePath ? `${rootName} / ${activePath.replace(/\//g, " / ")}` : rootName;
+        } else {
+          pathDisplay = activePath ? activePath.replace(/\//g, " / ") : "Library Root";
+        }
         const mirrorBar = headerEl.createDiv({ cls: "cmdspace-eagle-picker-mirror-bar" });
         const mirrorBtn = mirrorBar.createEl("button", {
           cls: "cmdspace-eagle-picker-mirror-btn",
@@ -1502,11 +1511,11 @@ var init_modals = __esm({
         });
         mirrorBtn.createSpan({ cls: "cmdspace-eagle-picker-mirror-icon", text: "\u{1FA9E}" });
         const mirrorBtnText = mirrorBtn.createSpan({ cls: "cmdspace-eagle-picker-mirror-btn-text", text: "Mirror" });
-        mirrorBtn.title = activePath ? `Mirror to Eagle folder: ${pathDisplay} (Alt+M)` : "Mirror to Library Root (Alt+M)";
+        mirrorBtn.title = `Mirror to Eagle folder: ${pathDisplay} (Alt+M)`;
         mirrorBar.createDiv({
           cls: "cmdspace-eagle-picker-mirror-path",
           text: pathDisplay,
-          title: activePath ? `Mirror vault path: ${pathDisplay} (Alt+M)` : "Mirror to Library Root (Alt+M)"
+          title: `Mirror to Eagle folder: ${pathDisplay} (Alt+M)`
         });
         let isMirroring = false;
         const executeMirror = async () => {
@@ -1530,7 +1539,7 @@ var init_modals = __esm({
             this.resolved = true;
             this.onSelect({
               folderId,
-              folderName: activePath || "Library Root",
+              folderName: pathDisplay,
               cancelled: false,
               name: this.itemName.trim() || this.initialFileName,
               annotation: this.itemDescription.trim() || void 0,
@@ -2314,8 +2323,10 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian3.PluginSettingTab {
           this.display();
         }));
       }
+      this.renderMirrorRootFolderSettings(containerEl, true);
     } else if (this.plugin.settings.addFolderMode === "mirror") {
       new import_obsidian3.Setting(containerEl).setName("Folder hierarchy mirroring").setDesc("Automatically creates and mirrors the active note\u2019s folder hierarchy inside Eagle relative to the vault and library roots. If the note is at the vault root, attachments are placed in the root library.");
+      this.renderMirrorRootFolderSettings(containerEl, false);
     } else if (this.plugin.settings.addFolderMode === "map") {
       new import_obsidian3.Setting(containerEl).setName("Folder mappings").setDesc("Map Obsidian vault folders to corresponding Eagle folders. Subfolders automatically inherit their parent folder mapping unless specifically mapped.").addButton((button) => button.setButtonText("Add Folder Mapping").setCta().onClick(async () => {
         const api = new EagleApiService(this.plugin.settings);
@@ -2824,6 +2835,52 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian3.PluginSettingTab {
         return match[1];
     }
     return "unknown";
+  }
+  renderMirrorRootFolderSettings(containerEl, isAskMode = false) {
+    const toggleDesc = isAskMode ? 'When using the "Mirror" button in the folder picker, nest the mirrored folder hierarchy under a designated Eagle root folder instead of the library root.' : "Nest the mirrored folder hierarchy under a designated Eagle root folder instead of the library root.";
+    new import_obsidian3.Setting(containerEl).setName("Place mirrored folders under a root folder").setDesc(toggleDesc).addToggle((toggle) => toggle.setValue(this.plugin.settings.enableMirrorRootFolder).onChange(async (value) => {
+      this.plugin.settings.enableMirrorRootFolder = value;
+      await this.plugin.saveSettings();
+      this.display();
+    }));
+    if (this.plugin.settings.enableMirrorRootFolder) {
+      const isConfigured = !!this.plugin.settings.mirrorRootFolder && !!this.plugin.settings.mirrorRootFolderName;
+      const descText = isConfigured ? this.plugin.settings.mirrorRootFolderName : "No folder selected (Required)";
+      const rootSetting = new import_obsidian3.Setting(containerEl).setName("Mirrored root folder").setDesc(descText);
+      if (!isConfigured) {
+        rootSetting.descEl.addClass("cmdspace-eagle-setting-required");
+      }
+      rootSetting.addButton((button) => button.setButtonText("Select Folder").onClick(async () => {
+        const api = new EagleApiService(this.plugin.settings);
+        const connected = await api.isConnected();
+        if (!connected) {
+          new import_obsidian3.Notice("Eagle is not running. Please start Eagle and try again.");
+          return;
+        }
+        const folders = await api.listFolders();
+        if (!folders || folders.length === 0) {
+          new import_obsidian3.Notice("No folders found in your Eagle library.");
+          return;
+        }
+        const { flattenEagleFolders: flattenEagleFolders2, EagleFolderModal: EagleFolderModal2 } = await Promise.resolve().then(() => (init_modals(), modals_exports));
+        const flattened = flattenEagleFolders2(folders);
+        const modal = new EagleFolderModal2(this.app, flattened, async (folderId) => {
+          const selected = flattened.find((f) => f.id === folderId);
+          if (selected) {
+            this.plugin.settings.mirrorRootFolder = selected.id;
+            this.plugin.settings.mirrorRootFolderName = selected.path;
+            await this.plugin.saveSettings();
+            this.display();
+          }
+        });
+        modal.open();
+      })).addButton((button) => button.setButtonText("Clear").onClick(async () => {
+        this.plugin.settings.mirrorRootFolder = "";
+        this.plugin.settings.mirrorRootFolderName = "";
+        await this.plugin.saveSettings();
+        this.display();
+      }));
+    }
   }
 };
 
@@ -5640,6 +5697,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
         const activeFile = context.activeFile || this.app.workspace.getActiveFile();
         const folderPath = (_b = activeFile == null ? void 0 : activeFile.parent) == null ? void 0 : _b.path;
         const activeFolderPath = !folderPath || folderPath === "/" || folderPath === "." ? "" : folderPath;
+        const mirrorRootFolderName = this.settings.enableMirrorRootFolder && this.settings.mirrorRootFolder ? this.settings.mirrorRootFolderName || "Mirrored Root" : void 0;
         const result = await EagleFolderPickerModal.pickFolder(
           this.app,
           this.api,
@@ -5650,6 +5708,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
             initialAltText,
             initialTags,
             activeFolderPath,
+            mirrorRootFolderName,
             onMirror: async () => {
               return await this.resolveMirroredEagleFolder(activeFile);
             }
@@ -5688,21 +5747,48 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       }
     }
   }
+  findFolderInTree(folders, targetId) {
+    for (const folder of folders) {
+      if (folder.id === targetId) {
+        return folder;
+      }
+      if (folder.children && folder.children.length > 0) {
+        const found = this.findFolderInTree(folder.children, targetId);
+        if (found)
+          return found;
+      }
+    }
+    return null;
+  }
   async resolveMirroredEagleFolder(activeFile) {
     var _a;
     const file = activeFile != null ? activeFile : this.app.workspace.getActiveFile();
     const folderPath = (_a = file == null ? void 0 : file.parent) == null ? void 0 : _a.path;
-    if (!folderPath || folderPath === "/" || folderPath === ".") {
-      return void 0;
+    const isVaultRoot = !folderPath || folderPath === "/" || folderPath === ".";
+    const isRootFolderEnabled = this.settings.enableMirrorRootFolder && !!this.settings.mirrorRootFolder;
+    const rootFolderId = isRootFolderEnabled ? this.settings.mirrorRootFolder : void 0;
+    if (isVaultRoot) {
+      return rootFolderId;
     }
     const segments = folderPath.split("/").map((s) => s.trim()).filter((s) => s.length > 0);
     if (segments.length === 0) {
-      return void 0;
+      return rootFolderId;
     }
     try {
       const eagleFolders = await this.api.listFolders();
-      let currentParentId = void 0;
+      let currentParentId = rootFolderId;
       let currentLevelFolders = eagleFolders;
+      if (rootFolderId) {
+        const rootFolderNode = this.findFolderInTree(eagleFolders, rootFolderId);
+        if (!rootFolderNode) {
+          console.warn(`[CMDS Eagle] Configured mirror root folder ID '${rootFolderId}' not found in Eagle. Falling back to library root.`);
+          new import_obsidian5.Notice("Configured Eagle mirror root folder was not found. Using Library Root.");
+          currentParentId = void 0;
+          currentLevelFolders = eagleFolders;
+        } else {
+          currentLevelFolders = rootFolderNode.children || [];
+        }
+      }
       for (const segment of segments) {
         const matchedFolder = currentLevelFolders.find((f) => f.name.toLowerCase() === segment.toLowerCase());
         if (matchedFolder) {
@@ -5724,7 +5810,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       return currentParentId;
     } catch (error) {
       console.error("[CMDS Eagle] Error during folder hierarchy mirroring:", error);
-      return void 0;
+      return rootFolderId;
     }
   }
   resolveMappedEagleFolder(activeFile) {
