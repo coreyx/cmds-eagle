@@ -505,7 +505,7 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 		
 		const linksEl = footerEl.createEl('div');
 		linksEl.createSpan({ text: 'Corey Struzan · ' });
-		const ghLink = linksEl.createEl('a', { text: 'GitHub', href: 'https://github.com/coreyx/cmds-eagle' });
+		const ghLink = linksEl.createEl('a', { text: 'GitHub', href: 'https://github.com/coreyx/obsidian-eagle-bridge' });
 		ghLink.setAttr('target', '_blank');
 
 		const creditEl = footerEl.createEl('div', { attr: { style: 'margin-top: 4px;' } });

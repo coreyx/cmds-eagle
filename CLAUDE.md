@@ -34,7 +34,7 @@ src/
 - **ID**: `eagle-bridge`
 - **Version**: 1.8.0
 - **Desktop only**: yes (Eagle REST API is local)
-- **GitHub**: `coreyx/cmds-eagle` (repo keeps its original name)
+- **GitHub**: `coreyx/obsidian-eagle-bridge`
 - **Distribution**: GitHub releases installed via BRAT (not in Community Plugins)
 
 ## Release Workflow

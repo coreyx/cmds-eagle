@@ -2447,7 +2447,7 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian3.PluginSettingTab {
     footerEl.createEl("div", { text: `Eagle Bridge v${this.plugin.manifest.version}`, attr: { style: "margin-bottom: 8px;" } });
     const linksEl = footerEl.createEl("div");
     linksEl.createSpan({ text: "Corey Struzan \xB7 " });
-    const ghLink = linksEl.createEl("a", { text: "GitHub", href: "https://github.com/coreyx/cmds-eagle" });
+    const ghLink = linksEl.createEl("a", { text: "GitHub", href: "https://github.com/coreyx/obsidian-eagle-bridge" });
     ghLink.setAttr("target", "_blank");
     const creditEl = footerEl.createEl("div", { attr: { style: "margin-top: 4px;" } });
     creditEl.createSpan({ text: "Based on " });

@@ -22,11 +22,11 @@ Eagle Bridge started as a fork of [CMDS Eagle](https://github.com/johnfkoo951/cm
 
 ### From BRAT (Recommended)
 
-Eagle Bridge is not in the Community Plugins list. [BRAT](https://github.com/TfTHacker/obsidian42-brat) installs it directly from its [GitHub releases](https://github.com/coreyx/cmds-eagle/releases) and keeps it up to date.
+Eagle Bridge is not in the Community Plugins list. [BRAT](https://github.com/TfTHacker/obsidian42-brat) installs it directly from its [GitHub releases](https://github.com/coreyx/obsidian-eagle-bridge/releases) and keeps it up to date.
 
 1. Open **Settings → Community plugins**, click **Browse**, then install and enable **BRAT**
 2. Open **Settings → BRAT** and click **Add beta plugin**
-3. Enter the repository URL: `https://github.com/coreyx/cmds-eagle`
+3. Enter the repository URL: `https://github.com/coreyx/obsidian-eagle-bridge`
 4. Select the latest version, keep **Enable after installing the plugin** checked, and click **Add plugin**
 
 BRAT checks for new releases when Obsidian starts. To update on demand, run the command **BRAT: Check for updates to all beta plugins and UPDATE**.
@@ -35,7 +35,7 @@ BRAT checks for new releases when Obsidian starts. To update on demand, run the 
 
 ### Manual Installation
 
-1. Download `main.js`, `manifest.json`, `styles.css` from [Releases](https://github.com/coreyx/cmds-eagle/releases)
+1. Download `main.js`, `manifest.json`, `styles.css` from [Releases](https://github.com/coreyx/obsidian-eagle-bridge/releases)
 2. Create folder: `.obsidian/plugins/eagle-bridge/`
 3. Copy downloaded files into the folder
 4. Enable plugin in Obsidian settings
