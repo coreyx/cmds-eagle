@@ -176,7 +176,7 @@ export class BplistParser {
 				return url.trim();
 			}
 		} catch (e) {
-			console.warn('[CMDS Eagle] BplistParser exception, falling back to regex:', e);
+			console.warn('[Eagle Bridge] BplistParser exception, falling back to regex:', e);
 		}
 
 		return this.fallbackRegexUrl(buf);
@@ -343,7 +343,7 @@ export class WindowsClipboardProvider implements IClipboardSourceProvider {
 				return { pageUrl, imageUrl, localFilePath, altText };
 			}
 		} catch (err) {
-			console.warn('[CMDS Eagle] Error reading Windows clipboard source:', err);
+			console.warn('[Eagle Bridge] Error reading Windows clipboard source:', err);
 		}
 
 		return null;
@@ -509,7 +509,7 @@ export class MacOSClipboardProvider implements IClipboardSourceProvider {
 				return { pageUrl, imageUrl, localFilePath, altText };
 			}
 		} catch (err) {
-			console.warn('[CMDS Eagle] Error reading macOS clipboard source:', err);
+			console.warn('[Eagle Bridge] Error reading macOS clipboard source:', err);
 		}
 
 		return null;
@@ -548,7 +548,7 @@ export class ClipboardSourceService {
 		try {
 			return await this.provider.getImageSourceInfo();
 		} catch (error) {
-			console.warn('[CMDS Eagle] Error extracting clipboard source info:', error);
+			console.warn('[Eagle Bridge] Error extracting clipboard source info:', error);
 			return null;
 		}
 	}

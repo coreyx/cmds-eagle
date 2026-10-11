@@ -582,7 +582,7 @@ export class EagleTagPickerModal extends Modal {
 			this.allTags = tags.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 			this.renderTagList();
 		} catch (err) {
-			console.error('[CMDS Eagle] Failed to load tags:', err);
+			console.error('[Eagle Bridge] Failed to load tags:', err);
 			this.listContainerEl.empty();
 			this.listContainerEl.createDiv({ cls: 'cmdspace-eagle-picker-empty', text: 'Failed to load tags.' });
 		}
@@ -953,7 +953,7 @@ export class EagleFolderPickerModal extends Modal {
 				});
 				this.close();
 			} catch (err) {
-				console.error('[CMDS Eagle] Error executing mirror from picker:', err);
+				console.error('[Eagle Bridge] Error executing mirror from picker:', err);
 				new Notice('Failed to mirror folder hierarchy in Eagle.');
 				isMirroring = false;
 				mirrorBtn.removeClass('is-loading');

@@ -501,7 +501,7 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 		containerEl.createEl('hr', { attr: { style: 'margin: 24px 0; border: none; border-top: 1px solid var(--background-modifier-border);' } });
 		
 		const footerEl = containerEl.createEl('div', { attr: { style: 'text-align: center; color: var(--text-muted); font-size: 12px;' } });
-		footerEl.createEl('div', { text: `CMDS Eagle v${this.plugin.manifest.version}`, attr: { style: 'margin-bottom: 8px;' } });
+		footerEl.createEl('div', { text: `Eagle Bridge v${this.plugin.manifest.version}`, attr: { style: 'margin-bottom: 8px;' } });
 		
 		const linksEl = footerEl.createEl('div');
 		linksEl.createSpan({ text: 'CMDSPACE ' });

@@ -51,7 +51,7 @@ export default class CMDSPACELinkEagle extends Plugin {
 	private attachedExcalidrawContainers = new WeakSet<HTMLElement>();
 
 	async onload(): Promise<void> {
-		console.log('[CMDS Eagle] Loading plugin v1.6.0');
+		console.log(`[Eagle Bridge] Loading plugin v${this.manifest.version}`);
 
 		await this.loadSettings();
 		this.api = new EagleApiService(this.settings);
@@ -156,25 +156,25 @@ export default class CMDSPACELinkEagle extends Plugin {
 
 		this.registerEvent(
 			this.app.workspace.on('file-open', (file: TFile | null) => {
-				console.log(`[CMDS Eagle] file-open event: ${file?.path}`);
-				console.log(`[CMDS Eagle] enableCrossPlatform: ${this.settings.enableCrossPlatform}`);
-				console.log(`[CMDS Eagle] autoConvertCrossPlatformPaths: ${this.settings.autoConvertCrossPlatformPaths}`);
-				console.log(`[CMDS Eagle] conversionMode: ${this.settings.crossPlatformConversionMode}`);
-				console.log(`[CMDS Eagle] lastModifiedFile: ${this.lastModifiedFile}`);
+				console.log(`[Eagle Bridge] file-open event: ${file?.path}`);
+				console.log(`[Eagle Bridge] enableCrossPlatform: ${this.settings.enableCrossPlatform}`);
+				console.log(`[Eagle Bridge] autoConvertCrossPlatformPaths: ${this.settings.autoConvertCrossPlatformPaths}`);
+				console.log(`[Eagle Bridge] conversionMode: ${this.settings.crossPlatformConversionMode}`);
+				console.log(`[Eagle Bridge] lastModifiedFile: ${this.lastModifiedFile}`);
 				
 				if (file && this.settings.enableCrossPlatform && this.settings.autoConvertCrossPlatformPaths) {
 					if (this.lastModifiedFile !== file.path) {
-						console.log(`[CMDS Eagle] Triggering auto-conversion for: ${file.path}`);
+						console.log(`[Eagle Bridge] Triggering auto-conversion for: ${file.path}`);
 						window.setTimeout(() => { void this.autoConvertOnFileOpen(file); }, 300);
 					} else {
-						console.log(`[CMDS Eagle] Skipping - file was just modified by us`);
+						console.log(`[Eagle Bridge] Skipping - file was just modified by us`);
 					}
 				}
 				this.lastModifiedFile = null;
 			})
 		);
 
-		this.addRibbonIcon('image', 'CMDSPACE: Eagle', () => {
+		this.addRibbonIcon('image', 'Eagle Bridge', () => {
 			new EagleSearchModal(this.app, this.api, this.settings).open();
 		});
 
@@ -182,7 +182,7 @@ export default class CMDSPACELinkEagle extends Plugin {
 	}
 
 	onunload(): void {
-		console.log('[CMDS Eagle] Unloading plugin');
+		console.log('[Eagle Bridge] Unloading plugin');
 	}
 
 	async loadSettings(): Promise<void> {
@@ -275,32 +275,32 @@ export default class CMDSPACELinkEagle extends Plugin {
 			if (webUtils?.getPathForFile) {
 				const p = webUtils.getPathForFile(file);
 				if (p && typeof p === 'string' && p.trim().length > 0) {
-					console.log('[CMDS Eagle] Resolved local path via webUtils.getPathForFile:', p.trim());
+					console.log('[Eagle Bridge] Resolved local path via webUtils.getPathForFile:', p.trim());
 					return p.trim();
 				}
 			}
 		} catch (err) {
-			console.warn('[CMDS Eagle] Failed to get path via webUtils.getPathForFile:', err);
+			console.warn('[Eagle Bridge] Failed to get path via webUtils.getPathForFile:', err);
 		}
 
 		// 2. Try direct (file as any).path (older Electron <28)
 		try {
 			const directPath = (file as any).path;
 			if (directPath && typeof directPath === 'string' && directPath.trim().length > 0) {
-				console.log('[CMDS Eagle] Resolved local path via file.path:', directPath.trim());
+				console.log('[Eagle Bridge] Resolved local path via file.path:', directPath.trim());
 				return directPath.trim();
 			}
 		} catch (err) {
-			console.warn('[CMDS Eagle] Failed to get path via file.path:', err);
+			console.warn('[Eagle Bridge] Failed to get path via file.path:', err);
 		}
 
 		// 3. Fallback to sourceInfo (e.g. from clipboard provider or dataTransfer uri-list)
 		if (sourceInfo?.localFilePath && typeof sourceInfo.localFilePath === 'string' && sourceInfo.localFilePath.trim().length > 0) {
-			console.log('[CMDS Eagle] Resolved local path via sourceInfo:', sourceInfo.localFilePath.trim());
+			console.log('[Eagle Bridge] Resolved local path via sourceInfo:', sourceInfo.localFilePath.trim());
 			return sourceInfo.localFilePath.trim();
 		}
 
-		console.warn('[CMDS Eagle] Could not extract local file path for file:', file?.name);
+		console.warn('[Eagle Bridge] Could not extract local file path for file:', file?.name);
 		return null;
 	}
 
@@ -375,7 +375,7 @@ export default class CMDSPACELinkEagle extends Plugin {
 					localFileUrl = this.pathToFileUrl(localFilePath);
 				}
 			} catch (e) {
-				console.warn('[CMDS Eagle] Failed to convert local file path to file URL:', e);
+				console.warn('[Eagle Bridge] Failed to convert local file path to file URL:', e);
 			}
 		}
 
@@ -916,7 +916,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		const alreadyConverted = img.getAttribute('data-original-src');
 		if (alreadyConverted) return;
 
-		console.log(`[CMDS Eagle] Checking image src: ${src}`);
+		console.log(`[Eagle Bridge] Checking image src: ${src}`);
 
 		let extractedPath: string | null = null;
 		
@@ -930,18 +930,18 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		}
 
 		if (!extractedPath) {
-			console.log(`[CMDS Eagle] No extractable path`);
+			console.log(`[Eagle Bridge] No extractable path`);
 			return;
 		}
 
-		console.log(`[CMDS Eagle] Extracted: ${extractedPath}`);
+		console.log(`[Eagle Bridge] Extracted: ${extractedPath}`);
 
 		if (extractedPath.startsWith('Users/') && !extractedPath.startsWith('/')) {
 			extractedPath = '/' + extractedPath;
 		}
 
 		const isDifferent = this.isPathFromDifferentPlatform(extractedPath);
-		console.log(`[CMDS Eagle] Is from different platform: ${isDifferent}`);
+		console.log(`[Eagle Bridge] Is from different platform: ${isDifferent}`);
 		
 		if (!isDifferent) return;
 
@@ -949,7 +949,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		
 		if (convertedPath !== extractedPath) {
 			const newSrc = this.pathToFileUrl(convertedPath);
-			console.log(`[CMDS Eagle] Setting new src: ${newSrc}`);
+			console.log(`[Eagle Bridge] Setting new src: ${newSrc}`);
 			
 			const newImg = activeDocument.createElement('img');
 			newImg.src = newSrc;
@@ -960,7 +960,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			
 			if (img.parentNode) {
 				img.parentNode.replaceChild(newImg, img);
-				console.log(`[CMDS Eagle] Image element replaced`);
+				console.log(`[Eagle Bridge] Image element replaced`);
 			}
 		}
 	}
@@ -1121,7 +1121,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		try {
 			sourceInfo = await this.clipboardSourceService.getSourceInfo();
 		} catch (e) {
-			console.warn('[CMDS Eagle] Error retrieving clipboard source info:', e);
+			console.warn('[Eagle Bridge] Error retrieving clipboard source info:', e);
 		}
 
 		const fileItems = Array.from(files).map(file => ({
@@ -2091,7 +2091,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			await view.addImageWithURL(url);
 			new Notice(`Added to canvas: ${item.name}.${item.ext}`);
 		} catch (error) {
-			console.error('[CMDS Eagle] Excalidraw Eagle-ref embed failed:', error);
+			console.error('[Eagle Bridge] Excalidraw Eagle-ref embed failed:', error);
 			new Notice('Failed to add Eagle image to Excalidraw canvas');
 		}
 	}
@@ -2148,7 +2148,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 					new Notice(`Failed to upload ${file.name}`);
 				}
 			} catch (error) {
-				console.error('[CMDS Eagle] Excalidraw image upload failed:', error);
+				console.error('[Eagle Bridge] Excalidraw image upload failed:', error);
 				new Notice(`Failed to add image to Excalidraw canvas: ${file.name}`);
 			}
 		}
@@ -2227,7 +2227,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			}
 		}
 		
-		console.log('[CMDS Eagle] No computer matched path:', path.substring(0, 50));
+		console.log('[Eagle Bridge] No computer matched path:', path.substring(0, 50));
 		return null;
 	}
 
@@ -2238,7 +2238,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 
 		const sourceComputer = this.findMatchingComputer(path);
 		if (!sourceComputer) {
-			console.log('[CMDS Eagle] No matching computer found for path');
+			console.log('[Eagle Bridge] No matching computer found for path');
 			return path;
 		}
 
@@ -2256,7 +2256,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		const sourceSubPath = sourceComputer.subPath || '';
 		const currentSubPath = currentComputer.subPath || '';
 
-		console.log(`[CMDS Eagle] Converting: ${sourceComputer.platform}/${sourceComputer.username}/${sourceSubPath} → ${currentComputer.platform}/${currentComputer.username}/${currentSubPath}`);
+		console.log(`[Eagle Bridge] Converting: ${sourceComputer.platform}/${sourceComputer.username}/${sourceSubPath} → ${currentComputer.platform}/${currentComputer.username}/${currentSubPath}`);
 
 		let relativePath = '';
 		if (sourceComputer.platform === 'darwin') {
@@ -2427,7 +2427,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			if (rootFolderId) {
 				const rootFolderNode = this.findFolderInTree(eagleFolders, rootFolderId);
 				if (!rootFolderNode) {
-					console.warn(`[CMDS Eagle] Configured mirror root folder ID '${rootFolderId}' not found in Eagle. Falling back to library root.`);
+					console.warn(`[Eagle Bridge] Configured mirror root folder ID '${rootFolderId}' not found in Eagle. Falling back to library root.`);
 					new Notice('Configured Eagle mirror root folder was not found. Using Library Root.');
 					currentParentId = undefined;
 					currentLevelFolders = eagleFolders;
@@ -2447,7 +2447,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 						parent: currentParentId
 					});
 					if (!created || !created.id) {
-						console.warn(`[CMDS Eagle] Failed to create mirrored folder '${segment}' in Eagle`);
+						console.warn(`[Eagle Bridge] Failed to create mirrored folder '${segment}' in Eagle`);
 						break;
 					}
 					currentParentId = created.id;
@@ -2457,7 +2457,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 
 			return currentParentId;
 		} catch (error) {
-			console.error('[CMDS Eagle] Error during folder hierarchy mirroring:', error);
+			console.error('[Eagle Bridge] Error during folder hierarchy mirroring:', error);
 			return rootFolderId;
 		}
 	}
@@ -2527,7 +2527,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 					}
 				});
 			} catch (err) {
-				console.error(`[CMDS Eagle] Failed to update frontmatter ${idField}:`, err);
+				console.error(`[Eagle Bridge] Failed to update frontmatter ${idField}:`, err);
 			}
 		}
 
@@ -2592,7 +2592,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			);
 			if (!res.success) {
 				new Notice('Eagle Extra Links plugin is unreachable. Please ensure the Extra Links plugin is installed in Eagle and its IPC server is toggled on.');
-				console.warn('[CMDS Eagle] Failed to add extra link:', res.error);
+				console.warn('[Eagle Bridge] Failed to add extra link:', res.error);
 			}
 		} else {
 			const updates: { url?: string; annotation?: string } = {};
@@ -2765,10 +2765,10 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 					link
 				);
 				if (!res.success) {
-					console.warn('[CMDS Eagle] Failed to push image source to Extra Links:', res.error);
+					console.warn('[Eagle Bridge] Failed to push image source to Extra Links:', res.error);
 				}
 			} catch (err) {
-				console.warn('[CMDS Eagle] Error pushing image source to Extra Links:', err);
+				console.warn('[Eagle Bridge] Error pushing image source to Extra Links:', err);
 			}
 		}
 	}
@@ -2939,7 +2939,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 
 		for (const container of allContainers) {
 			const images = container.querySelectorAll('img');
-			console.log(`[CMDS Eagle] Found ${images.length} images in container`);
+			console.log(`[Eagle Bridge] Found ${images.length} images in container`);
 
 			images.forEach((img) => {
 				const src = img.getAttribute('src');
@@ -2947,7 +2947,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 				if (processedSrcs.has(src)) return;
 				if (img.getAttribute('data-xplatform-converted')) return;
 
-				console.log(`[CMDS Eagle] Processing image src: ${src.substring(0, 80)}`);
+				console.log(`[Eagle Bridge] Processing image src: ${src.substring(0, 80)}`);
 
 				let extractedPath: string | null = null;
 				
@@ -2955,15 +2955,15 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 					const appMatch = src.match(/^app:\/\/[^/]+\/(.+)$/);
 					if (appMatch) {
 						extractedPath = this.fullyDecodeUri(appMatch[1]);
-						console.log(`[CMDS Eagle] Extracted from app://: ${extractedPath?.substring(0, 60)}`);
+						console.log(`[Eagle Bridge] Extracted from app://: ${extractedPath?.substring(0, 60)}`);
 					}
 				} else if (src.startsWith('file://')) {
 					extractedPath = this.fullyDecodeUri(src.replace(/^file:\/\/\/?/, ''));
-					console.log(`[CMDS Eagle] Extracted from file://: ${extractedPath?.substring(0, 60)}`);
+					console.log(`[Eagle Bridge] Extracted from file://: ${extractedPath?.substring(0, 60)}`);
 				}
 
 				if (!extractedPath) {
-					console.log(`[CMDS Eagle] Could not extract path from: ${src.substring(0, 50)}`);
+					console.log(`[Eagle Bridge] Could not extract path from: ${src.substring(0, 50)}`);
 					return;
 				}
 
@@ -2972,7 +2972,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 				}
 
 				if (!this.isPathFromDifferentPlatform(extractedPath)) {
-					console.log(`[CMDS Eagle] Path not from different platform`);
+					console.log(`[Eagle Bridge] Path not from different platform`);
 					return;
 				}
 
@@ -2980,7 +2980,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 				
 				if (convertedPath !== extractedPath) {
 					const newSrc = this.pathToFileUrl(convertedPath);
-					console.log(`[CMDS Eagle] Converting: ${src.substring(0, 40)} → ${newSrc.substring(0, 40)}`);
+					console.log(`[Eagle Bridge] Converting: ${src.substring(0, 40)} → ${newSrc.substring(0, 40)}`);
 					
 					img.setAttribute('src', newSrc);
 					img.setAttribute('data-xplatform-converted', 'true');
@@ -3043,7 +3043,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		});
 
 		if (convertedCount > 0) {
-			console.log(`[CMDS Eagle] Auto render-only: converted ${convertedCount} paths`);
+			console.log(`[Eagle Bridge] Auto render-only: converted ${convertedCount} paths`);
 		}
 	}
 

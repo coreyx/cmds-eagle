@@ -238,7 +238,7 @@ export class EagleApiService {
 			}
 			return null;
 		} catch (e) {
-			console.error('[CMDS Eagle] getLibraryPath error:', e);
+			console.error('[Eagle Bridge] getLibraryPath error:', e);
 			return null;
 		}
 	}
@@ -285,22 +285,22 @@ export class EagleApiService {
 	async getOriginalFilePath(item: EagleItem): Promise<string | null> {
 		const thumbnailPath = await this.getThumbnailPath(item.id);
 		if (thumbnailPath) {
-			console.log('[CMDS Eagle] thumbnailPath:', thumbnailPath);
+			console.log('[Eagle Bridge] thumbnailPath:', thumbnailPath);
 			const decodedPath = this.safeDecodeUri(thumbnailPath);
 			const folderPath = decodedPath.substring(0, decodedPath.lastIndexOf('/'));
 			const originalPath = `${folderPath}/${item.name}.${item.ext}`;
-			console.log('[CMDS Eagle] originalPath:', originalPath);
+			console.log('[Eagle Bridge] originalPath:', originalPath);
 			return originalPath;
 		}
 
 		const libraryPath = await this.getLibraryPath();
 		if (libraryPath && typeof libraryPath === 'string') {
 			const originalPath = `${libraryPath}/images/${item.id}.info/${item.name}.${item.ext}`;
-			console.log('[CMDS Eagle] originalPath (from library):', originalPath);
+			console.log('[Eagle Bridge] originalPath (from library):', originalPath);
 			return originalPath;
 		}
 
-		console.log('[CMDS Eagle] Could not get file path for item:', item.id);
+		console.log('[Eagle Bridge] Could not get file path for item:', item.id);
 		return null;
 	}
 

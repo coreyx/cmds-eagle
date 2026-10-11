@@ -1,7 +1,7 @@
 {
-	"name": "cmdspace-link-eagle",
+	"name": "eagle-bridge",
 	"version": "1.7.0",
-	"description": "CMDSPACE Link: Eagle - Obsidian plugin for Eagle integration",
+	"description": "Eagle Bridge - Obsidian plugin for Eagle integration",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",

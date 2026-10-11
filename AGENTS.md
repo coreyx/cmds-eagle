@@ -1,4 +1,4 @@
-# AGENTS.md - CMDS Eagle
+# AGENTS.md - Eagle Bridge
 
 > Obsidian plugin for Eagle asset library integration with cloud upload support.
 
@@ -72,7 +72,7 @@ import { EagleApiService, parseEagleUrl } from './api';
 | Methods/Variables | camelCase | `loadSettings`, `thumbnailPath` |
 | Constants | UPPER_SNAKE_CASE | `DEFAULT_SETTINGS`, `SUPPORTED_IMAGE_EXTENSIONS` |
 | CSS Classes | kebab-case with prefix | `cmdspace-eagle-suggestion` |
-| Plugin IDs | kebab-case | `cmds-eagle` |
+| Plugin IDs | kebab-case | `eagle-bridge` |
 
 ### Type Definitions
 
