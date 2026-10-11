@@ -1,6 +1,6 @@
 name: "Claude Code Review"
 
-# PR/Issue에서 @claude 멘션하면 자동 코드 리뷰
+# Automatic code review when @claude is mentioned in a PR/Issue
 
 on:
   issue_comment:

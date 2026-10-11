@@ -1,6 +1,8 @@
-# CMDS Eagle
+# Eagle Bridge
 
 Obsidian plugin to connect [Eagle](https://eagle.cool) asset library with your vault.
+
+Eagle Bridge started as a fork of [CMDS Eagle](https://github.com/johnfkoo951/cmds-eagle) by Yohan Koo and is now developed independently.
 
 
 
@@ -18,16 +20,23 @@ Obsidian plugin to connect [Eagle](https://eagle.cool) asset library with your v
 
 ## Installation
 
-### From Community Plugins (Recommended)
+### From BRAT (Recommended)
 
-1. Open **Settings → Community plugins** in Obsidian
-2. Click **Browse** and search for **CMDS Eagle**
-3. Click **Install**, then **Enable**
+Eagle Bridge is not in the Community Plugins list. [BRAT](https://github.com/TfTHacker/obsidian42-brat) installs it directly from its [GitHub releases](https://github.com/coreyx/cmds-eagle/releases) and keeps it up to date.
+
+1. Open **Settings → Community plugins**, click **Browse**, then install and enable **BRAT**
+2. Open **Settings → BRAT** and click **Add beta plugin**
+3. Enter the repository URL: `https://github.com/coreyx/cmds-eagle`
+4. Select the latest version, keep **Enable after installing the plugin** checked, and click **Add plugin**
+
+BRAT checks for new releases when Obsidian starts. To update on demand, run the command **BRAT: Check for updates to all beta plugins and UPDATE**.
+
+> **Coming from CMDS Eagle?** Eagle Bridge installs alongside it as a separate plugin (`eagle-bridge`). Disable CMDS Eagle so the two don't both handle pasted and dropped images. To keep your settings, copy `data.json` from `.obsidian/plugins/cmds-eagle/` to `.obsidian/plugins/eagle-bridge/`, then reload Obsidian.
 
 ### Manual Installation
 
-1. Download `main.js`, `manifest.json`, `styles.css` from [Releases](https://github.com/johnfkoo951/cmds-eagle/releases)
-2. Create folder: `.obsidian/plugins/cmds-eagle/`
+1. Download `main.js`, `manifest.json`, `styles.css` from [Releases](https://github.com/coreyx/cmds-eagle/releases)
+2. Create folder: `.obsidian/plugins/eagle-bridge/`
 3. Copy downloaded files into the folder
 4. Enable plugin in Obsidian settings
 
@@ -137,10 +146,10 @@ When running `npm run build` or `npm run dev`, the plugin is compiled into the r
 ### How to install and test your local build
 
 1. Find your Obsidian vault's plugins folder, usually at `<YourVault>/.obsidian/plugins/` (the `.obsidian` folder may be hidden by default).
-2. Create a new directory inside it called `cmds-eagle`.
+2. Create a new directory inside it called `eagle-bridge`.
 3. Copy `main.js`, `manifest.json`, and `styles.css` from your development directory into that new folder. *(Note: For a faster development loop, many developers create a symbolic link from their vault's plugin folder to this repository, or develop directly inside the vault).*
 4. In Obsidian, go to **Settings → Community plugins** and click the **Reload plugins** button (refresh icon).
-5. Find **CMDS Eagle** in the list and toggle it on. 
+5. Find **Eagle Bridge** in the list and toggle it on. 
 
 ## License
 
