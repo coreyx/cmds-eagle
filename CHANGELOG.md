@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-10-11
+
 ### Added
 - **AI Provider Settings**: Added an **AI** settings tab for choosing the model behind the new wand buttons: Anthropic, OpenAI or Gemini with an API key; any OpenAI-compatible server with a custom address and optional key; or LM Studio, which is detected automatically on this computer and takes an optional key. Each provider has a model field with a **Browse** list and a **Test connection** button. No provider is selected by default, and Anthropic defaults to Claude Haiku 5.5.
 - **AI Name and Description**: The Eagle folder dialog has a wand button next to **Name** and **Description** that sends the image to the selected provider and fills in a short title or a one-to-two sentence description. The file name, alt text and source page are passed along as hints.

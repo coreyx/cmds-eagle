@@ -1,5 +1,38 @@
 # Release Notes
 
+## 1.10.0 - 2026-10-11
+
+### AI Suggestions for Name, Description and Tags
+
+When the Eagle folder setting is **Ask**, the dialog shown as you add an image now has a wand button next to **Name**, **Description** and **Tags**. Click one and an AI model looks at the image and fills that field in.
+
+* **Name and description:** a short title, or one to two sentences describing the image.
+* **Tags:** tags already in your Eagle library are preferred and checked against your real tag list. New tags are written the way your library writes its tags, including a prefix such as `Topic: …` if you use one, and are shown with a dashed outline so you can see what would be created.
+* **AI hints:** an optional box below the tags. Type what the image is, as briefly as you like, and the wands build on it with what the model knows.
+* **Limits you control:** how many tags are added per click and how many of them may be new, under **Settings → AI → Tag suggestions**.
+
+### Choose Your Model
+
+Pick a provider under the new **AI** settings tab. Nothing is selected by default.
+
+* **Anthropic, OpenAI or Gemini** with an API key. Anthropic defaults to Claude Haiku 5.5.
+* **Any OpenAI-compatible server** with your own address and an optional key.
+* **LM Studio**, detected automatically on your computer, with an optional API key. Leave the model empty and a loaded vision model is used.
+
+Each provider has a **Browse** list of its models, a **Test connection** button, and an **Effort** setting for how much the model thinks before answering. Local reasoning models can think for 20 seconds or more over a short title; set Effort to **None** to skip that and get an answer in about a second.
+
+With a cloud provider, each click sends that image, and for tags your tag names, to the provider. With LM Studio nothing leaves your computer.
+
+### Tags That Obsidian Can Read
+
+Eagle tags are now written into your notes as valid Obsidian tags. Previously a tag such as `Source: Obsidian` became `#source:-obsidian`, of which Obsidian only recognized `#source`.
+
+* A colon or slash becomes a nested tag: `Topic: World of Warcraft` is written `#topic/world-of-warcraft`.
+* Spaces and other punctuation become hyphens: `R&D Notes` is written `#r-d-notes`.
+* A new **Tags in the card** setting under **Embedding → Metadata card** leaves Eagle tags out of metadata cards altogether if you prefer.
+
+Cards already in your notes keep their old text until you embed the image again.
+
 ## 1.9.0 - 2026-10-11
 
 ### Images in Eagle, Visible on Every Device
