@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-10-11
+
 ### Added
 - **Canvas Integration**: Pasting or dropping an image or an Eagle item onto an Obsidian Canvas adds it as a card that loads the image by URL instead of saving a vault attachment. A "Card type" setting chooses **Text card** (default; the image plus its metadata card), **Link card**, or **Ask every time**. Cards are placed at the pointer or drop position and sized to the image. Settings are under **Extras → Canvas**, including "Also add new images to Eagle".
 - **Excalidraw: Eagle Link Types and Multiple Items**: `eagle://item/…` links are now recognized on Excalidraw drawings, and several items copied from Eagle at once are all added.

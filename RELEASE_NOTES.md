@@ -1,5 +1,51 @@
 # Release Notes
 
+## 1.9.0 - 2026-10-11
+
+### Images in Eagle, Visible on Every Device
+
+Embedded Eagle images can now point at a **cloud copy** instead of a file on one computer. When you add an image to Eagle from a note, Eagle Bridge also uploads a copy to your cloud provider and embeds that address, so the image displays wherever the note is opened. This is the new default for fresh installs; existing installs keep their current setting and can switch under **Settings → Embedding → Link embedded images to**.
+
+* **One copy per item:** embedding the same Eagle item again reuses its copy. The copy is recorded on the item as a **Cloud Copy** link in Eagle's Extra Links, and on WebDAV it is stored under the item's Eagle ID.
+* **No duplicates from your own server:** an image pasted or dropped from your WebDAV server is linked where it already is rather than uploaded again.
+* **Works everywhere you embed:** paste and drop, search and embed, pasted Eagle links, and images copied inside Eagle.
+* **Falls back safely:** with no cloud provider, or if an upload fails, the note links to the local file as before.
+
+### Canvas Support
+
+Paste or drop an image or an Eagle item onto an Obsidian Canvas and it is added as a card that loads the image by URL, instead of saving a vault attachment. Choose the card type under **Settings → Extras → Canvas**: a **Text card** (the image plus its metadata card), a **Link card**, or **Ask every time**. Cards land at the pointer or drop position and are sized to the image.
+
+Canvas support uses Canvas functions that are not part of Obsidian's public plugin interface. If a future Obsidian version changes them, Eagle Bridge steps aside and Canvas behaves as it does without the plugin.
+
+### Excalidraw Improvements
+
+* **Pasted images are no longer lost.** Without a cloud provider, the paste is left to Excalidraw. If an upload fails, the image is saved to your vault.
+* **Same import as notes.** New images added to Eagle from a drawing get folder routing, default tags, the captured source URL and a backlink, and Eagle items reuse their single cloud copy.
+* **More ways to add Eagle items.** `eagle://item/…` links are recognized, several items copied at once are all added, and Custom URL prefix mode embeds from your own server with nothing uploaded.
+
+### Nextcloud and WebDAV
+
+* **Public share links:** paste a Nextcloud share link as the WebDAV Public URL and it is converted automatically. The README has a step-by-step guide to serving uploads from a Nextcloud public share.
+* **Test connection:** a new button checks your login and that the public address works without one.
+* **Password field** is now masked.
+
+### Settings, Reorganized
+
+The settings are split into five tabs (**Connections**, **Cloud storage**, **Adding images**, **Embedding**, **Extras**) with related options grouped together and clearer names. Nothing changed its behaviour or stored value. A new **Use Eagle Extra Links** switch on the Connections tab turns all use of the Extra Links plugin on or off, shows whether it was detected, and has its own test button.
+
+### Also New
+
+* **Clearer paste dialog:** "Where to save image?" now lists Eagle, Vault and Cloud only, with a line describing what each will do.
+* **Metadata card for cloud uploads:** images uploaded straight to the cloud get a card with type, size, dimensions and source links.
+* **Pasted Eagle file paths** behave exactly like pasted Eagle links.
+
+### Fixes
+
+* **"No cloud provider configured" with valid settings:** cloud uploads were refused if credentials had been typed in a different order than the settings expected.
+* **WebDAV uploads to Nextcloud failing with 404:** a missing upload folder is now created, including nested folders.
+* **Double slash in WebDAV image links** when the Public URL ended with a slash.
+* **Backlinks from Canvas files:** adding a backlink while a `.canvas` file was active no longer tries to write a note ID into that file.
+
 ## 1.8.0 - 2026-10-11
 
 ### Now Called Eagle Bridge
