@@ -2,6 +2,7 @@ import { requestUrl } from 'obsidian';
 import {
 	AiEffort,
 	AiImageHints,
+	AiNewTagFormat,
 	AiProviderConfig,
 	AiProviderType,
 	AiTagSuggestions,
@@ -32,6 +33,12 @@ const MAX_TAGS_IN_PROMPT = 1000;
 
 // Bounds for the two tag-wand settings: tags added per click, and how many may be new
 export const AI_MAX_TAGS_LIMIT = 20;
+// The defaults are judgment calls, not measured values:
+// - Six in total, because every suggestion has to be read and perhaps removed, and a handful
+//   usually covers what an image shows, what it is about and what kind of image it is.
+// - Two new, because a tag is permanent once saved to Eagle and models invent tags readily;
+//   a low cap keeps suggestions on existing tags and near-duplicates out of the library.
+//   The cost: in a small library few existing tags fit, so two is most of what comes back.
 const DEFAULT_MAX_TAGS = 6;
 const DEFAULT_MAX_NEW_TAGS = 2;
 
@@ -522,7 +529,7 @@ function describeHints(hints: AiImageHints): string {
 	// image is, and are counting on the model to fill in the rest.
 	const userHints = hints.userHints?.trim();
 	if (userHints) {
-		text += `\n\nThe person adding this image says this about it:\n${userHints}\n\nTake that as true even where the image alone would not tell you, and build on it. It may be only a few words: work out what it refers to and bring in what you know about that subject, such as proper names, the work or series it belongs to, the people or places shown, and the right terms for them.`;
+		text += `\n\nThe person adding this image says this about it:\n${userHints}\n\nTake that as true even where the image alone would not tell you, and build on it. It may be only a few words: work out what it refers to and bring in what you know about that subject, such as proper names, the work or series it belongs to, the people or places shown, and the right terms for them. If it also says what they want from you, such as which kinds of things to concentrate on or leave out, do as it asks.`;
 	}
 
 	const lines: string[] = [];
@@ -622,9 +629,16 @@ function buildTagPrompt(
 	appliedTags: string[],
 	hints: AiImageHints,
 	maxTags: number,
-	maxNewTags: number
+	maxNewTags: number,
+	newTagFormat: AiNewTagFormat,
+	tagExamples: string[]
 ): string {
 	const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
+	// The user's own examples of a new tag take the place of anything read from the library.
+	// They are repeated as the last thing the model reads, like the prefix forms below.
+	const useExamples = newTagFormat === 'custom' && tagExamples.length > 0;
+	const theseExamples = tagExamples.length === 1 ? 'this example' : 'these examples';
+	const exampleRule = `The owner of this library wants new tags written in the form ${tagExamples.length === 1 ? 'this example shows' : 'these examples show'}: ${tagExamples.map(example => `"${example}"`).join(', ')}. Write every new tag the same way: the same structure, punctuation, spacing and capitalization. ${tagExamples.length === 1 ? 'The example only shows the form, so do not suggest it' : 'The examples only show the form, so do not suggest one of them'} as a tag unless it fits this image.`;
 	const parts: string[] = [
 		`Suggest up to ${count(maxTags, 'tag')} for this image, most fitting first.`,
 	];
@@ -646,13 +660,32 @@ function buildTagPrompt(
 		];
 		if (maxNewTags > 0) {
 			rules.push(`When something important about the image has no fitting tag in the list, add at most ${count(maxNewTags, 'new tag')}.`);
-			rules.push('Write a new tag the way the library writes its tags: the same capitalization and the same language.');
-			const prefixes = findTagPrefixes(tags);
-			if (prefixes.length > 0) {
-				rules.push(`This library files its tags under a prefix followed by a colon. The prefixes in use are: ${prefixes.join(', ')}. So write every new tag as "<prefix>: <value>", choosing the prefix that says what kind of thing the value is. A bare value with no prefix is wrong, unless none of those prefixes could describe it.`);
-				// Repeated as the last thing the model reads: without it, a model that is not
-				// reasoning tends to drop the prefix once hints give it names to use
-				answerFormat = `Answer with one tag per line and nothing else. Every new tag starts with one of these prefixes and a colon: ${prefixes.join(', ')}.`;
+			if (!useExamples) rules.push('Write a new tag the way the library writes its tags: the same capitalization and the same language.');
+			// The library's own way of filing tags under prefixes, if it has one. The forms are
+			// repeated as the last thing the model reads, as patterns to fill in: a model that
+			// is not reasoning otherwise drops the prefix once hints give it names to use.
+			const convention = useExamples ? null : detectTagConvention(tags);
+			const style = convention ? chooseNewTagStyle(convention, newTagFormat) : 'plain';
+			if (useExamples) {
+				rules.push(exampleRule);
+				answerFormat = `Answer with one tag per line and nothing else. Each line is either a tag copied exactly from the list, or a new tag written in the form of ${theseExamples}:\n${tagExamples.join('\n')}`;
+			} else if (convention && style === 'never') {
+				// Saying nothing is not enough here: a model shown prefixed tags imitates them
+				rules.push(`Some tags in this library sit under a prefix, as in "${convention.example}". Do not do that with a new tag. Write a new tag plainly, as the value alone, with no prefix in front of it.`);
+				answerFormat = 'Answer with one tag per line and nothing else. Each line is either a tag copied exactly from the list, or a new tag written plainly with no prefix.';
+			} else if (convention && style !== 'plain') {
+				const forms = convention.prefixes.map(prefix => `${prefix}${convention.separator}<value>`).join('\n');
+				const prefixList = convention.prefixes.join(', ');
+				if (style === 'always') {
+					rules.push(`This library files its tags under a prefix, as in "${convention.example}". The prefixes in use are: ${prefixList}. Write every new tag the same way, with exactly the same punctuation and spacing between prefix and value. Use one of those prefixes whenever one could reasonably hold the value, so the library keeps few prefixes; make a new prefix in the same style only when none of them can. A tag with no prefix is never right.`);
+					answerFormat = `Answer with one tag per line and nothing else. Each line is either a tag copied exactly from the list, or a new tag in one of these forms:\n${forms}`;
+				} else {
+					// Left to judge which kind a new tag is "more like", models write nearly
+					// everything plainly, so the prefix is the rule and plain the exception
+					const plain = convention.plainExamples.map(name => `"${name}"`).join(', ');
+					rules.push(`This library files some tags under a prefix, as in "${convention.example}", and writes others plainly, as in ${plain}. The prefixes in use are: ${prefixList}. A new tag goes under one of those prefixes whenever one could reasonably hold it, with exactly the same punctuation and spacing between prefix and value. Write a new tag plainly only when none of those prefixes fits it. Do not make up a new prefix.`);
+					answerFormat = `Answer with one tag per line and nothing else. Each line is a tag copied exactly from the list, or a new tag. Write a new tag plainly only when no prefix fits it; otherwise use one of these forms:\n${forms}`;
+				}
 			}
 		} else {
 			rules.push('Do not make up new tags.');
@@ -660,6 +693,10 @@ function buildTagPrompt(
 		parts.push(rules.map(rule => `- ${rule}`).join('\n'));
 	} else {
 		parts.push(`The library has no tags yet, so propose at most ${count(maxNewTags, 'short, general tag')}.`);
+		if (useExamples) {
+			parts.push(exampleRule);
+			answerFormat = `Answer with one tag per line and nothing else. Write each tag in the form of ${theseExamples}:\n${tagExamples.join('\n')}`;
+		}
 	}
 
 	if (appliedTags.length > 0) {
@@ -670,20 +707,136 @@ function buildTagPrompt(
 	return parts.join('\n\n');
 }
 
-/** The "Prefix" parts of library tags written "Prefix: Value", most common first. */
-function findTagPrefixes(tags: EagleTag[]): string[] {
-	const counts = new Map<string, number>();
-	for (const tag of tags) {
-		const match = tag.name.match(/^([^:]{1,30}):\s*\S/);
-		if (match) {
-			const prefix = match[1].trim();
-			counts.set(prefix, (counts.get(prefix) || 0) + 1);
+/** How a library files tags under prefixes, worked out from its own tags. */
+export interface TagConvention {
+	// Exactly what the library puts between prefix and value, spacing included: ": ", "/", " - "
+	separator: string;
+	// The prefixes in use, most common first
+	prefixes: string[];
+	// A real tag from the library written this way
+	example: string;
+	// Fraction of the library's tags that carry a prefix
+	share: number;
+	// A few of the library's most used tags written without one
+	plainExamples: string[];
+}
+
+// Characters a library may put between a prefix and a value. The first group is only ever
+// used that way. The second also appears inside ordinary words ("sci-fi", "v2.0"), so those
+// count only when several tags share the same prefix.
+const STRONG_SEPARATORS = [':', '/', '|', '>'];
+const WEAK_SEPARATORS = ['-', '_', '.'];
+
+// Below this share of prefixed tags, a library is treated as not using prefixes: one stray
+// "Note: check" should not reshape every new tag
+const MIN_PREFIXED_SHARE = 0.15;
+// At or above this share, the library is treated as using prefixes throughout
+const ALL_PREFIXED_SHARE = 0.85;
+
+function splitTagAt(name: string, char: string): { prefix: string; separator: string } | null {
+	// A web address is not a prefixed tag
+	if (name.includes('://')) return null;
+	const index = name.indexOf(char);
+	if (index <= 0 || index >= name.length - 1) return null;
+
+	const before = name.slice(0, index);
+	const after = name.slice(index + 1);
+	const prefix = before.trimEnd();
+	const value = after.trimStart();
+	if (!prefix || !value || prefix.length > 30) return null;
+
+	// Keep the spacing the library uses around the character
+	const separator = before.slice(prefix.length) + char + after.slice(0, after.length - value.length);
+	return { prefix, separator };
+}
+
+/**
+ * Finds the library's prefix convention, if any: which character separates prefix from
+ * value (with its exact spacing), which prefixes exist, and how much of the library uses
+ * them. Returns null for a library whose tags are all plain.
+ */
+export function detectTagConvention(tags: EagleTag[]): TagConvention | null {
+	if (tags.length === 0) return null;
+
+	let best: { names: Set<string>; prefixCounts: Map<string, number>; separatorCounts: Map<string, number>; example: string } | null = null;
+
+	for (const char of [...STRONG_SEPARATORS, ...WEAK_SEPARATORS]) {
+		const splits = tags
+			.map(tag => ({ name: tag.name, split: splitTagAt(tag.name, char) }))
+			.filter((entry): entry is { name: string; split: { prefix: string; separator: string } } => entry.split !== null);
+
+		const prefixTotals = new Map<string, number>();
+		for (const { split } of splits) {
+			prefixTotals.set(split.prefix, (prefixTotals.get(split.prefix) || 0) + 1);
 		}
+
+		const isStrong = STRONG_SEPARATORS.includes(char);
+		// " - " set off by spaces is as deliberate as a colon; a bare hyphen needs a shared prefix
+		const isSpaced = (separator: string) => separator.startsWith(' ') && separator.endsWith(' ');
+		const credible = splits.filter(({ split }) =>
+			isStrong
+			|| isSpaced(split.separator)
+			|| (prefixTotals.get(split.prefix) || 0) >= 2
+		);
+		// Shared prefixes alone are weaker evidence, so more tags are needed before they count
+		const deliberate = isStrong || credible.some(({ split }) => isSpaced(split.separator));
+		if (credible.length === 0 || (!deliberate && credible.length < 3)) continue;
+		if (best && credible.length <= best.names.size) continue;
+
+		const prefixCounts = new Map<string, number>();
+		const separatorCounts = new Map<string, number>();
+		for (const { split } of credible) {
+			prefixCounts.set(split.prefix, (prefixCounts.get(split.prefix) || 0) + 1);
+			separatorCounts.set(split.separator, (separatorCounts.get(split.separator) || 0) + 1);
+		}
+		best = {
+			names: new Set(credible.map(entry => entry.name)),
+			prefixCounts,
+			separatorCounts,
+			example: credible[0].name,
+		};
 	}
-	return [...counts.entries()]
-		.sort((a, b) => b[1] - a[1])
-		.slice(0, 12)
-		.map(([prefix]) => prefix);
+
+	if (!best) return null;
+	const found = best;
+
+	const byCount = (a: [string, number], b: [string, number]) => b[1] - a[1];
+	return {
+		separator: [...found.separatorCounts.entries()].sort(byCount)[0][0],
+		prefixes: [...found.prefixCounts.entries()].sort(byCount).slice(0, 12).map(([prefix]) => prefix),
+		example: found.example,
+		share: found.names.size / tags.length,
+		plainExamples: tags.filter(tag => !found.names.has(tag.name)).slice(0, 3).map(tag => tag.name),
+	};
+}
+
+/** The saved "New tag format" setting, falling back to following the library's mix. */
+export function resolveNewTagFormat(value: unknown): AiNewTagFormat {
+	return value === 'always' || value === 'never' || value === 'custom' ? value : 'mix';
+}
+
+const MAX_TAG_EXAMPLES = 8;
+
+/** The user's example tags, as typed in settings: separated by commas or line breaks. */
+export function parseTagExamples(text: unknown): string[] {
+	if (typeof text !== 'string') return [];
+	const examples = text.split(/[,\n]/).map(example => example.trim()).filter(example => example.length > 0);
+	return [...new Set(examples)].slice(0, MAX_TAG_EXAMPLES);
+}
+
+/**
+ * Whether new tags should always take a prefix, may be either, or should be plain, given
+ * the library's convention and the user's "New tag format" setting. 'plain' means the
+ * library has too few prefixed tags for a rule to be worth stating; 'never' means the user
+ * has ruled prefixes out, which has to be said to the model. 'custom' with no examples
+ * typed is treated as following the mix.
+ */
+export function chooseNewTagStyle(convention: TagConvention, newTagFormat: AiNewTagFormat): 'always' | 'mix' | 'plain' | 'never' {
+	if (newTagFormat === 'never') return 'never';
+	if (newTagFormat === 'always') return 'always';
+	if (convention.share >= ALL_PREFIXED_SHARE || convention.plainExamples.length === 0) return 'always';
+	if (convention.share < MIN_PREFIXED_SHARE) return 'plain';
+	return 'mix';
 }
 
 // ── The assistant used by the folder picker's wands ──────────────────────
@@ -730,7 +883,16 @@ export class AiAssistant implements EagleAiAssistant {
 
 		const answer = await this.ask(
 			imageUrl,
-			buildTagPrompt(sentTags, allTags.length, appliedTags, hints, maxTags, maxNewTags)
+			buildTagPrompt(
+				sentTags,
+				allTags.length,
+				appliedTags,
+				hints,
+				maxTags,
+				maxNewTags,
+				resolveNewTagFormat(this.getSettings().aiNewTagFormat),
+				parseTagExamples(this.getSettings().aiNewTagExamples)
+			)
 		);
 		const tags = classifyAiTags(parseAiTags(answer), allTags.map(tag => tag.name), appliedTags, maxTags, maxNewTags);
 

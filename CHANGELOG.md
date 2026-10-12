@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Hint Templates**: A **Templates** list beside the AI hints box adds a ready-made hint to the box, where it can still be edited. Seven are built in (Subjects, Art style and medium, Characters and people, Places and setting, Series and franchise, Colors and mood, Screenshot), and the list can be renamed, reworded, extended or reset under **Settings → AI → Hint templates**.
+- **Hints Can Steer the Suggestions**: A hint may say what you want as well as what the image is, for example "Only tag the character races". The request now tells the model to follow such instructions.
+- **Tooltips for Long Tags**: Hovering a tag pill in the Eagle folder dialog, or a row in the Add Tag list, shows the whole tag when its text is cut short.
+- **New Tag Format Setting**: **Settings → AI → Tag suggestions → New tag format** decides how a tag that is not in your library yet is written. For a library with prefixed tags: "Follow the library's mix" (the default: a new tag takes one of your prefixes when one fits and is left plain otherwise), "Always use a prefix" (every new tag gets one, a new prefix being made if none of yours fits) or "Never use a prefix" (every new tag is plain).
+- **Your Own Tag Examples**: The fourth New tag format choice, "Use my own examples", shows an **Example new tags** field. New tags copy the form of the examples typed there, whatever the library does, which also covers a library with no tags yet.
+
+- **Also Upload to the Cloud, per Image**: The "Where to save image?" dialog and the "Paste Eagle item" dialog have an **Also upload to the cloud** toggle, labelled with your provider's name. With it on, an image saved to Eagle also gets a cloud copy and the Eagle button reads "Eagle + <provider>". The toggle starts from **Settings → Embedding → Also upload to the cloud** and changes only that image unless **Remember this choice** is on.
+- **Always Use Custom URL Prefix**: An override under **Settings → Embedding**, shown once a prefix is set, that links to your own server even when an image has a cloud copy.
+- **Offer the Vault as a Destination**: A toggle under **Settings → Adding images**, off by default. While it is off, "Vault" does not appear in the paste dialog or in the destination setting. If "Save to vault" was already your saved choice, the toggle is turned on for you and nothing changes.
+- **Warnings for Links That Only Work Here**: With no Custom URL prefix set, the paste dialog says when the note would link to a file on this computer only, settings shows a warning under the empty prefix field, and a notice appears the first time an embed falls back to a file path in a session.
+
+### Changed
+- **What an Embedded Eagle Image Links To**: The "Link embedded images to" setting (Cloud copy / Custom URL prefix / Local file path) is replaced by a rule applied per image: the cloud copy when the image has one, otherwise your Custom URL prefix, otherwise the file path on this computer. An item that already has a cloud copy links to it even when nothing is uploaded this time. Existing settings are carried over: "Cloud copy" becomes **Also upload to the cloud** on, "Custom URL prefix" keeps your prefix with uploading off, and "Local file path" becomes uploading off.
+- **Custom URL Prefix Is Empty by Default**: It used to hold `https://localhost:8080` even when unused. That unused default is cleared on upgrade; a prefix you were using or had typed is kept. If you used "Local file path" and had also typed a prefix, embeds now use that prefix: clear the field to keep linking by file path.
+- **Excalidraw and Canvas**: Pasted Eagle items and new images get the same link as in a note. With no Custom URL prefix a cloud copy is still made, since these surfaces cannot use a file path.
+- **Taller Eagle Folder Dialog**: The dialog is 100 pixels taller, so the left pane no longer needs a scrollbar now that it holds the AI hints box.
+- **Tag Format Read From the Library**: The prefix form for new tags is no longer assumed to be `Prefix: value`. The separator your library uses is detected with its exact spacing (`Topic: AI`, `Topic:AI`, `topic/ai`, `Topic - AI` and similar), and the request gives your prefixes as patterns to fill in so the form holds when a hint steers the suggestions. Under the default setting a prefix rule applies only when a meaningful share of your tags are prefixed (15% or more), and ordinary hyphenated tags such as `sci-fi` are never read as prefixes.
+- **Minimum Obsidian Version**: Now 1.5.7 (was 1.5.0), for the function that places a vault attachment according to Obsidian's own settings.
+
+### Removed
+- **Cross-Platform Paths**: The feature that rewrote `file://` image links between registered computers, its "Convert cross-platform image paths in current note" command and its settings are gone. It only handled libraries inside a user folder on drive `C:`, rewrote note files as they were opened, and could mangle paths. Cloud copies and the Custom URL prefix give links that work on every device without changing your notes. Existing `file://` links in notes are left as they are.
+
+### Fixed
+- **Temporary Files Piling Up in the Vault**: Every image sent to Eagle or to the cloud was first copied into a hidden `.eagle-temp` folder in the vault and never deleted. A cloud-only upload now removes its copy as soon as it finishes, and copies handed to Eagle are cleared out once they are an hour old, including those already there.
+- **Saving to the Vault Ignored Obsidian's Settings**: Choosing "Vault" always wrote a Markdown link with a full path and a timestamped file name. It now uses the vault's attachment folder, link style (wikilinks or Markdown) and path style, names a clipboard image "Pasted image <time>" as Obsidian does, and replaces characters such as `#` that would break the link.
+- **"Upload to Eagle" Missed Common Embeds**: The right-click menu item did not appear on `![[image.png|300]]` or captioned embeds, on Markdown embeds whose path has spaces (written as `%20` or inside `<…>`), or on paths containing parentheses.
+- **"Convert All Images in Note to Cloud URLs"**: The command skipped `![[…]]` embeds, could not find vault files whose path has spaces, and on Windows could not open `file://` images. All three now convert, a file embedded several times is uploaded once, and every embed of it is replaced.
+
 ## [1.10.0] - 2026-10-11
 
 ### Added

@@ -25,10 +25,8 @@ import {
 	SUPPORTED_IMAGE_EXTENSIONS,
 	SUPPORTED_VIDEO_EXTENSIONS,
 	SUPPORTED_DOCUMENT_EXTENSIONS,
-	ComputerProfile,
-	PlatformType,
 } from './types';
-import { EagleApiService, buildEagleItemUrl, buildEagleCustomEmbedUrl, toObsidianTag } from './api';
+import { EagleApiService, buildEagleItemUrl, toObsidianTag } from './api';
 
 type FileTypeCategory = 'images' | 'videos' | 'documents' | 'all';
 
@@ -46,7 +44,8 @@ export class EagleSearchModal extends FuzzySuggestModal<EagleItem> {
 		app: App,
 		api: EagleApiService,
 		settings: CMDSPACEEagleSettings,
-		private uploadCloudCopy?: (item: EagleItem) => Promise<string | null>
+		// The link an embed should use (cloud copy or Custom URL prefix), or null for the local file
+		private resolveEmbedUrl?: (item: EagleItem) => Promise<string | null>
 	) {
 		super(app);
 		this.api = api;
@@ -285,29 +284,8 @@ export class EagleSearchModal extends FuzzySuggestModal<EagleItem> {
 		
 		if (this.settings.insertAsEmbed) {
 			const filename = `${item.name}.${item.ext}`;
-			if (this.settings.eagleEmbedUrlMode === 'cloud' && this.uploadCloudCopy) {
-				const cloudUrl = await this.uploadCloudCopy(item);
-				if (cloudUrl) {
-					let output = `![${filename}](${cloudUrl})`;
-					if (this.settings.insertThumbnail) {
-						output += '\n\n' + this.buildMetadataLine(item);
-					}
-					editor.replaceSelection(output);
-					new Notice(`Embedded: ${item.name}`);
-					return;
-				}
-			}
-
-			if (this.settings.eagleEmbedUrlMode === 'custom-url') {
-				const libraryName = (await this.api.getLibraryName()) || 'Main';
-				const embedUrl = buildEagleCustomEmbedUrl(
-					this.settings.eagleCustomUrlPrefix,
-					libraryName,
-					item.id,
-					item.name,
-					item.ext,
-					false
-				);
+			const embedUrl = this.resolveEmbedUrl ? await this.resolveEmbedUrl(item) : null;
+			if (embedUrl) {
 				let output = `![${filename}](${embedUrl})`;
 				if (this.settings.insertThumbnail) {
 					output += '\n\n' + this.buildMetadataLine(item);
@@ -362,84 +340,14 @@ export class EagleSearchModal extends FuzzySuggestModal<EagleItem> {
 			decodedPath = path;
 		}
 
-		const convertedPath = this.convertPathForCurrentPlatform(decodedPath);
-		const normalizedPath = convertedPath.replace(/\\/g, '/');
+		const normalizedPath = decodedPath.replace(/\\/g, '/');
 		const encodedPath = normalizedPath.split('/').map(segment => encodeURIComponent(segment)).join('/');
 		
-		const platform = process.platform as PlatformType;
-		if (platform === 'win32' && /^[A-Za-z]:/.test(normalizedPath)) {
+		if (process.platform === 'win32' && /^[A-Za-z]:/.test(normalizedPath)) {
 			const fixedPath = encodedPath.replace(/^([A-Za-z])%3A/, '$1:');
 			return `file:///${fixedPath}`;
 		}
 		return `file://${encodedPath}`;
-	}
-
-	private convertPathForCurrentPlatform(path: string): string {
-		if (!this.settings.enableCrossPlatform || this.settings.computers.length === 0) {
-			return path;
-		}
-
-		const sourceComputer = this.findMatchingComputer(path);
-		if (!sourceComputer) {
-			return path;
-		}
-
-		const currentPlatform = process.platform as PlatformType;
-		const currentUsername = this.detectCurrentUsername();
-
-		const currentComputer = this.settings.computers.find(
-			c => c.platform === currentPlatform && c.username === currentUsername
-		);
-
-		if (!currentComputer || sourceComputer.id === currentComputer.id) {
-			return path;
-		}
-
-		let relativePath = '';
-		if (sourceComputer.platform === 'darwin') {
-			relativePath = path.replace(`/Users/${sourceComputer.username}/`, '');
-		} else {
-			const winPattern = new RegExp(`[A-Za-z]:[/\\\\]Users[/\\\\]${sourceComputer.username}[/\\\\]`, 'i');
-			relativePath = path.replace(winPattern, '').replace(/\\/g, '/');
-		}
-
-		if (currentComputer.platform === 'darwin') {
-			return `/Users/${currentComputer.username}/${relativePath}`;
-		} else {
-			return `C:/Users/${currentComputer.username}/${relativePath}`;
-		}
-	}
-
-	private findMatchingComputer(path: string): ComputerProfile | null {
-		for (const computer of this.settings.computers) {
-			if (computer.platform === 'darwin') {
-				if (path.includes(`/Users/${computer.username}/`)) {
-					return computer;
-				}
-			} else if (computer.platform === 'win32') {
-				const winPattern = new RegExp(`[A-Za-z]:[/\\\\]Users[/\\\\]${computer.username}[/\\\\]`, 'i');
-				if (winPattern.test(path)) {
-					return computer;
-				}
-			}
-		}
-		return null;
-	}
-
-	private detectCurrentUsername(): string {
-		const adapter = this.app.vault.adapter as { basePath?: string };
-		const vaultPath = adapter.basePath || '';
-		const platform = String(process.platform);
-
-		if (platform === 'darwin') {
-			const match = vaultPath.match(/^\/Users\/([^/]+)/);
-			if (match) return match[1];
-		} else if (platform === 'win32') {
-			const match = vaultPath.match(/^[A-Za-z]:[/\\]Users[/\\]([^/\\]+)/i);
-			if (match) return match[1];
-		}
-
-		return '';
 	}
 
 	private buildMetadataLine(item: EagleItem): string {
@@ -671,6 +579,8 @@ export class EagleTagPickerModal extends Modal {
 			const tag = this.filteredTags[i];
 			const tagRow = gridEl.createDiv({ cls: 'cmdspace-eagle-tag-item' });
 			this.itemElements.push(tagRow);
+			// Long names are cut short in the two-column list, so the tooltip gives the whole tag
+			tagRow.setAttr('aria-label', tag.name);
 
 			tagRow.createSpan({ cls: 'cmdspace-eagle-tag-bullet', text: '• ' });
 			tagRow.createSpan({ cls: 'cmdspace-eagle-tag-name', text: tag.name });
@@ -966,7 +876,8 @@ export class EagleFolderPickerModal extends Modal {
 				const pill = tagsWrapper.createDiv({
 					cls: isNewTag ? 'cmdspace-eagle-tag-pill is-new' : 'cmdspace-eagle-tag-pill',
 				});
-				if (isNewTag) pill.title = 'New tag: not in your Eagle library yet';
+				// Long tags are cut short in the pill, so the tooltip always gives the whole tag
+				pill.setAttr('aria-label', isNewTag ? `${tag} (new tag: not in your Eagle library yet)` : tag);
 				pill.createSpan({ cls: 'cmdspace-eagle-tag-pill-text', text: tag });
 				const removeBtn = pill.createSpan({ cls: 'cmdspace-eagle-tag-pill-remove', text: '✕' });
 				removeBtn.addEventListener('click', (e) => {
@@ -999,12 +910,37 @@ export class EagleFolderPickerModal extends Modal {
 
 		// 6. Hints for the AI wands (only shown with them, and not saved to Eagle)
 		if (this.context?.ai) {
-			const hintsTooltip = 'Optional. Tell the AI what this image is, as briefly as you like, for example "WoW Dalaran fan art". The wand buttons use it to write a better name, description and tags. Hints are not saved to Eagle.';
+			const hintsTooltip = 'Optional. Tell the AI what this image is, as briefly as you like, for example "WoW Dalaran fan art". You can also say what you want, such as "tag the characters, not the art style". The wand buttons use it for the name, description and tags. Hints are not saved to Eagle.';
 
 			const hintsGroup = leftPane.createDiv({ cls: 'cmdspace-eagle-field-group' });
 			const hintsLabelRow = hintsGroup.createDiv({ cls: 'cmdspace-eagle-field-label-row' });
 			hintsLabelRow.createEl('label', { text: 'AI hints', cls: 'cmdspace-eagle-field-label' });
-			const hintsHelp = hintsLabelRow.createSpan({ cls: 'cmdspace-eagle-field-help' });
+			const hintsTools = hintsLabelRow.createDiv({ cls: 'cmdspace-eagle-field-tools' });
+
+			// Ready-made hints. Choosing one adds its text to the box, where it can still be edited.
+			const templates = (this.context?.hintTemplates || []).filter(template => template.name && template.text);
+			if (templates.length > 0) {
+				const templateSelect = hintsTools.createEl('select', { cls: 'dropdown cmdspace-eagle-hint-templates' });
+				templateSelect.setAttr('aria-label', 'Add a ready-made hint to the box. Edit the list under Settings → AI → Hint templates.');
+				templateSelect.createEl('option', { text: 'Templates…', value: '' });
+				templates.forEach((template, index) => {
+					templateSelect.createEl('option', { text: template.name, value: String(index) });
+				});
+				templateSelect.addEventListener('change', () => {
+					const template = templates[Number(templateSelect.value)];
+					// Back to the placeholder, so the same template can be chosen again later
+					templateSelect.value = '';
+					if (!template) return;
+
+					const current = hintsTextarea.value.trim();
+					if (current.includes(template.text)) return;
+					hintsTextarea.value = current ? `${current}\n${template.text}` : template.text;
+					this.aiUserHints = hintsTextarea.value;
+					hintsTextarea.focus();
+				});
+			}
+
+			const hintsHelp = hintsTools.createSpan({ cls: 'cmdspace-eagle-field-help' });
 			setIcon(hintsHelp, 'help-circle');
 			if (hintsHelp.childElementCount === 0) hintsHelp.setText('?');
 			hintsHelp.setAttr('aria-label', hintsTooltip);
@@ -1736,21 +1672,36 @@ export class CanvasNodeChoiceModal extends Modal {
 
 export interface ImagePasteChoiceResponse {
 	choice: 'eagle' | 'local' | 'cloud' | 'cancel';
+	// State of "Also upload to the cloud", which applies to the Eagle choice
+	alsoCloud: boolean;
 	rememberChoice: boolean;
+}
+
+export interface ImagePasteChoiceOptions {
+	// Name of the cloud provider, or null when none is set up (the cloud toggle is then left out)
+	providerName: string | null;
+	// Starting state of "Also upload to the cloud"
+	alsoCloud: boolean;
+	showVault: boolean;
+	// What choosing Eagle does, with the cloud toggle on or off
+	describeEagle: (alsoCloud: boolean) => string;
+	cloudDescription: string;
 }
 
 export class ImagePasteChoiceModal extends Modal {
 	private response: Partial<ImagePasteChoiceResponse> = { rememberChoice: false };
 	private resolvePromise?: (value: ImagePasteChoiceResponse) => void;
-	private descriptions: { eagleDescription: string; cloudDescription: string };
+	private options: ImagePasteChoiceOptions;
 
-	constructor(app: App, descriptions: { eagleDescription: string; cloudDescription: string }) {
+	constructor(app: App, options: ImagePasteChoiceOptions) {
 		super(app);
-		this.descriptions = descriptions;
+		this.options = options;
+		this.response.alsoCloud = options.providerName !== null && options.alsoCloud;
 	}
 
 	onOpen(): void {
 		const { contentEl } = this;
+		const { providerName } = this.options;
 		contentEl.empty();
 		contentEl.addClass('cmdspace-paste-choice-modal');
 
@@ -1758,9 +1709,26 @@ export class ImagePasteChoiceModal extends Modal {
 
 		const optionContainer = contentEl.createDiv({ cls: 'cmdspace-paste-options' });
 
-		this.addOption(optionContainer, 'eagle', 'Eagle', this.descriptions.eagleDescription, true);
-		this.addOption(optionContainer, 'local', 'Vault', 'Saved as an attachment in this vault.');
-		this.addOption(optionContainer, 'cloud', 'Cloud only', this.descriptions.cloudDescription);
+		// The Eagle button says what it will do with the cloud toggle as it stands
+		const eagleTitle = () => this.response.alsoCloud && providerName ? `Eagle + ${providerName}` : 'Eagle';
+		const eagle = this.addOption(optionContainer, 'eagle', eagleTitle(), this.options.describeEagle(!!this.response.alsoCloud), true);
+		if (this.options.showVault) {
+			this.addOption(optionContainer, 'local', 'Vault', 'Saved as an attachment in this vault.');
+		}
+		this.addOption(optionContainer, 'cloud', 'Cloud only', this.options.cloudDescription);
+
+		if (providerName) {
+			new Setting(contentEl)
+				.setName(`Also upload to ${providerName}`)
+				.setDesc('For an image saved to Eagle: also upload a copy, and link the note to it.')
+				.addToggle((toggle) => {
+					toggle.setValue(!!this.response.alsoCloud).onChange((value) => {
+						this.response.alsoCloud = value;
+						eagle.titleEl.setText(eagleTitle());
+						eagle.descEl.setText(this.options.describeEagle(value));
+					});
+				});
+		}
 
 		new Setting(contentEl)
 			.setName('Remember this choice')
@@ -1778,22 +1746,24 @@ export class ImagePasteChoiceModal extends Modal {
 		title: string,
 		description: string,
 		primary = false
-	): void {
+	): { titleEl: HTMLElement; descEl: HTMLElement } {
 		const optionBtn = containerEl.createEl('button', {
 			cls: primary ? 'cmdspace-paste-option mod-cta' : 'cmdspace-paste-option'
 		});
-		optionBtn.createDiv({ cls: 'cmdspace-paste-option-title', text: title });
-		optionBtn.createDiv({ cls: 'cmdspace-paste-option-desc', text: description });
+		const titleEl = optionBtn.createDiv({ cls: 'cmdspace-paste-option-title', text: title });
+		const descEl = optionBtn.createDiv({ cls: 'cmdspace-paste-option-desc', text: description });
 		optionBtn.addEventListener('click', () => {
 			this.response.choice = choice;
 			this.close();
 		});
+		return { titleEl, descEl };
 	}
 
 	onClose(): void {
 		if (this.resolvePromise) {
 			this.resolvePromise({
 				choice: this.response.choice ?? 'cancel',
+				alsoCloud: this.response.alsoCloud ?? false,
 				rememberChoice: this.response.rememberChoice ?? false,
 			});
 		}
@@ -1809,6 +1779,8 @@ export class ImagePasteChoiceModal extends Modal {
 export interface EagleLinkChoiceResponse {
 	choice: 'embed' | 'inline' | 'cancel';
 	useThumbnail: boolean;
+	// State of "Also upload to the cloud", which applies to Embed
+	alsoCloud: boolean;
 	rememberChoice: boolean;
 }
 
@@ -1817,14 +1789,21 @@ export class EagleLinkChoiceModal extends Modal {
 	private response: EagleLinkChoiceResponse = {
 		choice: 'embed',
 		useThumbnail: false,
+		alsoCloud: false,
 		rememberChoice: false,
 	};
 	private resolvePromise?: (value: EagleLinkChoiceResponse) => void;
 	private thumbnailSettingEl: HTMLElement | null = null;
+	private cloudSettingEl: HTMLElement | null = null;
+	// The cloud provider and the starting state of "Also upload to the cloud", or null when
+	// no provider is set up (the toggle is then left out)
+	private cloud: { providerName: string; alsoCloud: boolean } | null;
 
-	constructor(app: App, item: EagleItem) {
+	constructor(app: App, item: EagleItem, cloud: { providerName: string; alsoCloud: boolean } | null = null) {
 		super(app);
 		this.item = item;
+		this.cloud = cloud;
+		this.response.alsoCloud = !!cloud && cloud.alsoCloud;
 	}
 
 	onOpen(): void {
@@ -1865,6 +1844,18 @@ export class EagleLinkChoiceModal extends Modal {
 			this.thumbnailSettingEl = thumbnailSetting.settingEl;
 		}
 
+		if (this.cloud) {
+			const cloudSetting = new Setting(optionsContainer)
+				.setName(`Also upload to ${this.cloud.providerName}`)
+				.setDesc('Upload a copy if the item does not have one yet, and link the note to it.')
+				.addToggle((toggle) => {
+					toggle.setValue(this.response.alsoCloud).onChange((value) => {
+						this.response.alsoCloud = value;
+					});
+				});
+			this.cloudSettingEl = cloudSetting.settingEl;
+		}
+
 		const updateUI = (mode: 'embed' | 'inline') => {
 			this.response.choice = mode;
 			if (mode === 'embed') {
@@ -1873,11 +1864,17 @@ export class EagleLinkChoiceModal extends Modal {
 				if (this.thumbnailSettingEl) {
 					this.thumbnailSettingEl.style.display = '';
 				}
+				if (this.cloudSettingEl) {
+					this.cloudSettingEl.style.display = '';
+				}
 			} else {
 				embedBtn.removeClass('mod-cta');
 				inlineBtn.addClass('mod-cta');
 				if (this.thumbnailSettingEl) {
 					this.thumbnailSettingEl.style.display = 'none';
+				}
+				if (this.cloudSettingEl) {
+					this.cloudSettingEl.style.display = 'none';
 				}
 			}
 		};
@@ -1928,6 +1925,7 @@ export class EagleLinkChoiceModal extends Modal {
 			this.resolvePromise({
 				choice: this.response.choice ?? 'cancel',
 				useThumbnail: this.response.useThumbnail ?? false,
+				alsoCloud: this.response.alsoCloud ?? false,
 				rememberChoice: this.response.rememberChoice ?? false,
 			});
 		}

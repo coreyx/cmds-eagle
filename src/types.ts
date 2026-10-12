@@ -90,8 +90,6 @@ export type BacklinkMode = 'extra-links' | 'legacy';
 
 export type EagleLinkPasteMode = 'ask' | 'embed' | 'inline';
 
-export type EagleEmbedUrlMode = 'cloud' | 'custom-url' | 'file';
-
 export type CanvasNodeType = 'text' | 'link' | 'ask';
 
 export type AiProviderType = 'none' | 'anthropic' | 'openai' | 'gemini' | 'openai-compatible' | 'lmstudio';
@@ -99,6 +97,10 @@ export type AiProviderType = 'none' | 'anthropic' | 'openai' | 'gemini' | 'opena
 // How much a model should think before answering. 'default' sends no setting and leaves it
 // to the model; 'none' (offered for local servers) asks it not to think at all.
 export type AiEffort = 'default' | 'none' | 'low' | 'medium' | 'high';
+
+// How a new tag is written. 'mix', 'always' and 'never' apply to a library that files tags
+// under prefixes; 'custom' copies the form of examples the user typed, whatever the library does
+export type AiNewTagFormat = 'mix' | 'always' | 'never' | 'custom';
 
 export interface AiProviderConfig {
 	apiKey: string;
@@ -109,6 +111,22 @@ export interface AiProviderConfig {
 }
 
 export type AiProviderConfigs = Record<Exclude<AiProviderType, 'none'>, AiProviderConfig>;
+
+// A ready-made hint offered in the Templates list beside the AI hints box
+export interface AiHintTemplate {
+	name: string;
+	text: string;
+}
+
+export const DEFAULT_AI_HINT_TEMPLATES: AiHintTemplate[] = [
+	{ name: 'Subjects', text: 'Tag the main subjects: who or what is shown.' },
+	{ name: 'Art style and medium', text: 'Focus on the art style and medium, not the subject.' },
+	{ name: 'Characters and people', text: 'Only tag the characters or people shown. Name someone only if you are certain who it is; otherwise say what kind of character or person they are.' },
+	{ name: 'Places and setting', text: 'Tag the location and setting, not the art style.' },
+	{ name: 'Series and franchise', text: 'Focus on the series or franchise this comes from, and the factions or groups in it.' },
+	{ name: 'Colors and mood', text: 'Tag the dominant colors, the lighting and the mood.' },
+	{ name: 'Screenshot', text: 'This is a screenshot. Tag the app, game or site it shows and what is on screen.' },
+];
 
 export type EagleItemLinkFormat = 'http' | 'eagle';
 
@@ -175,6 +193,8 @@ export interface EagleFolderPickerContext {
 	// Where the image came from, passed to the AI wands as a hint
 	sourcePageUrl?: string;
 	ai?: EagleAiAssistant;
+	// Ready-made hints for the Templates list beside the AI hints box
+	hintTemplates?: AiHintTemplate[];
 }
 
 // What the AI wands in the folder picker call. Implemented in ai-providers.ts; every
@@ -222,20 +242,6 @@ export type SupportedExtension =
 	| typeof SUPPORTED_DOCUMENT_EXTENSIONS[number];
 
 export type CloudProviderType = 'r2' | 's3' | 'webdav' | 'imghippo' | 'custom';
-
-export type PlatformType = 'darwin' | 'win32';
-
-export interface ComputerProfile {
-	id: string;
-	name: string;
-	platform: PlatformType;
-	username: string;
-	subPath: string;
-	eagleLibraryPath: string;
-	isCurrentComputer?: boolean;
-}
-
-export type CrossPlatformConversionMode = 'modify-source' | 'render-only';
 
 export interface CloudProviderConfig {
 	type: CloudProviderType;
@@ -320,8 +326,15 @@ export interface CMDSPACEEagleSettings {
 	extraLinksBaseUrl: string;
 	backlinkDestination: 'url' | 'note' | 'both';
 	eagleLinkPasteMode: EagleLinkPasteMode;
-	eagleEmbedUrlMode: EagleEmbedUrlMode;
+	// An embedded Eagle image links to its cloud copy when it has one, otherwise to the Custom
+	// URL prefix, and failing that to the file on this computer.
+	// Whether saving to Eagle, or embedding from it, also uploads a cloud copy. The paste
+	// dialogs can override this for one image.
+	eagleAlsoUploadToCloud: boolean;
+	// Address of the user's own server for the Eagle library folder; empty when not set up
 	eagleCustomUrlPrefix: string;
+	// Link to the Custom URL prefix even for an image that has a cloud copy
+	eagleAlwaysUseCustomUrl: boolean;
 	eagleItemLinkFormat: EagleItemLinkFormat;
 	enableImageSourceUrl: boolean;
 	imageSourceUrlPriority: ImageSourceUrlPriority;
@@ -336,6 +349,8 @@ export interface CMDSPACEEagleSettings {
 	embedImageInCard: boolean;
 	insertAsEmbed: boolean;
 	imagePasteBehavior: ImagePasteBehavior;
+	// Whether the vault is offered as a destination for a pasted or dropped image
+	enableVaultDestination: boolean;
 	excalidrawIntegration: boolean;
 	excalidrawImportToEagle: boolean;
 	canvasIntegration: boolean;
@@ -346,6 +361,12 @@ export interface CMDSPACEEagleSettings {
 	// Limits for the tag wand: tags added per click, and how many of those may be new
 	aiMaxTags: number;
 	aiMaxNewTags: number;
+	aiHintTemplates: AiHintTemplate[];
+	// In a library that files tags under prefixes: whether a new tag follows the library's
+	// mix of prefixed and plain tags, always takes a prefix, or never does. Or 'custom':
+	// new tags copy the form of the comma-separated examples in aiNewTagExamples
+	aiNewTagFormat: AiNewTagFormat;
+	aiNewTagExamples: string;
 	activeCloudProvider: CloudProviderType;
 	searchScope: SearchScope[];
 	searchFileTypes: string[];
@@ -356,10 +377,6 @@ export interface CMDSPACEEagleSettings {
 		imghippo: ImgHippoProviderConfig;
 		custom: CustomProviderConfig;
 	};
-	enableCrossPlatform: boolean;
-	autoConvertCrossPlatformPaths: boolean;
-	crossPlatformConversionMode: CrossPlatformConversionMode;
-	computers: ComputerProfile[];
 }
 
 export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
@@ -390,8 +407,9 @@ export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
 	extraLinksBaseUrl: 'http://127.0.0.1:41598',
 	backlinkDestination: 'both',
 	eagleLinkPasteMode: 'ask',
-	eagleEmbedUrlMode: 'cloud',
-	eagleCustomUrlPrefix: 'https://localhost:8080',
+	eagleAlsoUploadToCloud: true,
+	eagleCustomUrlPrefix: '',
+	eagleAlwaysUseCustomUrl: false,
 	eagleItemLinkFormat: 'http',
 	enableImageSourceUrl: true,
 	imageSourceUrlPriority: 'page-first',
@@ -406,6 +424,7 @@ export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
 	embedImageInCard: true,
 	insertAsEmbed: true,
 	imagePasteBehavior: 'ask',
+	enableVaultDestination: false,
 	excalidrawIntegration: true,
 	excalidrawImportToEagle: true,
 	canvasIntegration: true,
@@ -421,6 +440,9 @@ export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
 	},
 	aiMaxTags: 6,
 	aiMaxNewTags: 2,
+	aiHintTemplates: DEFAULT_AI_HINT_TEMPLATES,
+	aiNewTagFormat: 'mix',
+	aiNewTagExamples: '',
 	activeCloudProvider: 'imghippo',
 	searchScope: ['name', 'tags'],
 	searchFileTypes: [...SUPPORTED_IMAGE_EXTENSIONS],
@@ -470,10 +492,6 @@ export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
 			publicUrl: '',
 		},
 	},
-	enableCrossPlatform: false,
-	autoConvertCrossPlatformPaths: false,
-	crossPlatformConversionMode: 'modify-source',
-	computers: [],
 };
 
 export interface AddFromPathRequest {

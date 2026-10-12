@@ -226,37 +226,6 @@
 	color: var(--text-muted);
 }
 
-.cmdspace-eagle-computer-list {
-	margin-top: 12px;
-	padding: 12px;
-	background: var(--background-secondary);
-	border-radius: 8px;
-}
-
-.cmdspace-eagle-computer-list-title {
-	font-weight: 600;
-	margin-bottom: 12px;
-}
-
-.cmdspace-eagle-computer-item {
-	display: flex;
-	flex-direction: column;
-	padding: 12px;
-	margin-bottom: 8px;
-	background: var(--background-primary);
-	border-radius: 4px;
-	border: 1px solid var(--background-modifier-border);
-}
-
-.cmdspace-eagle-computer-item.is-current {
-	border: 2px solid var(--interactive-accent);
-}
-
-.cmdspace-eagle-computer-delete {
-	padding: 4px 8px;
-	cursor: pointer;
-}
-
 /* Target Folder 2.0: Folder Picker Tree Modal */
 .cmdspace-eagle-picker-modal-window {
 	max-width: 860px;
@@ -271,12 +240,14 @@
 	overflow: hidden;
 }
 
+/* Tall enough for the whole left pane (preview, rating, name, description, two rows of
+   tags and the AI hints box) without it scrolling */
 .cmdspace-eagle-picker-split {
 	display: flex;
 	flex-direction: row;
-	height: 520px;
+	height: 620px;
 	min-height: 420px;
-	max-height: 68vh;
+	max-height: 76vh;
 	overflow: hidden;
 }
 
@@ -748,6 +719,41 @@
 	color: var(--text-accent);
 }
 
+.cmdspace-eagle-field-tools {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+/* The Templates list beside the AI hints label: small, so it sits in the label row */
+select.cmdspace-eagle-hint-templates {
+	height: 22px;
+	max-width: 130px;
+	padding: 0 20px 0 6px;
+	font-size: 11px;
+	line-height: 1;
+}
+
+/* One hint template in settings: a name field, a wide hint field and a delete button */
+.cmdspace-eagle-template-row .setting-item-info {
+	display: none;
+}
+
+.cmdspace-eagle-template-row .setting-item-control {
+	flex: 1;
+	gap: 8px;
+}
+
+.cmdspace-eagle-template-row .cmdspace-eagle-template-name {
+	width: 170px;
+	flex: 0 0 auto;
+}
+
+.cmdspace-eagle-template-row .cmdspace-eagle-template-text {
+	flex: 1;
+	min-width: 0;
+}
+
 .cmdspace-eagle-field-help {
 	display: inline-flex;
 	align-items: center;
@@ -1052,6 +1058,11 @@
 
 .cmdspace-eagle-count-input {
 	width: 72px;
+}
+
+.cmdspace-eagle-tag-examples-input {
+	width: 300px;
+	max-width: 100%;
 }
 
 .cmdspace-eagle-setting-required {

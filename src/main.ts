@@ -6,18 +6,19 @@ import {
 	TFile,
 	Menu,
 	EditorPosition,
-	TAbstractFile,
+	getLinkpath,
+	moment,
 } from 'obsidian';
 import {
 	CMDSPACEEagleSettings,
 	DEFAULT_SETTINGS,
+	DEFAULT_AI_HINT_TEMPLATES,
 	EagleItem,
 	EagleFolder,
 	EagleAddFolderMode,
 	ImageSourceInfo,
+	ImagePasteBehavior,
 	MetadataCardImageSource,
-	ComputerProfile,
-	PlatformType,
 	EagleFolderPickerResult,
 } from './types';
 import { 
@@ -85,13 +86,17 @@ type SurfaceImage =
 
 const PORTABLE_URL_FAILED = 'Could not get a shareable URL for the image';
 
+// Hidden folder in the vault for images on their way to Eagle or the cloud
+const TEMP_DIR = '.eagle-temp';
+const TEMP_FILE_MAX_AGE_MS = 60 * 60 * 1000;
+
 export default class CMDSPACELinkEagle extends Plugin {
 	settings: CMDSPACEEagleSettings;
 	api: EagleApiService;
 	clipboardSourceService: ClipboardSourceService;
-	private lastModifiedFile: string | null = null;
 	// Set once the "Extra Links not detected" warning has been shown; reset from settings
 	extraLinksWarningShown = false;
+	private localLinkWarningShown = false;
 	private attachedExcalidrawContainers = new WeakSet<HTMLElement>();
 	private attachedCanvasContainers = new WeakSet<HTMLElement>();
 
@@ -106,7 +111,7 @@ export default class CMDSPACELinkEagle extends Plugin {
 			id: 'search-eagle',
 			name: 'Search Eagle library and embed',
 			editorCallback: (editor: Editor, view: MarkdownView) => {
-				new EagleSearchModal(this.app, this.api, this.settings, (item) => this.uploadEagleItemCloudCopy(item)).open();
+				new EagleSearchModal(this.app, this.api, this.settings, (item) => this.resolveSearchEmbedUrl(item)).open();
 			},
 		});
 
@@ -133,16 +138,6 @@ export default class CMDSPACELinkEagle extends Plugin {
 				await this.uploadAllImagesToCloud();
 			},
 		});
-
-		this.addCommand({
-			id: 'convert-cross-platform-paths',
-			name: 'Convert cross-platform image paths in current note',
-			callback: async () => {
-				await this.convertCrossPlatformPaths();
-			},
-		});
-
-
 
 		this.registerEvent(
 			this.app.workspace.on('editor-paste', (evt: ClipboardEvent, editor: Editor) => {
@@ -181,49 +176,13 @@ export default class CMDSPACELinkEagle extends Plugin {
 			this.processEagleLinks(el);
 		});
 
-		this.registerEvent(
-			this.app.workspace.on('active-leaf-change', () => {
-				window.setTimeout(() => this.processActiveView(), 100);
-			})
-		);
-
-		this.registerEvent(
-			this.app.workspace.on('layout-change', () => {
-				window.setTimeout(() => this.processActiveView(), 100);
-			})
-		);
-
-		this.registerEvent(
-			this.app.vault.on('modify', (file: TAbstractFile) => {
-				this.lastModifiedFile = file.path;
-			})
-		);
-
-		this.registerEvent(
-			this.app.workspace.on('file-open', (file: TFile | null) => {
-				console.log(`[Eagle Bridge] file-open event: ${file?.path}`);
-				console.log(`[Eagle Bridge] enableCrossPlatform: ${this.settings.enableCrossPlatform}`);
-				console.log(`[Eagle Bridge] autoConvertCrossPlatformPaths: ${this.settings.autoConvertCrossPlatformPaths}`);
-				console.log(`[Eagle Bridge] conversionMode: ${this.settings.crossPlatformConversionMode}`);
-				console.log(`[Eagle Bridge] lastModifiedFile: ${this.lastModifiedFile}`);
-				
-				if (file && this.settings.enableCrossPlatform && this.settings.autoConvertCrossPlatformPaths) {
-					if (this.lastModifiedFile !== file.path) {
-						console.log(`[Eagle Bridge] Triggering auto-conversion for: ${file.path}`);
-						window.setTimeout(() => { void this.autoConvertOnFileOpen(file); }, 300);
-					} else {
-						console.log(`[Eagle Bridge] Skipping - file was just modified by us`);
-					}
-				}
-				this.lastModifiedFile = null;
-			})
-		);
-
 		this.addRibbonIcon('image', 'Eagle Bridge', () => {
-			new EagleSearchModal(this.app, this.api, this.settings, (item) => this.uploadEagleItemCloudCopy(item)).open();
+			new EagleSearchModal(this.app, this.api, this.settings, (item) => this.resolveSearchEmbedUrl(item)).open();
 		});
 
 		this.registerSurfaceIntegrations();
+
+		this.app.workspace.onLayoutReady(() => { void this.pruneTempFiles(); });
 	}
 
 	onunload(): void {
@@ -243,6 +202,9 @@ export default class CMDSPACELinkEagle extends Plugin {
 			'openai-compatible': { ...DEFAULT_SETTINGS.aiProviders['openai-compatible'], ...savedAi?.['openai-compatible'] },
 			lmstudio: { ...DEFAULT_SETTINGS.aiProviders.lmstudio, ...savedAi?.lmstudio },
 		};
+		// Copies again, so editing templates in settings never changes the built-in list
+		const savedTemplates = saved && Array.isArray(saved.aiHintTemplates) ? saved.aiHintTemplates : DEFAULT_AI_HINT_TEMPLATES;
+		this.settings.aiHintTemplates = savedTemplates.map(template => ({ name: template.name, text: template.text }));
 		// Auto-migrate from deprecated port 41596 (conflicted with Eagle MCP server) to 41598
 		if (
 			this.settings.extraLinksBaseUrl === 'http://127.0.0.1:41596' ||
@@ -259,6 +221,34 @@ export default class CMDSPACELinkEagle extends Plugin {
 		// Auto-migrate Target Folder 2.0: enableDefaultFolder -> addFolderMode
 		if (!(saved as any)?.addFolderMode) {
 			this.settings.addFolderMode = this.settings.enableDefaultFolder ? 'target' : 'target';
+			await this.saveSettings();
+		}
+		// Auto-migrate "Link embedded images to" (eagleEmbedUrlMode) to the "Also upload to the
+		// cloud" toggle. The Custom URL prefix used to default to a localhost address even when
+		// it was not in use; an unset prefix is now empty, so that old default is cleared
+		// unless Custom URL prefix was the chosen mode.
+		// "Offer the vault as a destination" is new and off by default. Someone who had
+		// already chosen "Save to vault" keeps it.
+		if (saved && (saved as { enableVaultDestination?: boolean }).enableVaultDestination === undefined
+			&& this.settings.imagePasteBehavior === 'local') {
+			this.settings.enableVaultDestination = true;
+			await this.saveSettings();
+		}
+		// Drop what the removed cross-platform paths feature saved
+		const stale = this.settings as unknown as Record<string, unknown>;
+		const staleKeys = ['enableCrossPlatform', 'autoConvertCrossPlatformPaths', 'crossPlatformConversionMode', 'computers'];
+		if (staleKeys.some(key => key in stale)) {
+			for (const key of staleKeys) delete stale[key];
+			await this.saveSettings();
+		}
+		const legacy = this.settings as unknown as { eagleEmbedUrlMode?: string };
+		if (saved && (saved as { eagleAlsoUploadToCloud?: boolean }).eagleAlsoUploadToCloud === undefined) {
+			const mode = legacy.eagleEmbedUrlMode || 'cloud';
+			this.settings.eagleAlsoUploadToCloud = mode === 'cloud';
+			if (mode !== 'custom-url' && this.settings.eagleCustomUrlPrefix === 'https://localhost:8080') {
+				this.settings.eagleCustomUrlPrefix = '';
+			}
+			delete legacy.eagleEmbedUrlMode;
 			await this.saveSettings();
 		}
 	}
@@ -975,89 +965,6 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 		}
 	}
 
-	private processActiveView(): void {
-		return;
-	}
-
-	private tryConvertImagePath(img: HTMLImageElement): void {
-		const src = img.getAttribute('src');
-		if (!src) return;
-		
-		const alreadyConverted = img.getAttribute('data-original-src');
-		if (alreadyConverted) return;
-
-		console.log(`[Eagle Bridge] Checking image src: ${src}`);
-
-		let extractedPath: string | null = null;
-		
-		if (src.startsWith('file://')) {
-			extractedPath = this.fullyDecodeUri(src.replace(/^file:\/\/\/?/, ''));
-		} else if (src.startsWith('app://')) {
-			const appMatch = src.match(/^app:\/\/[^/]+\/(.+)$/);
-			if (appMatch) {
-				extractedPath = this.fullyDecodeUri(appMatch[1]);
-			}
-		}
-
-		if (!extractedPath) {
-			console.log(`[Eagle Bridge] No extractable path`);
-			return;
-		}
-
-		console.log(`[Eagle Bridge] Extracted: ${extractedPath}`);
-
-		if (extractedPath.startsWith('Users/') && !extractedPath.startsWith('/')) {
-			extractedPath = '/' + extractedPath;
-		}
-
-		const isDifferent = this.isPathFromDifferentPlatform(extractedPath);
-		console.log(`[Eagle Bridge] Is from different platform: ${isDifferent}`);
-		
-		if (!isDifferent) return;
-
-		const convertedPath = this.convertPathForCurrentPlatform(extractedPath);
-		
-		if (convertedPath !== extractedPath) {
-			const newSrc = this.pathToFileUrl(convertedPath);
-			console.log(`[Eagle Bridge] Setting new src: ${newSrc}`);
-			
-			const newImg = activeDocument.createElement('img');
-			newImg.src = newSrc;
-			newImg.alt = img.alt;
-			newImg.className = img.className;
-			newImg.setAttribute('data-original-src', src);
-			newImg.setAttribute('data-xplatform-replaced', 'true');
-			
-			if (img.parentNode) {
-				img.parentNode.replaceChild(newImg, img);
-				console.log(`[Eagle Bridge] Image element replaced`);
-			}
-		}
-	}
-
-	private isPathFromDifferentPlatform(path: string): boolean {
-		const currentPlatform = this.getCurrentPlatform();
-		const currentUsername = this.getCurrentUsername();
-		
-		for (const computer of this.settings.computers) {
-			if (computer.platform === currentPlatform && computer.username === currentUsername) {
-				continue;
-			}
-			
-			if (computer.platform === 'darwin') {
-				if (path.includes(`/Users/${computer.username}/`)) {
-					return true;
-				}
-			} else if (computer.platform === 'win32') {
-				const winPattern = new RegExp(`[A-Za-z]:[/\\\\]Users[/\\\\]${computer.username}[/\\\\]`, 'i');
-				if (winPattern.test(path)) {
-					return true;
-				}
-			}
-		}
-		return false;
-	}
-
 	private processEagleLinks(el: HTMLElement): void {
 		const links = el.querySelectorAll('a[href^="eagle://"]');
 		links.forEach((link) => {
@@ -1070,65 +977,6 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 				link.addClass('cmdspace-eagle-link');
 			}
 		});
-	}
-
-	private processFileUrls(el: HTMLElement): void {
-		if (!this.settings.enableCrossPlatform) return;
-		if (this.settings.crossPlatformConversionMode !== 'render-only') return;
-
-		const images = el.querySelectorAll('img');
-		images.forEach((img) => {
-			this.convertImageSrcForRendering(img);
-		});
-	}
-
-	private convertImageSrcForRendering(img: HTMLImageElement): void {
-		const src = img.getAttribute('src');
-		if (!src) return;
-
-		if (img.getAttribute('data-xplatform-converted')) return;
-
-		let extractedPath: string | null = null;
-		
-		if (src.startsWith('app://')) {
-			const appMatch = src.match(/^app:\/\/[^/]+\/(.+)$/);
-			if (appMatch) {
-				extractedPath = this.fullyDecodeUri(appMatch[1]);
-			}
-		} else if (src.startsWith('file://')) {
-			extractedPath = this.fullyDecodeUri(src.replace(/^file:\/\/\/?/, ''));
-		}
-
-		if (!extractedPath) return;
-
-		if (extractedPath.startsWith('Users/') && !extractedPath.startsWith('/')) {
-			extractedPath = '/' + extractedPath;
-		}
-
-		if (!this.isPathFromDifferentPlatform(extractedPath)) return;
-
-		const convertedPath = this.convertPathForCurrentPlatform(extractedPath);
-		
-		if (convertedPath !== extractedPath) {
-			const newSrc = this.pathToFileUrl(convertedPath);
-			img.setAttribute('src', newSrc);
-			img.setAttribute('data-xplatform-converted', 'true');
-			img.setAttribute('data-original-src', src);
-		}
-	}
-
-	private fullyDecodeUri(str: string): string {
-		let decoded = str;
-		try {
-			while (decoded.includes('%')) {
-				const next = decodeURIComponent(decoded);
-				if (next === decoded) break;
-				decoded = next;
-			}
-		} catch {
-			return str;
-		}
-		return decoded;
 	}
 
 	// The Eagle tag as an Obsidian tag without its #, or '' if no valid tag can be made of it
@@ -1155,7 +1003,14 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 
 		const { files } = clipboardData;
 		if (!files || !this.allFilesAreImages(files)) return false;
-		return this.settings.imagePasteBehavior !== 'local';
+		return this.getImagePasteBehavior() !== 'local';
+	}
+
+	// The "When pasting or dropping an image" setting. With the vault turned off as a
+	// destination, a saved "Save to vault" asks instead.
+	private getImagePasteBehavior(): ImagePasteBehavior {
+		const behavior = this.settings.imagePasteBehavior;
+		return behavior === 'local' && !this.settings.enableVaultDestination ? 'ask' : behavior;
 	}
 
 	private async handlePaste(evt: ClipboardEvent, editor: Editor): Promise<void> {
@@ -1177,7 +1032,7 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 		const { files } = clipboardData;
 		if (!files || !this.allFilesAreImages(files)) return;
 
-		if (this.settings.imagePasteBehavior === 'local') {
+		if (this.getImagePasteBehavior() === 'local') {
 			return;
 		}
 
@@ -1188,61 +1043,84 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 			console.warn('[Eagle Bridge] Error retrieving clipboard source info:', e);
 		}
 
-		const fileItems = Array.from(files).map(file => ({
+		await this.saveImagesToChosenDestination(Array.from(files), editor, sourceInfo);
+	}
+
+	// Saves pasted or dropped images where the "When pasting or dropping an image" setting
+	// says, asking first when it is set to ask.
+	private async saveImagesToChosenDestination(
+		files: File[],
+		editor: Editor,
+		sourceInfo: ImageSourceInfo | null
+	): Promise<void> {
+		const fileItems = files.map(file => ({
 			file,
 			localPath: this.extractLocalFilePath(file, sourceInfo)
 		}));
 
-		if (this.settings.imagePasteBehavior === 'eagle') {
+		const destination = await this.chooseImageDestination();
+
+		if (destination.choice === 'eagle') {
 			for (const item of fileItems) {
-				await this.uploadFileWithProgress(item.file, editor, sourceInfo, item.localPath);
+				await this.uploadFileWithProgress(item.file, editor, sourceInfo, item.localPath, destination.alsoCloud);
 			}
-			return;
-		}
-
-		if (this.settings.imagePasteBehavior === 'cloud') {
-			for (const item of fileItems) {
-				await this.uploadToCloudWithProgress(item.file, editor, sourceInfo, item.localPath);
-			}
-			return;
-		}
-
-		const modal = new ImagePasteChoiceModal(this.app, this.getPasteChoiceDescriptions());
-		modal.open();
-		const response = await modal.getResponse();
-
-		if (response.rememberChoice && response.choice !== 'cancel') {
-			this.settings.imagePasteBehavior = response.choice;
-			await this.saveSettings();
-		}
-
-		if (response.choice === 'eagle') {
-			for (const item of fileItems) {
-				await this.uploadFileWithProgress(item.file, editor, sourceInfo, item.localPath);
-			}
-		} else if (response.choice === 'local') {
+		} else if (destination.choice === 'local') {
 			for (const item of fileItems) {
 				await this.saveImageLocally(item.file, editor);
 			}
-		} else if (response.choice === 'cloud') {
+		} else if (destination.choice === 'cloud') {
 			for (const item of fileItems) {
 				await this.uploadToCloudWithProgress(item.file, editor, sourceInfo, item.localPath);
 			}
 		}
+	}
+
+	/**
+	 * Where a new image goes. `alsoCloud` is set only when the dialog was shown and the user
+	 * chose Eagle: it is their answer to "Also upload to the cloud" for this image, and is
+	 * saved as the setting only with "Remember this choice".
+	 */
+	private async chooseImageDestination(): Promise<{ choice: 'eagle' | 'local' | 'cloud' | 'cancel'; alsoCloud?: boolean }> {
+		const behavior = this.getImagePasteBehavior();
+		if (behavior !== 'ask') return { choice: behavior };
+
+		const hasProvider = !!this.getActiveCloudProvider();
+		const providerName = this.getActiveCloudProviderName();
+		const modal = new ImagePasteChoiceModal(this.app, {
+			providerName: hasProvider ? providerName : null,
+			alsoCloud: this.settings.eagleAlsoUploadToCloud,
+			showVault: this.settings.enableVaultDestination,
+			describeEagle: (alsoCloud) => this.describeEagleDestination(alsoCloud),
+			cloudDescription: hasProvider
+				? `Uploaded to ${providerName}. Not added to Eagle.`
+				: 'No cloud provider is configured yet.',
+		});
+		modal.open();
+		const response = await modal.getResponse();
+		if (response.choice === 'cancel') return { choice: 'cancel' };
+
+		const answeredCloud = response.choice === 'eagle' && hasProvider;
+		if (response.rememberChoice) {
+			this.settings.imagePasteBehavior = response.choice;
+			if (answeredCloud) this.settings.eagleAlsoUploadToCloud = response.alsoCloud;
+			await this.saveSettings();
+		}
+
+		return { choice: response.choice, alsoCloud: answeredCloud ? response.alsoCloud : undefined };
 	}
 
 	// Synchronous gate for the editor-drop handler (see willHandlePaste).
 	private willHandleDrop(evt: DragEvent): boolean {
 		const { files } = evt.dataTransfer || { files: null };
 		if (!files || !this.allFilesAreImages(files)) return false;
-		return this.settings.imagePasteBehavior !== 'local';
+		return this.getImagePasteBehavior() !== 'local';
 	}
 
 	private async handleDrop(evt: DragEvent, editor: Editor): Promise<void> {
 		const { files } = evt.dataTransfer || { files: null };
 		if (!files || !this.allFilesAreImages(files)) return;
 
-		if (this.settings.imagePasteBehavior === 'local') {
+		if (this.getImagePasteBehavior() === 'local') {
 			return;
 		}
 
@@ -1433,120 +1311,63 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 	}
 
 	private async handleDroppedImages(files: FileList, editor: Editor, sourceInfo: ImageSourceInfo | null): Promise<void> {
-		const fileItems = Array.from(files).map(file => ({
-			file,
-			localPath: this.extractLocalFilePath(file, sourceInfo)
-		}));
-
-		if (this.settings.imagePasteBehavior === 'eagle') {
-			for (const item of fileItems) {
-				await this.uploadFileWithProgress(item.file, editor, sourceInfo, item.localPath);
-			}
-			return;
-		}
-
-		if (this.settings.imagePasteBehavior === 'cloud') {
-			for (const item of fileItems) {
-				await this.uploadToCloudWithProgress(item.file, editor, sourceInfo, item.localPath);
-			}
-			return;
-		}
-
-		const modal = new ImagePasteChoiceModal(this.app, this.getPasteChoiceDescriptions());
-		modal.open();
-		const response = await modal.getResponse();
-
-		if (response.rememberChoice && response.choice !== 'cancel') {
-			this.settings.imagePasteBehavior = response.choice;
-			await this.saveSettings();
-		}
-
-		if (response.choice === 'eagle') {
-			for (const item of fileItems) {
-				await this.uploadFileWithProgress(item.file, editor, sourceInfo, item.localPath);
-			}
-		} else if (response.choice === 'local') {
-			for (const item of fileItems) {
-				await this.saveImageLocally(item.file, editor);
-			}
-		} else if (response.choice === 'cloud') {
-			for (const item of fileItems) {
-				await this.uploadToCloudWithProgress(item.file, editor, sourceInfo, item.localPath);
-			}
-		}
+		await this.saveImagesToChosenDestination(Array.from(files), editor, sourceInfo);
 	}
 
 	private async saveImageLocally(file: File, editor: Editor): Promise<void> {
 		const activeFile = this.app.workspace.getActiveFile();
-		if (!activeFile) {
-			new Notice('No active file');
-			return;
-		}
 
 		try {
 			const saved = await this.saveFileToVault(file, activeFile);
-			const markdownImage = `![${file.name}](${encodeURI(saved.path)})`;
-			editor.replaceSelection(markdownImage);
-			new Notice(`Saved locally: ${file.name}`);
+			// The link follows the vault's own settings (wikilinks or Markdown, and path style).
+			// generateMarkdownLink returns a plain link, so the embed mark is added here.
+			const link = this.app.fileManager.generateMarkdownLink(saved, activeFile?.path || '');
+			editor.replaceSelection(link.startsWith('!') ? link : `!${link}`);
+			new Notice(`Saved to vault: ${saved.name}`);
 		} catch (error) {
 			console.error('Failed to save image locally:', error);
 			new Notice(`Failed to save: ${file.name}`);
 		}
 	}
 
-	// Saves a pasted or dropped file as a vault attachment, following the vault's attachment
-	// folder setting relative to `activeFile`. Throws if it cannot be written.
+	// Saves a pasted or dropped file as a vault attachment, in the folder the vault's
+	// attachment setting gives for `activeFile`, under a name not already in use there.
+	// Throws if it cannot be written.
 	private async saveFileToVault(file: File, activeFile: TFile | null): Promise<TFile> {
 		const buffer = await file.arrayBuffer();
-		const timestamp = Date.now();
-		const filename = `${timestamp}-${file.name}`;
-
-		const vault = this.app.vault as unknown as { getConfig: (key: string) => string | undefined };
-		const attachmentFolder = vault.getConfig?.('attachmentFolderPath') || '';
-		let targetPath: string;
-
-		if (attachmentFolder === './') {
-			const parentFolder = activeFile?.parent?.path || '';
-			targetPath = parentFolder ? `${parentFolder}/${filename}` : filename;
-		} else if (attachmentFolder.startsWith('./')) {
-			const parentFolder = activeFile?.parent?.path || '';
-			const relativeFolder = attachmentFolder.slice(2);
-			targetPath = parentFolder ? `${parentFolder}/${relativeFolder}/${filename}` : `${relativeFolder}/${filename}`;
-		} else if (attachmentFolder) {
-			targetPath = `${attachmentFolder}/${filename}`;
-		} else {
-			targetPath = filename;
-		}
-
-		// Clean up any double slashes and strip leading slash if present
-		targetPath = targetPath.replace(/\/+/g, '/');
-		if (targetPath.startsWith('/')) targetPath = targetPath.substring(1);
-
-		const folderPath = targetPath.substring(0, targetPath.lastIndexOf('/'));
-		if (folderPath) {
-			const folderExists = await this.app.vault.adapter.exists(folderPath);
-			if (!folderExists) {
-				await this.app.vault.createFolder(folderPath);
-			}
-		}
-
+		const filename = this.getAttachmentFileName(file);
+		const targetPath = await this.app.fileManager.getAvailablePathForAttachment(filename, activeFile?.path);
 		return this.app.vault.createBinary(targetPath, buffer);
+	}
+
+	// File name for a new vault attachment: the file's own name, or "Pasted image <time>"
+	// for a clipboard image, which has none. Characters that break an Obsidian link
+	// (# ^ [ ] |) or that a file name cannot hold are replaced.
+	private getAttachmentFileName(file: File): string {
+		const ext = getExtFromFilename(file.name) || 'png';
+		let base = file.name.replace(/\.[^.]+$/, '');
+		if (!base || base.toLowerCase() === 'image') {
+			base = `Pasted image ${moment().format('YYYYMMDDHHmmss')}`;
+		}
+		base = base.replace(/[#^[\]|\\/:*?"<>]/g, ' ').replace(/\s+/g, ' ').trim() || 'image';
+		return `${base}.${ext}`;
 	}
 
 	private async uploadFileWithProgress(
 		file: File,
 		editor: Editor,
 		sourceInfo?: ImageSourceInfo | null,
-		localFilePath?: string | null
+		localFilePath?: string | null,
+		alsoCloud?: boolean
 	): Promise<void> {
 		const pasteId = this.generatePasteId();
 		const placeholderText = `![Uploading ${file.name}...](${pasteId})`;
-		
+
 		editor.replaceSelection(placeholderText);
 
 		try {
 			const effectiveLocalPath = localFilePath || this.extractLocalFilePath(file, sourceInfo);
-			const { url: imageUrl, item, cloudUrl } = await this.uploadImageToEagle(file, sourceInfo);
+			const { url: imageUrl, item, cloudUrl } = await this.uploadImageToEagle(file, sourceInfo, { alsoCloud });
 			const displayName = item ? `${item.name}.${item.ext}` : file.name;
 			let markdownImage = `![${displayName}](${imageUrl})`;
 
@@ -1589,8 +1410,9 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 		
 		editor.replaceSelection(placeholderText);
 
+		let tempPath: string | null = null;
 		try {
-			const tempPath = await this.saveToTempLocation(file);
+			tempPath = await this.saveToTempLocation(file);
 			const ext = getExtFromFilename(file.name);
 			const mimeType = getMimeType(ext);
 			
@@ -1614,6 +1436,8 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 			this.replaceTextInDocument(editor, placeholderText, errorText);
 			console.error('Failed to upload to cloud:', error);
 			new Notice(`Failed to upload: ${file.name}`);
+		} finally {
+			if (tempPath) await this.removeTempFile(tempPath);
 		}
 	}
 
@@ -1638,8 +1462,8 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 		return createCloudProvider(config);
 	}
 
-	// "Cloud copy" embed mode: uploads a copy of the file to the active cloud provider and
-	// returns its public URL, or null when the caller should fall back to a local link.
+	// Uploads a copy of the file to the active cloud provider and returns its public URL, or
+	// null when the caller should fall back to another kind of link.
 	private async uploadCloudCopy(filePath: string, filename: string, ext: string, stableName?: string): Promise<string | null> {
 		const provider = this.getActiveCloudProvider();
 		if (!provider) return null;
@@ -1655,7 +1479,7 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 			errorMessage = error instanceof Error ? error.message : errorMessage;
 		}
 
-		new Notice(`Cloud copy failed: ${errorMessage}. Linking to the local file instead.`);
+		new Notice(`Cloud copy failed: ${errorMessage}.`);
 		return null;
 	}
 
@@ -1677,25 +1501,23 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 		return null;
 	}
 
-	// Cloud copy of an item already in Eagle. Always uploads the original, not the thumbnail.
-	private async uploadEagleItemCloudCopy(item: EagleItem): Promise<string | null> {
-		return this.ensureEagleCloudCopy(item, () => this.api.getOriginalFilePath(item));
-	}
-
 	/**
-	 * Returns the public URL of an Eagle item's cloud copy, uploading one only when none exists.
-	 * A copy is found through, in order: the "Cloud Copy" Extra Link recorded on the item, an
-	 * existing URL the caller already knows, or a file on the server under the item's stable
-	 * name (`<item id>.<ext>`). The URL is then recorded on the item as a "Cloud Copy" Extra Link.
+	 * Returns the public URL of the cloud copy an Eagle item already has, or null. Nothing is
+	 * uploaded. A copy is found through, in order: the "Cloud Copy" Extra Link recorded on the
+	 * item, an existing URL the caller already knows, or a file on the server under the item's
+	 * stable name (`<item id>.<ext>`). A copy found one of the last two ways is then recorded
+	 * on the item as a "Cloud Copy" Extra Link.
+	 *
+	 * `isNew` marks an item added to Eagle a moment ago: it cannot have a recorded or
+	 * stable-named copy yet, so only `existingUrl` is considered.
 	 *
 	 * Extra Links writes for one item must not overlap, so the record is awaited here unless
 	 * `after` (the caller's own pending Extra Links writes) is given, in which case it is
 	 * queued behind them in the background.
 	 */
-	private async ensureEagleCloudCopy(
+	private async findEagleCloudCopy(
 		item: { id: string; name: string; ext: string; tags?: string[] },
-		getFilePath: () => Promise<string | null>,
-		options: { existingUrl?: string | null; after?: Promise<unknown> } = {}
+		options: { existingUrl?: string | null; after?: Promise<unknown>; isNew?: boolean } = {}
 	): Promise<string | null> {
 		if (item.tags) {
 			const r2Url = this.api.getCloudUrl(item as EagleItem);
@@ -1705,29 +1527,119 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 		const provider = this.getActiveCloudProvider();
 		if (!provider) return null;
 
-		const recorded = await this.api.getExtraLinkCloudCopy(item.id);
-		if (recorded && !(await isPublicUrlGone(recorded))) {
-			return recorded;
+		if (!options.isNew) {
+			const recorded = await this.api.getExtraLinkCloudCopy(item.id);
+			if (recorded && !(await isPublicUrlGone(recorded))) {
+				return recorded;
+			}
 		}
 
-		const stableName = `${item.id}.${item.ext}`;
-		let url = options.existingUrl
-			|| (provider.findExistingUpload ? await provider.findExistingUpload(stableName) : null);
-
-		if (!url) {
-			const filePath = await getFilePath();
-			if (!filePath) return null;
-			url = await this.uploadCloudCopy(filePath, `${item.name}.${item.ext}`, item.ext, stableName);
-		}
+		const url = options.existingUrl
+			|| (!options.isNew && provider.findExistingUpload
+				? await provider.findExistingUpload(`${item.id}.${item.ext}`)
+				: null);
 		if (!url) return null;
 
-		const cloudUrl = url;
-		if (options.after) {
-			void options.after.catch(() => undefined).then(() => this.recordCloudCopy(item.id, cloudUrl));
-		} else {
-			await this.recordCloudCopy(item.id, cloudUrl);
+		await this.recordCloudCopyAfter(item.id, url, options.after);
+		return url;
+	}
+
+	// The item's existing cloud copy (see findEagleCloudCopy), or a newly uploaded one.
+	private async ensureEagleCloudCopy(
+		item: { id: string; name: string; ext: string; tags?: string[] },
+		getFilePath: () => Promise<string | null>,
+		options: { existingUrl?: string | null; after?: Promise<unknown>; isNew?: boolean } = {}
+	): Promise<string | null> {
+		const existing = await this.findEagleCloudCopy(item, options);
+		if (existing) return existing;
+		if (!this.getActiveCloudProvider()) return null;
+
+		const filePath = await getFilePath();
+		if (!filePath) return null;
+		const url = await this.uploadCloudCopy(filePath, `${item.name}.${item.ext}`, item.ext, `${item.id}.${item.ext}`);
+		if (!url) return null;
+
+		await this.recordCloudCopyAfter(item.id, url, options.after);
+		return url;
+	}
+
+	private hasCustomUrlPrefix(): boolean {
+		return this.settings.eagleCustomUrlPrefix.trim().length > 0;
+	}
+
+	/**
+	 * The link for an embedded Eagle image: its cloud copy when it has one, otherwise its
+	 * address under the Custom URL prefix. `url` is null when neither exists, leaving the
+	 * caller to link to the file on this computer (see warnLocalOnlyLink).
+	 *
+	 * A cloud copy is uploaded when `alsoCloud` says so, which defaults to the "Also upload
+	 * to the cloud" setting; otherwise one is only looked for. With "Always use Custom URL
+	 * prefix" on, the link is the prefix address even when there is a cloud copy.
+	 * `portable` is for surfaces that cannot use a file path at all: with no prefix set, a
+	 * cloud copy is uploaded whatever `alsoCloud` says, as the only link that can work.
+	 */
+	private async resolveEagleEmbedUrl(
+		item: { id: string; name: string; ext: string; tags?: string[] },
+		getFilePath: () => Promise<string | null>,
+		options: {
+			alsoCloud?: boolean;
+			existingUrl?: string | null;
+			after?: Promise<unknown>;
+			isNew?: boolean;
+			useThumbnail?: boolean;
+			portable?: boolean;
+		} = {}
+	): Promise<{ url: string | null; cloudUrl: string | null }> {
+		const alsoCloud = options.alsoCloud ?? this.settings.eagleAlsoUploadToCloud;
+		const hasPrefix = this.hasCustomUrlPrefix();
+		const preferPrefix = hasPrefix && this.settings.eagleAlwaysUseCustomUrl;
+		const lookup = { existingUrl: options.existingUrl, after: options.after, isNew: options.isNew };
+
+		let cloudUrl: string | null = null;
+		if (alsoCloud) {
+			cloudUrl = await this.ensureEagleCloudCopy(item, getFilePath, lookup);
+		} else if (!preferPrefix) {
+			cloudUrl = await this.findEagleCloudCopy(item, lookup);
 		}
-		return cloudUrl;
+		if (cloudUrl && !preferPrefix) return { url: cloudUrl, cloudUrl };
+
+		if (hasPrefix) {
+			const libraryName = (await this.api.getLibraryName()) || 'Main';
+			const url = buildEagleCustomEmbedUrl(
+				this.settings.eagleCustomUrlPrefix.trim(),
+				libraryName,
+				item.id,
+				item.name,
+				item.ext,
+				!!options.useThumbnail
+			);
+			return { url, cloudUrl };
+		}
+
+		if (options.portable && !alsoCloud) {
+			cloudUrl = await this.ensureEagleCloudCopy(item, getFilePath, lookup);
+			if (cloudUrl) return { url: cloudUrl, cloudUrl };
+		}
+		return { url: null, cloudUrl: null };
+	}
+
+	// Says, once per session, that an embed had to fall back to a file path.
+	private warnLocalOnlyLink(): void {
+		if (this.localLinkWarningShown) return;
+		this.localLinkWarningShown = true;
+		new Notice(
+			'⚠ This image has no cloud copy and no Custom URL prefix is set, so it is linked by its file path and will only display on this computer. Set a Custom URL prefix under Settings → Embedding.',
+			12000
+		);
+	}
+
+	// Extra Links writes for one item must not overlap: see findEagleCloudCopy
+	private async recordCloudCopyAfter(itemId: string, url: string, after?: Promise<unknown>): Promise<void> {
+		if (after) {
+			void after.catch(() => undefined).then(() => this.recordCloudCopy(itemId, url));
+		} else {
+			await this.recordCloudCopy(itemId, url);
+		}
 	}
 
 	private async recordCloudCopy(itemId: string, url: string): Promise<void> {
@@ -1767,26 +1679,21 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 		}
 	}
 
-	// One-line descriptions for the paste/drop destination dialog.
-	private getPasteChoiceDescriptions(): { eagleDescription: string; cloudDescription: string } {
-		const hasProvider = !!this.getActiveCloudProvider();
-		const providerName = this.getActiveCloudProviderName();
+	// One line for the paste/drop destination dialog: what choosing Eagle does, and what the
+	// note will link to, with "Also upload to the cloud" on or off.
+	private describeEagleDestination(alsoCloud: boolean): string {
+		const hasPrefix = this.hasCustomUrlPrefix();
+		const prefixLink = `Note links to ${this.settings.eagleCustomUrlPrefix.trim()}.`;
 
-		let eagleLink = 'Note links to the file on this computer.';
-		if (this.settings.eagleEmbedUrlMode === 'cloud') {
-			eagleLink = hasProvider
-				? `Note links to a copy on ${providerName}.`
-				: 'Note links to the file on this computer (no cloud provider is configured).';
-		} else if (this.settings.eagleEmbedUrlMode === 'custom-url') {
-			eagleLink = `Note links to ${this.settings.eagleCustomUrlPrefix}.`;
+		if (alsoCloud && this.getActiveCloudProvider()) {
+			const saved = `Saved to Eagle and copied to ${this.getActiveCloudProviderName()}.`;
+			return hasPrefix && this.settings.eagleAlwaysUseCustomUrl
+				? `${saved} ${prefixLink}`
+				: `${saved} Note links to the cloud copy.`;
 		}
-
-		return {
-			eagleDescription: `Saved to Eagle. ${eagleLink}`,
-			cloudDescription: hasProvider
-				? `Uploaded to ${providerName}. Not added to Eagle.`
-				: 'No cloud provider is configured yet.',
-		};
+		return hasPrefix
+			? `Saved to Eagle. ${prefixLink}`
+			: 'Saved to Eagle. No Custom URL prefix is set, so the note links to the file on this computer only.';
 	}
 
 	private getActiveCloudProviderName(): string {
@@ -1818,55 +1725,69 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 		return `paste-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 	}
 
+	/**
+	 * Embeds of vault files in a piece of note text: `![[target#heading|alias]]` and
+	 * `![alt](target "title")`. `linkpath` is the target as Obsidian resolves it: decoded, with
+	 * any `<…>` wrapping and heading removed. Embeds of web, file:// and Eagle addresses are
+	 * left out. `isWikilink` embeds keep their alias (a caption or a size) in `alt`.
+	 */
+	private findVaultEmbeds(text: string): { index: number; full: string; target: string; linkpath: string; alt: string; isWikilink: boolean }[] {
+		const embeds: { index: number; full: string; target: string; linkpath: string; alt: string; isWikilink: boolean }[] = [];
+		let match: RegExpExecArray | null;
+
+		const wikilinkPattern = /!\[\[([^\]\n|]+)(?:\|([^\]\n]*))?\]\]/g;
+		while ((match = wikilinkPattern.exec(text)) !== null) {
+			embeds.push({
+				index: match.index,
+				full: match[0],
+				target: match[1],
+				linkpath: getLinkpath(match[1].trim()),
+				alt: match[2] || '',
+				isWikilink: true,
+			});
+		}
+
+		// The target may be wrapped in <…>, or hold balanced parentheses, and may be followed by a title
+		const markdownPattern = /!\[([^\]\n]*)\]\(\s*(<[^>\n]+>|(?:[^()\s]|\([^()\s]*\))+)(?:\s+"[^"\n]*")?\s*\)/g;
+		while ((match = markdownPattern.exec(text)) !== null) {
+			const target = match[2];
+			const bare = target.startsWith('<') ? target.slice(1, -1) : this.safeDecodeUri(target);
+			if (/^(https?|file|eagle|app|obsidian|data):/i.test(bare)) continue;
+			embeds.push({
+				index: match.index,
+				full: match[0],
+				target,
+				linkpath: getLinkpath(bare),
+				alt: match[1],
+				isWikilink: false,
+			});
+		}
+
+		return embeds.sort((a, b) => a.index - b.index);
+	}
+
 	private getLocalImageUnderCursor(editor: Editor): { file: TFile; startPos: EditorPosition; endPos: EditorPosition; originalText: string } | null {
 		const cursor = editor.getCursor();
 		const line = editor.getLine(cursor.line);
-		
+		const sourcePath = this.app.workspace.getActiveFile()?.path || '';
 		const supportedExtensions = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'svg', 'webp', 'tiff', 'tif', 'heic', 'heif', 'avif', 'ico'];
-		const extensionPattern = supportedExtensions.join('|');
-		const wikilinkPattern = new RegExp(`!\\[\\[([^\\]]+\\.(${extensionPattern}))\\]\\]`, 'gi');
-		const markdownPattern = new RegExp(`!\\[([^\\]]*)\\]\\(([^)]+\\.(${extensionPattern}))\\)`, 'gi');
-		
-		let match: RegExpExecArray | null;
-		
-		wikilinkPattern.lastIndex = 0;
-		while ((match = wikilinkPattern.exec(line)) !== null) {
-			const start = match.index;
-			const end = start + match[0].length;
-			if (cursor.ch >= start && cursor.ch <= end) {
-				const filename = match[1];
-				const file = this.app.metadataCache.getFirstLinkpathDest(filename, '');
-				if (file instanceof TFile) {
-					return {
-						file,
-						startPos: { line: cursor.line, ch: start },
-						endPos: { line: cursor.line, ch: end },
-						originalText: match[0],
-					};
-				}
+
+		for (const embed of this.findVaultEmbeds(line)) {
+			const start = embed.index;
+			const end = start + embed.full.length;
+			if (cursor.ch < start || cursor.ch > end) continue;
+
+			const file = this.app.metadataCache.getFirstLinkpathDest(embed.linkpath, sourcePath);
+			if (file instanceof TFile && supportedExtensions.includes(file.extension.toLowerCase())) {
+				return {
+					file,
+					startPos: { line: cursor.line, ch: start },
+					endPos: { line: cursor.line, ch: end },
+					originalText: embed.full,
+				};
 			}
 		}
-		
-		markdownPattern.lastIndex = 0;
-		while ((match = markdownPattern.exec(line)) !== null) {
-			const start = match.index;
-			const end = start + match[0].length;
-			if (cursor.ch >= start && cursor.ch <= end) {
-				const filepath = match[2];
-				if (!filepath.startsWith('http') && !filepath.startsWith('file://') && !filepath.startsWith('eagle://')) {
-					const file = this.app.metadataCache.getFirstLinkpathDest(filepath, '');
-					if (file instanceof TFile) {
-						return {
-							file,
-							startPos: { line: cursor.line, ch: start },
-							endPos: { line: cursor.line, ch: end },
-							originalText: match[0],
-						};
-					}
-				}
-			}
-		}
-		
+
 		return null;
 	}
 
@@ -1931,28 +1852,16 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 			const ext = item ? item.ext : file.extension;
 			const name = item ? item.name : filenameWithoutExt;
 
-			let imageUrl: string | null = null;
-			if (this.settings.eagleEmbedUrlMode === 'cloud') {
-				imageUrl = await this.ensureEagleCloudCopy(
-					{ id: result.itemId, name, ext, tags: item?.tags },
-					async () => absolutePath,
-					{ after: backlinkDone }
-				);
-			} else if (this.settings.eagleEmbedUrlMode === 'custom-url') {
-				const libraryName = (await this.api.getLibraryName()) || 'Main';
-				imageUrl = buildEagleCustomEmbedUrl(
-					this.settings.eagleCustomUrlPrefix,
-					libraryName,
-					result.itemId,
-					name,
-					ext,
-					false
-				);
-			}
+			let { url: imageUrl } = await this.resolveEagleEmbedUrl(
+				{ id: result.itemId, name, ext, tags: item?.tags },
+				async () => absolutePath,
+				{ after: backlinkDone, isNew: true }
+			);
 			if (!imageUrl) {
 				imageUrl = thumbnailPath
 					? this.pathToFileUrl(thumbnailPath)
 					: `eagle://item/${result.itemId}`;
+				this.warnLocalOnlyLink();
 			}
 			
 			const markdownImage = `![${file.basename}](${imageUrl})`;
@@ -2102,9 +2011,14 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 	private async pasteEagleItem(item: EagleItem, editor: Editor): Promise<void> {
 		let action: 'embed' | 'inline' = 'embed';
 		let useThumbnail = false;
+		// The dialog's answer to "Also upload to the cloud" for this item; otherwise the setting
+		let alsoCloud: boolean | undefined;
 
 		if (this.settings.eagleLinkPasteMode === 'ask') {
-			const modal = new EagleLinkChoiceModal(this.app, item);
+			const hasProvider = !!this.getActiveCloudProvider();
+			const modal = new EagleLinkChoiceModal(this.app, item, hasProvider
+				? { providerName: this.getActiveCloudProviderName(), alsoCloud: this.settings.eagleAlsoUploadToCloud }
+				: null);
 			modal.open();
 			const response = await modal.getResponse();
 
@@ -2112,13 +2026,16 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 				return;
 			}
 
+			const answeredCloud = response.choice === 'embed' && hasProvider;
 			if (response.rememberChoice) {
 				this.settings.eagleLinkPasteMode = response.choice;
+				if (answeredCloud) this.settings.eagleAlsoUploadToCloud = response.alsoCloud;
 				await this.saveSettings();
 			}
 
 			action = response.choice;
 			useThumbnail = response.useThumbnail;
+			if (answeredCloud) alsoCloud = response.alsoCloud;
 		} else if (this.settings.eagleLinkPasteMode === 'embed') {
 			action = 'embed';
 			useThumbnail = false;
@@ -2128,7 +2045,7 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 		}
 
 		if (action === 'embed') {
-			await this.insertEagleEmbed(editor, item, useThumbnail);
+			await this.insertEagleEmbed(editor, item, useThumbnail, alsoCloud);
 		} else {
 			this.insertEagleInlineLink(editor, item);
 		}
@@ -2136,43 +2053,26 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 		void this.applyObsidianBacklink(item.id);
 	}
 
-	private async insertEagleEmbed(editor: Editor, item: EagleItem, useThumbnail: boolean): Promise<void> {
+	private async insertEagleEmbed(editor: Editor, item: EagleItem, useThumbnail: boolean, alsoCloud?: boolean): Promise<void> {
 		const filename = `${item.name}.${item.ext}`;
 		const sources = await this.resolveMetadataSources(item);
 
-		if (this.settings.eagleEmbedUrlMode === 'cloud') {
-			const cloudUrl = await this.uploadEagleItemCloudCopy(item);
-			if (cloudUrl) {
-				let markdown = `![${filename}](${cloudUrl})`;
-				if (this.settings.insertThumbnail) {
-					markdown += '\n\n' + this.buildMetadataCard(item, sources, cloudUrl);
-				}
-				editor.replaceSelection(markdown);
-				new Notice(`Embedded: ${filename}`);
-				return;
-			}
-		}
-
-		if (this.settings.eagleEmbedUrlMode === 'custom-url') {
-			const libraryName = (await this.api.getLibraryName()) || 'Main';
-			const embedUrl = buildEagleCustomEmbedUrl(
-				this.settings.eagleCustomUrlPrefix,
-				libraryName,
-				item.id,
-				item.name,
-				item.ext,
-				useThumbnail
-			);
-			let markdown = `![${filename}](${embedUrl})`;
+		const { url, cloudUrl } = await this.resolveEagleEmbedUrl(
+			item,
+			() => this.api.getOriginalFilePath(item),
+			{ alsoCloud, useThumbnail }
+		);
+		if (url) {
+			let markdown = `![${filename}](${url})`;
 			if (this.settings.insertThumbnail) {
-				markdown += '\n\n' + this.buildMetadataCard(item, sources);
+				markdown += '\n\n' + this.buildMetadataCard(item, sources, cloudUrl);
 			}
 			editor.replaceSelection(markdown);
 			new Notice(`Embedded: ${filename}`);
 			return;
 		}
 
-		// Local file:// mode
+		// No cloud copy and no Custom URL prefix: link to the file on this computer
 		let filePath: string | null = null;
 		if (useThumbnail) {
 			filePath = await this.api.getThumbnailPath(item.id);
@@ -2189,6 +2089,7 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 			}
 			editor.replaceSelection(markdown);
 			new Notice(`Embedded: ${filename}`);
+			this.warnLocalOnlyLink();
 		} else {
 			new Notice('Could not get file path from Eagle');
 		}
@@ -2504,13 +2405,13 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 
 	// An item already in Eagle can be shared through a cloud copy or the Custom URL prefix.
 	private canShareEagleItems(): boolean {
-		return this.settings.eagleEmbedUrlMode === 'custom-url' || !!this.getActiveCloudProvider();
+		return this.hasCustomUrlPrefix() || !!this.getActiveCloudProvider();
 	}
 
 	// A new image needs a cloud provider, unless it is added to Eagle and served from there.
 	private canShareNewImages(importToEagle: boolean): boolean {
 		return !!this.getActiveCloudProvider()
-			|| (importToEagle && this.settings.eagleEmbedUrlMode === 'custom-url');
+			|| (importToEagle && this.hasCustomUrlPrefix());
 	}
 
 	private async resolveSurfaceContent(
@@ -2550,25 +2451,18 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 	}
 
 	/**
-	 * URL for an Eagle item that works outside this computer: its Custom URL prefix address
-	 * in that mode (nothing is uploaded), otherwise its cloud copy.
+	 * URL for an Eagle item that works outside this computer: the same link an embed in a
+	 * note gets, except that with no Custom URL prefix a cloud copy is always uploaded.
 	 */
 	private async getPortableEagleUrl(item: EagleItem): Promise<{ url: string | null; cloudUrl: string | null }> {
-		if (this.settings.eagleEmbedUrlMode === 'custom-url') {
-			const libraryName = (await this.api.getLibraryName()) || 'Main';
-			const url = buildEagleCustomEmbedUrl(
-				this.settings.eagleCustomUrlPrefix,
-				libraryName,
-				item.id,
-				item.name,
-				item.ext,
-				false
-			);
-			return { url, cloudUrl: null };
-		}
+		return this.resolveEagleEmbedUrl(item, () => this.api.getOriginalFilePath(item), { portable: true });
+	}
 
-		const cloudUrl = await this.uploadEagleItemCloudCopy(item);
-		return { url: cloudUrl, cloudUrl };
+	// Link for an item embedded from the search dialog, or null to link to the local file.
+	private async resolveSearchEmbedUrl(item: EagleItem): Promise<string | null> {
+		const { url } = await this.resolveEagleEmbedUrl(item, () => this.api.getOriginalFilePath(item));
+		if (!url) this.warnLocalOnlyLink();
+		return url;
 	}
 
 	private async resolveEagleReferenceForSurface(ref: string, withCard: boolean): Promise<SurfaceImage | null> {
@@ -2642,8 +2536,9 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 
 		const provider = tryCloudOnly ? this.getActiveCloudProvider() : null;
 		if (provider) {
+			let tempPath: string | null = null;
 			try {
-				const tempPath = await this.saveToTempLocation(file);
+				tempPath = await this.saveToTempLocation(file);
 				const result = await provider.upload(tempPath, file.name, getMimeType(getExtFromFilename(file.name)));
 				if (result.success && result.publicUrl) {
 					const card = withCard
@@ -2654,6 +2549,8 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 				console.error('[Eagle Bridge] Cloud upload failed:', result.error);
 			} catch (error) {
 				console.error('[Eagle Bridge] Cloud upload failed:', error);
+			} finally {
+				if (tempPath) await this.removeTempFile(tempPath);
 			}
 		}
 
@@ -2690,110 +2587,15 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 			// keep decodedPath
 		}
 
-		const convertedPath = this.convertPathForCurrentPlatform(decodedPath);
-		const normalizedPath = convertedPath.replace(/\\/g, '/');
+		const normalizedPath = decodedPath.replace(/\\/g, '/');
 		const encodedPath = normalizedPath.split('/').map(segment => encodeURIComponent(segment)).join('/');
 		
-		if (this.getCurrentPlatform() === 'win32' && /^[A-Za-z]:/.test(normalizedPath)) {
+		if (process.platform === 'win32' && /^[A-Za-z]:/.test(normalizedPath)) {
 			// Fix: restore drive letter colon that was encoded as %3A
 			const fixedPath = encodedPath.replace(/^([A-Za-z])%3A/, '$1:');
 			return `file:///${fixedPath}`;
 		}
 		return `file://${encodedPath}`;
-	}
-
-	private getCurrentPlatform(): PlatformType {
-		return process.platform as PlatformType;
-	}
-
-	private getCurrentUsername(): string {
-		const platform = this.getCurrentPlatform();
-		const vaultPath = this.getVaultPath();
-		
-		if (platform === 'darwin') {
-			const match = vaultPath.match(/^\/Users\/([^/]+)/);
-			if (match) return match[1];
-		} else if (platform === 'win32') {
-			const match = vaultPath.match(/^[A-Za-z]:[/\\]Users[/\\]([^/\\]+)/i);
-			if (match) return match[1];
-		}
-		
-		return '';
-	}
-
-	private findMatchingComputer(path: string): ComputerProfile | null {
-		if (!this.settings.enableCrossPlatform || this.settings.computers.length === 0) {
-			return null;
-		}
-
-		for (const computer of this.settings.computers) {
-			if (computer.platform === 'darwin') {
-				const macPattern = `/Users/${computer.username}/`;
-				if (path.includes(macPattern)) {
-					return computer;
-				}
-			} else if (computer.platform === 'win32') {
-				const winPattern = new RegExp(`^[A-Za-z]:[/\\\\]Users[/\\\\]${computer.username}[/\\\\]`, 'i');
-				if (winPattern.test(path)) {
-					return computer;
-				}
-			}
-		}
-		
-		console.log('[Eagle Bridge] No computer matched path:', path.substring(0, 50));
-		return null;
-	}
-
-	private convertPathForCurrentPlatform(path: string): string {
-		if (!this.settings.enableCrossPlatform || this.settings.computers.length === 0) {
-			return path;
-		}
-
-		const sourceComputer = this.findMatchingComputer(path);
-		if (!sourceComputer) {
-			console.log('[Eagle Bridge] No matching computer found for path');
-			return path;
-		}
-
-		const currentPlatform = this.getCurrentPlatform();
-		const currentUsername = this.getCurrentUsername();
-
-		const currentComputer = this.settings.computers.find(
-			c => c.platform === currentPlatform && c.username === currentUsername
-		);
-
-		if (!currentComputer || sourceComputer.id === currentComputer.id) {
-			return path;
-		}
-
-		const sourceSubPath = sourceComputer.subPath || '';
-		const currentSubPath = currentComputer.subPath || '';
-
-		console.log(`[Eagle Bridge] Converting: ${sourceComputer.platform}/${sourceComputer.username}/${sourceSubPath} → ${currentComputer.platform}/${currentComputer.username}/${currentSubPath}`);
-
-		let relativePath = '';
-		if (sourceComputer.platform === 'darwin') {
-			const sourceRoot = sourceSubPath 
-				? `/Users/${sourceComputer.username}/${sourceSubPath}/`
-				: `/Users/${sourceComputer.username}/`;
-			relativePath = path.replace(sourceRoot, '');
-		} else {
-			const subPathPart = sourceSubPath ? `[/\\\\]${sourceSubPath.replace(/[/\\]/g, '[/\\\\]')}` : '';
-			const winPattern = new RegExp(`[A-Za-z]:[/\\\\]Users[/\\\\]${sourceComputer.username}${subPathPart}[/\\\\]`, 'i');
-			relativePath = path.replace(winPattern, '').replace(/\\/g, '/');
-		}
-
-		if (currentComputer.platform === 'darwin') {
-			const targetRoot = currentSubPath 
-				? `/Users/${currentComputer.username}/${currentSubPath}/`
-				: `/Users/${currentComputer.username}/`;
-			return `${targetRoot}${relativePath}`;
-		} else {
-			const targetRoot = currentSubPath 
-				? `C:/Users/${currentComputer.username}/${currentSubPath}/`
-				: `C:/Users/${currentComputer.username}/`;
-			return `${targetRoot}${relativePath}`;
-		}
 	}
 
 	private getDefaultTags(): string[] | undefined {
@@ -2863,6 +2665,7 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 						},
 						sourcePageUrl: context.sourceInfo?.pageUrl,
 						ai: new AiAssistant(() => this.settings, () => this.api.listTags()),
+						hintTemplates: this.settings.aiHintTemplates,
 					}
 				);
 
@@ -3141,7 +2944,7 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 	private async uploadImageToEagle(
 		file: File,
 		sourceInfo?: ImageSourceInfo | null,
-		options: { portable?: boolean } = {}
+		options: { portable?: boolean; alsoCloud?: boolean } = {}
 	): Promise<{ url: string, item: EagleItem | null, cloudUrl: string | null }> {
 		const tempPath = await this.saveToTempLocation(file);
 		
@@ -3234,35 +3037,27 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 		const ext = item ? item.ext : getExtFromFilename(file.name);
 		const nameWithoutExt = item ? item.name : filenameWithoutExt;
 
-		let embedUrl: string | null = null;
-		let cloudUrl: string | null = null;
-		// Portable embeds use a cloud copy in every mode except Custom URL prefix
-		const useCloudCopy = this.settings.eagleEmbedUrlMode === 'cloud'
-			|| (options.portable && this.settings.eagleEmbedUrlMode !== 'custom-url');
-		if (useCloudCopy) {
-			cloudUrl = await this.ensureEagleCloudCopy(
-				{ id: itemId, name: nameWithoutExt, ext, tags: item?.tags },
-				async () => tempPath,
-				{ existingUrl: await this.findExistingCloudUrl(sourceInfo), after: extraLinksDone }
-			);
-			embedUrl = cloudUrl;
-		} else if (this.settings.eagleEmbedUrlMode === 'custom-url') {
-			const libraryName = (await this.api.getLibraryName()) || 'Main';
-			embedUrl = buildEagleCustomEmbedUrl(
-				this.settings.eagleCustomUrlPrefix,
-				libraryName,
-				itemId,
-				nameWithoutExt,
-				ext,
-				false
-			);
-		}
+		const resolved = await this.resolveEagleEmbedUrl(
+			{ id: itemId, name: nameWithoutExt, ext, tags: item?.tags },
+			async () => tempPath,
+			{
+				alsoCloud: options.alsoCloud,
+				existingUrl: await this.findExistingCloudUrl(sourceInfo),
+				after: extraLinksDone,
+				isNew: true,
+				portable: options.portable,
+			}
+		);
+		const cloudUrl = resolved.cloudUrl;
+		let embedUrl = resolved.url;
 		if (!embedUrl) {
 			if (options.portable) {
 				throw new Error(PORTABLE_URL_FAILED);
 			}
-			const localPath = thumbnailPath || tempPath;
+			// The copy in Eagle, not the temporary file, which is cleared out later
+			const localPath = thumbnailPath || (item ? await this.api.getOriginalFilePath(item) : null) || tempPath;
 			embedUrl = this.pathToFileUrl(localPath);
+			this.warnLocalOnlyLink();
 		}
 
 		return {
@@ -3303,25 +3098,57 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 		}
 	}
 
+	// An image on its way to Eagle or the cloud is first written to a hidden folder in the
+	// vault, because both take a file path. Returns the file's absolute path.
 	private async saveToTempLocation(file: File): Promise<string> {
-		const tempDir = '.eagle-temp';
-		const tempDirPath = `${tempDir}`;
+		void this.pruneTempFiles();
 
 		const adapter = this.app.vault.adapter;
-		const tempDirExists = await adapter.exists(tempDirPath);
+		const tempDirExists = await adapter.exists(TEMP_DIR);
 		if (!tempDirExists) {
-			await adapter.mkdir(tempDirPath);
+			await adapter.mkdir(TEMP_DIR);
 		}
 
 		const timestamp = Date.now();
 		const filename = `${timestamp}-${file.name}`;
-		const tempFilePath = `${tempDirPath}/${filename}`;
+		const tempFilePath = `${TEMP_DIR}/${filename}`;
 
 		const buffer = await file.arrayBuffer();
 		const uint8Array = new Uint8Array(buffer);
 		await adapter.writeBinary(tempFilePath, uint8Array);
 
 		return this.getAbsolutePath(tempFilePath);
+	}
+
+	// Deletes a file written by saveToTempLocation, once nothing needs it any more.
+	private async removeTempFile(absolutePath: string): Promise<void> {
+		const filename = absolutePath.replace(/\\/g, '/').split('/').pop();
+		if (!filename) return;
+		try {
+			await this.app.vault.adapter.remove(`${TEMP_DIR}/${filename}`);
+		} catch (error) {
+			console.warn('[Eagle Bridge] Could not remove temporary file:', error);
+		}
+	}
+
+	// Clears out temporary files more than an hour old. Eagle imports a file in its own time
+	// after being handed its path, so a file sent to Eagle cannot be deleted straight away;
+	// it is left for this to collect later.
+	private async pruneTempFiles(): Promise<void> {
+		const adapter = this.app.vault.adapter;
+		try {
+			if (!(await adapter.exists(TEMP_DIR))) return;
+			const cutoff = Date.now() - TEMP_FILE_MAX_AGE_MS;
+			const { files } = await adapter.list(TEMP_DIR);
+			for (const path of files) {
+				const stat = await adapter.stat(path);
+				if (stat && stat.mtime < cutoff) {
+					await adapter.remove(path);
+				}
+			}
+		} catch (error) {
+			console.warn('[Eagle Bridge] Could not clear temporary files:', error);
+		}
 	}
 
 	private getVaultPath(): string {
@@ -3371,210 +3198,12 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 		return true;
 	}
 
-	private async convertCrossPlatformPaths(): Promise<void> {
-		if (!this.settings.enableCrossPlatform) {
-			new Notice('Cross-platform sync is disabled in settings');
-			return;
-		}
-
-		const activeFile = this.app.workspace.getActiveFile();
-		if (!activeFile) {
-			new Notice('No active file');
-			return;
-		}
-
-		const content = await this.app.vault.read(activeFile);
-		let newContent = content;
-		let convertedCount = 0;
-
-		const fileUrlRegex = /!\[([^\]]*)\]\((file:\/\/[^)]+)\)/g;
-		let match;
-		
-		while ((match = fileUrlRegex.exec(content)) !== null) {
-			const originalUrl = match[2];
-			let filePath = this.fullyDecodeUri(originalUrl.replace(/^file:\/\/\/?/, ''));
-			
-			if (filePath.startsWith('Users/') && !filePath.startsWith('/')) {
-				filePath = '/' + filePath;
-			}
-
-			if (this.isPathFromDifferentPlatform(filePath)) {
-				const convertedPath = this.convertPathForCurrentPlatform(filePath);
-				const newUrl = this.pathToFileUrl(convertedPath);
-				newContent = newContent.replace(originalUrl, newUrl);
-				convertedCount++;
-			}
-		}
-
-		if (convertedCount > 0) {
-			await this.app.vault.modify(activeFile, newContent);
-			new Notice(`Converted ${convertedCount} cross-platform image paths`);
-		} else {
-			new Notice('No cross-platform paths found to convert');
-		}
-	}
-
-	private async autoConvertOnFileOpen(file: TFile): Promise<void> {
-		const content = await this.app.vault.read(file);
-		let newContent = content;
-		let convertedCount = 0;
-
-		const fileUrlRegex = /!\[([^\]]*)\]\((file:\/\/[^)]+)\)/g;
-		let match;
-		
-		while ((match = fileUrlRegex.exec(content)) !== null) {
-			const originalUrl = match[2];
-			let filePath = this.fullyDecodeUri(originalUrl.replace(/^file:\/\/\/?/, ''));
-			
-			if (filePath.startsWith('Users/') && !filePath.startsWith('/')) {
-				filePath = '/' + filePath;
-			}
-
-			if (this.isPathFromDifferentPlatform(filePath)) {
-				const convertedPath = this.convertPathForCurrentPlatform(filePath);
-				const newUrl = this.pathToFileUrl(convertedPath);
-				newContent = newContent.replace(originalUrl, newUrl);
-				convertedCount++;
-			}
-		}
-
-		if (convertedCount > 0) {
-			await this.app.vault.modify(file, newContent);
-			new Notice(`Auto-converted ${convertedCount} cross-platform paths`);
-		}
-	}
-
-	private async convertCrossPlatformRenderOnly(): Promise<void> {
-		if (!this.settings.enableCrossPlatform) {
-			new Notice('Cross-platform sync is disabled in settings');
-			return;
-		}
-
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		if (!view) {
-			new Notice('No active markdown view');
-			return;
-		}
-
-		const allContainers = [
-			view.contentEl,
-			view.containerEl,
-			activeDocument.querySelector('.workspace-leaf.mod-active .view-content'),
-			activeDocument.querySelector('.workspace-leaf.mod-active .markdown-preview-view'),
-			activeDocument.querySelector('.workspace-leaf.mod-active .cm-content'),
-		].filter(Boolean) as HTMLElement[];
-
-		let convertedCount = 0;
-		const processedSrcs = new Set<string>();
-
-		for (const container of allContainers) {
-			const images = container.querySelectorAll('img');
-			console.log(`[Eagle Bridge] Found ${images.length} images in container`);
-
-			images.forEach((img) => {
-				const src = img.getAttribute('src');
-				if (!src) return;
-				if (processedSrcs.has(src)) return;
-				if (img.getAttribute('data-xplatform-converted')) return;
-
-				console.log(`[Eagle Bridge] Processing image src: ${src.substring(0, 80)}`);
-
-				let extractedPath: string | null = null;
-				
-				if (src.startsWith('app://')) {
-					const appMatch = src.match(/^app:\/\/[^/]+\/(.+)$/);
-					if (appMatch) {
-						extractedPath = this.fullyDecodeUri(appMatch[1]);
-						console.log(`[Eagle Bridge] Extracted from app://: ${extractedPath?.substring(0, 60)}`);
-					}
-				} else if (src.startsWith('file://')) {
-					extractedPath = this.fullyDecodeUri(src.replace(/^file:\/\/\/?/, ''));
-					console.log(`[Eagle Bridge] Extracted from file://: ${extractedPath?.substring(0, 60)}`);
-				}
-
-				if (!extractedPath) {
-					console.log(`[Eagle Bridge] Could not extract path from: ${src.substring(0, 50)}`);
-					return;
-				}
-
-				if (extractedPath.startsWith('Users/') && !extractedPath.startsWith('/')) {
-					extractedPath = '/' + extractedPath;
-				}
-
-				if (!this.isPathFromDifferentPlatform(extractedPath)) {
-					console.log(`[Eagle Bridge] Path not from different platform`);
-					return;
-				}
-
-				const convertedPath = this.convertPathForCurrentPlatform(extractedPath);
-				
-				if (convertedPath !== extractedPath) {
-					const newSrc = this.pathToFileUrl(convertedPath);
-					console.log(`[Eagle Bridge] Converting: ${src.substring(0, 40)} → ${newSrc.substring(0, 40)}`);
-					
-					img.setAttribute('src', newSrc);
-					img.setAttribute('data-xplatform-converted', 'true');
-					img.setAttribute('data-original-src', src);
-					processedSrcs.add(src);
-					convertedCount++;
-				}
-			});
-		}
-
-		if (convertedCount > 0) {
-			new Notice(`Render-only: converted ${convertedCount} image paths (source unchanged)`);
-		} else {
-			new Notice('No cross-platform paths found to convert');
-		}
-	}
-
-	private async autoConvertRenderOnlyOnFileOpen(): Promise<void> {
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		if (!view) return;
-
-		const contentEl = view.contentEl;
-		const images = contentEl.querySelectorAll('img');
-		let convertedCount = 0;
-
-		images.forEach((img) => {
-			const src = img.getAttribute('src');
-			if (!src) return;
-
-			if (img.getAttribute('data-xplatform-converted')) return;
-
-			let extractedPath: string | null = null;
-			
-			if (src.startsWith('app://')) {
-				const appMatch = src.match(/^app:\/\/[^/]+\/(.+)$/);
-				if (appMatch) {
-					extractedPath = this.fullyDecodeUri(appMatch[1]);
-				}
-			} else if (src.startsWith('file://')) {
-				extractedPath = this.fullyDecodeUri(src.replace(/^file:\/\/\/?/, ''));
-			}
-
-			if (!extractedPath) return;
-
-			if (extractedPath.startsWith('Users/') && !extractedPath.startsWith('/')) {
-				extractedPath = '/' + extractedPath;
-			}
-
-			if (!this.isPathFromDifferentPlatform(extractedPath)) return;
-
-			const convertedPath = this.convertPathForCurrentPlatform(extractedPath);
-			
-			if (convertedPath !== extractedPath) {
-				const newSrc = this.pathToFileUrl(convertedPath);
-				img.setAttribute('src', newSrc);
-				img.setAttribute('data-xplatform-converted', 'true');
-				img.setAttribute('data-original-src', src);
-				convertedCount++;
-			}
-		});
-
-		if (convertedCount > 0) {
-			console.log(`[Eagle Bridge] Auto render-only: converted ${convertedCount} paths`);
-		}
+	// The file a file:// address points to, as a path this computer can open.
+	private fileUrlToPath(url: string): string {
+		let path = this.safeDecodeUri(url.replace(/^file:\/\//i, ''));
+		// file:///C:/… leaves "/C:/…", which is not a Windows path
+		if (/^\/[A-Za-z]:/.test(path)) path = path.slice(1);
+		return path;
 	}
 
 	private async uploadAllImagesToCloud(): Promise<void> {
@@ -3592,48 +3221,48 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 
 		const content = await this.app.vault.read(activeFile);
 		const providerName = this.getActiveCloudProviderName();
-		
-		const imageMatches: { full: string; alt: string; url: string; filePath?: string }[] = [];
-		
+
+		// Each embed to convert: the text to find, the file to upload, and how to write the
+		// embed once the file has a public URL
+		const imageMatches: { full: string; filePath: string; rewrite: (publicUrl: string) => string }[] = [];
+
 		const fileUrlRegex = /!\[([^\]]*)\]\((file:\/\/[^)]+)\)/gi;
 		let match;
 		while ((match = fileUrlRegex.exec(content)) !== null) {
+			const full = match[0];
 			const url = match[2];
-			const filePath = decodeURIComponent(url.replace('file://', ''));
 			imageMatches.push({
-				full: match[0],
-				alt: match[1],
-				url: url,
-				filePath: filePath,
+				full,
+				filePath: this.fileUrlToPath(url),
+				rewrite: (publicUrl) => full.replace(url, publicUrl),
 			});
 		}
-		
+
 		const localhostRegex = /!\[([^\]]*)\]\((https?:\/\/localhost:\d+\/api\/item\/thumbnail\?id=([A-Z0-9]+))\)/gi;
 		while ((match = localhostRegex.exec(content)) !== null) {
-			const itemId = match[3];
-			const item = await this.api.getItemInfo(itemId);
+			const full = match[0];
+			const url = match[2];
+			const item = await this.api.getItemInfo(match[3]);
 			if (item) {
 				const filePath = await this.api.getOriginalFilePath(item);
 				if (filePath) {
-					imageMatches.push({
-						full: match[0],
-						alt: match[1],
-						url: match[2],
-						filePath: filePath,
-					});
+					imageMatches.push({ full, filePath, rewrite: (publicUrl) => full.replace(url, publicUrl) });
 				}
 			}
 		}
-		
-		const localImageRegex = /!\[([^\]]*)\]\((?!https?:\/\/|file:\/\/)([^)]+\.(jpg|jpeg|png|gif|webp|bmp|svg|tiff|tif|heic|heif|avif|ico|mp4|mov))\)/gi;
-		while ((match = localImageRegex.exec(content)) !== null) {
-			const relativePath = match[2];
-			const absolutePath = this.getAbsolutePath(relativePath);
+
+		// Images and videos kept in the vault, whichever way the note embeds them
+		const vaultExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'tiff', 'tif', 'heic', 'heif', 'avif', 'ico', 'mp4', 'mov'];
+		for (const embed of this.findVaultEmbeds(content)) {
+			const file = this.app.metadataCache.getFirstLinkpathDest(embed.linkpath, activeFile.path);
+			if (!(file instanceof TFile) || !vaultExtensions.includes(file.extension.toLowerCase())) continue;
 			imageMatches.push({
-				full: match[0],
-				alt: match[1],
-				url: relativePath,
-				filePath: absolutePath,
+				full: embed.full,
+				filePath: this.getAbsolutePath(file.path),
+				rewrite: embed.isWikilink
+					// A wikilink cannot hold a web address. Its alias (a caption or a size) is kept.
+					? (publicUrl) => `![${embed.alt || file.name}](${publicUrl})`
+					: (publicUrl) => embed.full.replace(embed.target, publicUrl),
 			});
 		}
 
@@ -3646,26 +3275,30 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 
 		let uploaded = 0;
 		let newContent = content;
+		// A file embedded more than once is uploaded once
+		const uploadedUrls = new Map<string, string | null>();
 
 		for (const img of imageMatches) {
-			if (!img.filePath) continue;
-			
-			if (img.url.startsWith('http://') || img.url.startsWith('https://')) {
-				if (!img.url.includes('localhost')) continue;
-			}
-			
-			const filename = img.filePath.split('/').pop() || 'image';
-			const ext = getExtFromFilename(filename);
-			const mimeType = getMimeType(ext);
-
-			try {
-				const result = await provider.upload(img.filePath, filename, mimeType);
-				if (result.success && result.publicUrl) {
-					newContent = newContent.replace(img.url, result.publicUrl);
-					uploaded++;
+			let publicUrl = uploadedUrls.get(img.filePath);
+			if (publicUrl === undefined) {
+				publicUrl = null;
+				const filename = img.filePath.replace(/\\/g, '/').split('/').pop() || 'image';
+				try {
+					const result = await provider.upload(img.filePath, filename, getMimeType(getExtFromFilename(filename)));
+					if (result.success && result.publicUrl) {
+						publicUrl = result.publicUrl;
+					} else {
+						console.error(`Failed to upload ${filename}:`, result.error);
+					}
+				} catch (error) {
+					console.error(`Failed to upload ${filename}:`, error);
 				}
-			} catch (error) {
-				console.error(`Failed to upload ${filename}:`, error);
+				uploadedUrls.set(img.filePath, publicUrl);
+			}
+
+			if (publicUrl) {
+				newContent = newContent.split(img.full).join(img.rewrite(publicUrl));
+				uploaded++;
 			}
 		}
 

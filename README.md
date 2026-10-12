@@ -15,7 +15,6 @@ Eagle Bridge started as a fork of [CMDS Eagle](https://github.com/johnfkoo951/cm
 - **Image Source Capture**: Automatically capture webpage origin URLs, direct image asset URLs, or local file links into metadata cards and Eagle Extra Links
 - **Obsidian Backlinks**: Automatically write bidirectional Obsidian Advanced URI backlinks to Eagle notes/URL fields
 - **Batch Convert**: Convert all local images in a note to cloud URLs
-- **Cross-Platform Sync**: Automatically convert image paths between Mac and Windows
 - **Excalidraw Integration**: Paste or drop images onto an Excalidraw canvas — Eagle assets embed the original, and clipboard screenshots are uploaded to your cloud provider (and optionally added to your Eagle library) instead of bloating the vault with attachments
 - **Canvas Integration**: Paste or drop images and Eagle items onto an Obsidian Canvas as text or link cards that load the image by URL
 - **AI Suggestions**: Let an AI model look at the image and suggest its name, description and tags as you add it to Eagle, using Anthropic, OpenAI, Gemini, any OpenAI-compatible server, or LM Studio on your own computer
@@ -61,14 +60,21 @@ Search your Eagle library and embed images directly into notes.
 
 When pasting or dropping images, choose where to save them:
 
-- **Eagle**: adds the image to your Eagle library. How the note links to it follows **Settings → Embedding → Link embedded images to**:
-  - **Cloud copy** (default): uploads a copy to the active cloud provider and embeds that URL, so the image displays on your other devices. If the image was copied from the cloud provider itself (for example while browsing your WebDAV folder in a browser), the existing file is linked instead of uploading a duplicate. Without a configured cloud provider, the note links to the local file.
-  - **Custom URL prefix**: links into the Eagle library through your own HTTP/WebDAV server.
-  - **Local file path**: links to the file on this computer.
-- **Vault**: saves the image as an attachment in the vault.
+- **Eagle**: adds the image to your Eagle library.
+- **Vault**: saves the image as an attachment in the vault, in the folder and with the link style your Obsidian settings give. This choice is hidden by default; turn on **Settings → Adding images → Offer the vault as a destination** to show it.
 - **Cloud only**: uploads the image to the active cloud provider without adding it to Eagle.
 
-That setting also applies when you embed an existing Eagle item from search or by pasting an Eagle link or library file path.
+Below the choices is an **Also upload to the cloud** toggle (shown with your provider's name, for example "Also upload to Nextcloud"). It applies to **Eagle**: with it on, the image is added to Eagle and a copy is uploaded to your cloud provider, and the Eagle button reads "Eagle + Nextcloud". The button's description always says what the note will link to. The toggle starts from **Settings → Embedding → Also upload to the cloud**; changing it in the dialog affects only that image unless **Remember this choice** is on. The same toggle appears when you paste an item that is already in Eagle.
+
+**What an embedded Eagle image links to** is decided per image, in this order:
+
+1. **Its cloud copy**, when it has one: either just uploaded, or made earlier. If the image was copied from the cloud provider itself (for example while browsing your WebDAV folder in a browser), the existing file is linked instead of uploading a duplicate.
+2. **Your Custom URL prefix** (**Settings → Embedding**), when it has no cloud copy: the image is loaded from the Eagle library through your own HTTP/WebDAV server.
+3. **The file path on this computer**, when no Custom URL prefix is set. Such a link only displays on this computer, so the dialog says so before you choose, settings shows a warning while the prefix is empty, and a notice appears the first time it happens in a session.
+
+**Always use Custom URL prefix** (shown once a prefix is set) links to your own server even when an image has a cloud copy. Use it with **Also upload to the cloud** on when you want every image to have a cloud copy, as a share link listed in the metadata card and in Eagle Extra Links, while all your notes load images from your own server. If you do not want cloud copies at all, turn **Also upload to the cloud** off instead.
+
+The same rule applies when you embed an existing Eagle item from search or by pasting an Eagle link or library file path. Without a dialog, **Also upload to the cloud** follows the setting.
 
 Each Eagle item gets one cloud copy. It is recorded on the item as a **Cloud Copy** link in Eagle's Extra Links (when **Use Eagle Extra Links** is on), and on WebDAV it is stored as `<Eagle item ID>.<ext>`, so embedding the same item again reuses the copy instead of uploading a new one.
 
@@ -92,9 +98,56 @@ When the Eagle folder setting is **Ask**, the dialog shown as you add an image h
 
 - **Name**: a short title for the image.
 - **Description**: one or two sentences describing it.
-- **Tags**: up to six tags. Tags already in your Eagle library are preferred; at most two new ones are proposed, written the way your library writes its tags (for example a `Topic: …` prefix if you use one). New tags are shown with a dashed outline so you can see what would be created, and every suggestion can be removed before you save. Both limits can be changed under **Settings → AI → Tag suggestions**; setting new tags to 0 restricts suggestions to tags you already have.
+- **Tags**: up to six tags. Tags already in your Eagle library are preferred; at most two new ones are proposed, written the way your library writes its tags (see **Prefixed tags** below). New tags are shown with a dashed outline so you can see what would be created, and every suggestion can be removed before you save. Both limits can be changed under **Settings → AI → Tag suggestions**; setting new tags to 0 restricts suggestions to tags you already have.
+
+**Why six tags, and only two new ones?** Those are the defaults for the two limits under **Settings → AI → Tag suggestions**:
+
+- **Two new tags:** a new tag is permanent once it is saved to Eagle, and models invent tags readily. A low cap keeps suggestions drawing on the tags you already have, and stops near-duplicates such as `Fantasy Art` beside `Topic: Fantasy` from piling up.
+- **Six tags in total:** every suggestion is one you have to read and may want to remove, and a handful is usually enough to cover what an image shows, what it is about and what kind of image it is.
+
+> **Tip:** With a new or small library, few of your existing tags fit any given image, so the new-tag cap ends up being most of what you get back. While you are building the library up, raise **New tags allowed** to four or six, then bring it back down once your tag list covers most images.
+
+**Prefixed tags.** If your library files tags under prefixes, new tags follow the same form. Nothing about the form is built in: the prefixes and the punctuation between prefix and value are read from your own tags, spacing included, so `Topic: AI`, `Topic:AI`, `topic/ai` and `Topic - AI` libraries each get new tags in their own style. Ordinary hyphenated tags such as `sci-fi` are not mistaken for prefixes, and, under the default setting below, a library with only a stray prefixed tag or two is treated as plain.
+
+**New tag format** (under **Settings → AI → Tag suggestions**) decides how a tag that is not in your library yet is written:
+
+| Setting | What a new tag looks like |
+|---------|---------------------------|
+| **Follow the library's mix** (default) | Filed under one of your prefixes when one fits, and left plain when none does. No new prefixes are made. If nearly all your tags are prefixed, every new tag gets one. |
+| **Always use a prefix** | Always filed under a prefix: one of yours where possible, otherwise a new one in the same style. |
+| **Never use a prefix** | Always plain, even in a library full of prefixed tags. Your existing prefixed tags are still suggested when they fit. |
+| **Use my own examples** | Written like the examples you type in **Example new tags**, whatever your library does. |
+
+The first three only matter in a library that has prefixed tags; a plain library is not affected by them. **Use my own examples** shows an **Example new tags** field: type one or more tags the way you want new ones to look, separated by commas, for example `Topic: World of Warcraft, Type: Illustration` or `subject/night-elf, medium/digital-painting`. While the field is empty, the library's mix is followed.
+
+**Tips for the tag format**
+
+- **Start with the default.** **Follow the library's mix** never makes a new prefix: a new tag goes under one you already have or is left plain, so your list of prefixes does not grow.
+- **New tags arriving plain when you wanted `Topic: …`?** Switch to **Always use a prefix**. Deciding whether a prefix "fits" is a judgment call that models get wrong, most often when there is a hint in the box.
+- **Let the model think when the format matters.** A local model with **Effort** set to **None** answers in about a second but follows the format less reliably. With thinking on it is slower and more consistent.
+- **New library?** There are no tags yet to read a format from, so choose **Use my own examples** and show the form you want from the start.
+- **Changing style?** **Use my own examples** also writes new tags differently from the ones you have. Your existing tags are not renamed and are still suggested as they are, so the library holds both styles until you tidy it in Eagle.
+- **Examples show a form, not a list.** The model copies the structure, punctuation, spacing and capitalization, and may file a tag under a prefix you did not show, such as `Faction: Horde`. The examples themselves are only suggested when they fit the image, so they do not need to relate to your images.
+- **The form does not have to be a prefix.** One example such as `fantasy-art` gets you lowercase words joined by hyphens. A `#` at the start of a suggested tag is always removed.
+- **Check the dashed outlines before you save.** Whatever the setting, a new tag can still come back in the wrong form now and then. Remove it in the dialog; once saved, it is in your Eagle library.
 
 Below the tags is an optional **AI hints** box. Type what the image is, as briefly as you like (for example `WoW Dalaran fan art`), and the wands treat it as true and build on it with what the model knows: proper names, the series it belongs to, the right terms. Hints are only sent to the model; they are not saved to Eagle.
+
+> **Tip:** A hint can steer the suggestions as well as describe the image. Say which kinds of tags you want, for example `Only tag the character races` or `WoW. Tag the locations and factions, not the art style`, and the tag wand concentrates on those. You can combine both in one hint. How closely it is followed depends on the model, and it can still misidentify what it sees, so name specifics yourself where they matter.
+
+For steering you use often, the **Templates** list beside the box adds a ready-made hint, which you can then edit or add to. Seven are built in:
+
+| Template | Hint it adds |
+|----------|--------------|
+| Subjects | Tag the main subjects: who or what is shown. |
+| Art style and medium | Focus on the art style and medium, not the subject. |
+| Characters and people | Only tag the characters or people shown. Name someone only if you are certain who it is; otherwise say what kind of character or person they are. |
+| Places and setting | Tag the location and setting, not the art style. |
+| Series and franchise | Focus on the series or franchise this comes from, and the factions or groups in it. |
+| Colors and mood | Tag the dominant colors, the lighting and the mood. |
+| Screenshot | This is a screenshot. Tag the app, game or site it shows and what is on screen. |
+
+Rename, reword, delete or add templates under **Settings → AI → Hint templates**; **Restore defaults** brings the built-in list back.
 
 Choose the model under **Settings → AI**. Nothing is selected by default.
 
@@ -125,33 +178,13 @@ Upload images to cloud storage for sharing and portability.
 ![Cloud Upload](assets/CMDS-eagle5.gif)
 ![Paste Options](assets/CMDS-eagle4.gif)
 
-### Cross-Platform Sync
-
-Use the same Eagle library across Mac and Windows with automatic path conversion.
-
-![Cross-Platform Sync](assets/CMDS-eagle-cross-platform.gif)
-
-**How it works:**
-1. Register your computers in settings (Mac and Windows)
-2. Eagle library synced via cloud storage (e.g., Dropbox, iCloud, OneDrive)
-3. Image paths automatically convert when opening notes on different platforms
-
-**Settings:**
-- `Convert file paths between computers`: Turn on/off the feature
-- `Convert when a note is opened`: Automatically convert paths when opening notes
-
-Both are under **Settings → Extras → Cross-platform paths**.
-
-**Manual conversion:**
-- Command: `Convert cross-platform image paths in current note`
-
 ### Excalidraw
 
 Paste or drop images directly onto an Excalidraw canvas and let Eagle handle them:
 
 - **Eagle assets** (copied or dragged from Eagle, or pasted as an `eagle://` or localhost item link) resolve to the **original** image (not the thumbnail). Several items copied at once are all added.
 - **New images** such as clipboard screenshots are uploaded to your active cloud provider and embedded by URL. When **Also add new images to Eagle** is on, they go through the same import as images pasted into a note: folder routing, default tags, source capture and backlinks.
-- Images are embedded as portable URLs, keeping the `.excalidraw` file small instead of storing vault attachments. Each Eagle item uses its single cloud copy, or your Custom URL prefix address when that link type is selected.
+- Images are embedded as portable URLs, keeping the `.excalidraw` file small instead of storing vault attachments. Each Eagle item gets the same link as in a note: its cloud copy, or your Custom URL prefix address. A drawing cannot use a file path, so with no Custom URL prefix a cloud copy is made even when **Also upload to the cloud** is off.
 - If no portable URL can be made (no cloud provider is set up), Excalidraw handles the paste as it normally would. If an upload fails, the image is saved to your vault instead of being lost.
 
 Requires the [Excalidraw](https://github.com/zsviczian/obsidian-excalidraw-plugin) plugin. Toggle it under **Settings → Extras → Excalidraw**.
@@ -181,7 +214,7 @@ The settings are organized into six tabs:
 | **Adding images** | Where pasted or dropped images go, the Eagle folder and tags they get, source capture, and backlinks to your notes |
 | **Embedding** | What embedded Eagle images link to, the metadata card, and search defaults |
 | **AI** | The AI provider and model behind the name, description and tag wands |
-| **Extras** | Excalidraw and Canvas support, and cross-platform path conversion |
+| **Extras** | Excalidraw and Canvas support |
 
 
 ![Settings](assets/CMDS-eagle6.png)
@@ -237,7 +270,6 @@ Things to know:
 | `Upload clipboard Eagle image to cloud` | Upload from clipboard |
 | `Embed Eagle image and upload to cloud` | Embed + upload in one step |
 | `Convert all images in note to cloud URLs` | Batch convert local images |
-| `Convert cross-platform image paths in current note` | Convert Mac/Windows paths |
 
 ## Development & Testing
 

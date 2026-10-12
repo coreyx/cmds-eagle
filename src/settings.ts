@@ -2,16 +2,17 @@ import { App, FuzzySuggestModal, PluginSettingTab, Setting, Notice } from 'obsid
 import CMDSPACELinkEagle from './main';
 import { EagleApiService } from './api';
 import { WebDAVProvider, isCloudProviderConfigured } from './cloud-providers';
-import { AI_MAX_TAGS_LIMIT, AI_PROVIDER_LABELS, LM_STUDIO_DEFAULT_URL, detectLmStudio, listAiModels, resolveAiTagLimits } from './ai-providers';
+import { AI_MAX_TAGS_LIMIT, AI_PROVIDER_LABELS, LM_STUDIO_DEFAULT_URL, detectLmStudio, listAiModels, resolveAiTagLimits, resolveNewTagFormat } from './ai-providers';
 import { 
 	CloudProviderType, 
 	ImagePasteBehavior,
 	BacklinkMode,
 	EagleLinkPasteMode,
-	EagleEmbedUrlMode,
 	CanvasNodeType,
 	AiProviderType,
 	AiEffort,
+	AiNewTagFormat,
+	DEFAULT_AI_HINT_TEMPLATES,
 	EagleItemLinkFormat,
 	ImageSourceUrlPriority,
 	ExtraLinksImageSource,
@@ -22,8 +23,6 @@ import {
 	SUPPORTED_IMAGE_EXTENSIONS,
 	SUPPORTED_VIDEO_EXTENSIONS,
 	SUPPORTED_DOCUMENT_EXTENSIONS,
-	ComputerProfile,
-	PlatformType,
 } from './types';
 
 type SettingsTabId = 'connections' | 'cloud' | 'adding' | 'embedding' | 'ai' | 'extras';
@@ -54,7 +53,7 @@ const SETTINGS_TABS: Array<{ id: SettingsTabId; label: string; description: stri
 	{ id: 'adding', label: 'Adding images', description: 'What happens when you paste or drop a new image into a note.' },
 	{ id: 'embedding', label: 'Embedding', description: 'How images that are in Eagle appear in your notes.' },
 	{ id: 'ai', label: 'AI', description: 'Optional AI help for naming, describing and tagging images as you add them to Eagle.' },
-	{ id: 'extras', label: 'Extras', description: 'Excalidraw and Canvas support, and using one vault on several computers.' },
+	{ id: 'extras', label: 'Extras', description: 'Excalidraw and Canvas support.' },
 ];
 
 export class CMDSPACEEagleSettingTab extends PluginSettingTab {
@@ -100,7 +99,6 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 			case 'extras':
 				this.renderExcalidrawSection(containerEl);
 				this.renderCanvasSection(containerEl);
-				this.renderCrossPlatformSection(containerEl);
 				break;
 		}
 
@@ -180,18 +178,37 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 	private renderPasteDestinationSection(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName('Destination').setHeading();
 
+		const vaultOffered = this.plugin.settings.enableVaultDestination;
+
 		new Setting(containerEl)
 			.setName('When pasting or dropping an image')
-			.setDesc('Where a new image is saved. "Ask every time" shows the choices with a description of what each one does.')
-			.addDropdown(dropdown => dropdown
-				.addOption('ask', 'Ask every time')
-				.addOption('eagle', 'Save to Eagle')
-				.addOption('local', 'Save to vault')
-				.addOption('cloud', 'Upload to cloud only')
-				.setValue(this.plugin.settings.imagePasteBehavior)
-				.onChange(async (value: ImagePasteBehavior) => {
-					this.plugin.settings.imagePasteBehavior = value;
+			.setDesc('Where a new image is saved. "Ask every time" shows the choices with a description of what each one does. Whether an image saved to Eagle is also uploaded to the cloud is set under Embedding.')
+			.addDropdown(dropdown => {
+				dropdown.addOption('ask', 'Ask every time');
+				dropdown.addOption('eagle', 'Save to Eagle');
+				if (vaultOffered) dropdown.addOption('local', 'Save to vault');
+				dropdown.addOption('cloud', 'Upload to cloud only');
+				dropdown
+					.setValue(!vaultOffered && this.plugin.settings.imagePasteBehavior === 'local' ? 'ask' : this.plugin.settings.imagePasteBehavior)
+					.onChange(async (value: ImagePasteBehavior) => {
+						this.plugin.settings.imagePasteBehavior = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName('Offer the vault as a destination')
+			.setDesc('Show "Vault" among the choices when you paste or drop an image. Turn this off if you never keep images as vault attachments.')
+			.addToggle(toggle => toggle
+				.setValue(vaultOffered)
+				.onChange(async (value) => {
+					this.plugin.settings.enableVaultDestination = value;
+					// A saved "Save to vault" has nothing to point at any more
+					if (!value && this.plugin.settings.imagePasteBehavior === 'local') {
+						this.plugin.settings.imagePasteBehavior = 'ask';
+					}
 					await this.plugin.saveSettings();
+					this.display();
 				}));
 
 	}
@@ -246,39 +263,61 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 	private renderImageLinksSection(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName('Image links').setHeading();
 
+		containerEl.createEl('p', {
+			text: 'An embedded Eagle image links to its cloud copy when it has one. Otherwise it links to your Custom URL prefix.',
+			cls: 'setting-item-description',
+		});
+
+		const activeProvider = this.plugin.settings.cloudProviders[this.plugin.settings.activeCloudProvider];
+		const hasProvider = !!activeProvider && isCloudProviderConfigured(activeProvider);
+		const hasPrefix = this.plugin.settings.eagleCustomUrlPrefix.trim().length > 0;
+
 		new Setting(containerEl)
-			.setName('Link embedded images to')
-			.setDesc('What an embedded Eagle image points to. Cloud copy uploads a copy to your cloud provider so the image displays on your other devices. Custom URL prefix links into the Eagle library through your own web server. Local file path only works on this computer.')
-			.addDropdown(dropdown => dropdown
-				.addOption('cloud', 'Cloud copy')
-				.addOption('custom-url', 'Custom URL prefix')
-				.addOption('file', 'Local file path')
-				.setValue(this.plugin.settings.eagleEmbedUrlMode)
-				.onChange(async (value: EagleEmbedUrlMode) => {
-					this.plugin.settings.eagleEmbedUrlMode = value;
+			.setName('Also upload to the cloud')
+			.setDesc('When an image is saved to Eagle, or an item already in Eagle is embedded, also upload a copy to your cloud provider and link the note to it. An item is only ever uploaded once. The paste dialogs show this as a toggle, so you can decide differently for one image.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.eagleAlsoUploadToCloud)
+				.onChange(async (value) => {
+					this.plugin.settings.eagleAlsoUploadToCloud = value;
 					await this.plugin.saveSettings();
 					this.display();
 				}));
 
-		if (this.plugin.settings.eagleEmbedUrlMode === 'cloud') {
-			const activeProvider = this.plugin.settings.cloudProviders[this.plugin.settings.activeCloudProvider];
-			if (!activeProvider || !isCloudProviderConfigured(activeProvider)) {
-				containerEl.createEl('p', {
-					text: 'No cloud provider is set up yet, so embeds link to the local file. Set one up in the Cloud storage tab.',
-					cls: 'setting-item-description cmdspace-eagle-setting-required',
-				});
-			}
+		if (this.plugin.settings.eagleAlsoUploadToCloud && !hasProvider) {
+			containerEl.createEl('p', {
+				text: 'No cloud provider is set up yet, so nothing is uploaded. Set one up in the Cloud storage tab.',
+				cls: 'setting-item-description cmdspace-eagle-setting-required',
+			});
 		}
 
-		if (this.plugin.settings.eagleEmbedUrlMode === 'custom-url') {
-			new Setting(containerEl)
-				.setName('Custom URL prefix')
-				.setDesc('Address of the web or WebDAV server that serves your Eagle library folder (e.g. https://localhost:8080)')
-				.addText(text => text
-					.setPlaceholder('https://localhost:8080')
+		new Setting(containerEl)
+			.setName('Custom URL prefix')
+			.setDesc('Address of your own web or WebDAV server that serves the Eagle library folder (e.g. https://eagle.example.com). Used for an image that has no cloud copy. Leave it empty if you have no such server.')
+			.addText(text => {
+				text
+					.setPlaceholder('https://eagle.example.com')
 					.setValue(this.plugin.settings.eagleCustomUrlPrefix)
 					.onChange(async (value) => {
-						this.plugin.settings.eagleCustomUrlPrefix = value.trim() || 'https://localhost:8080';
+						this.plugin.settings.eagleCustomUrlPrefix = value.trim();
+						await this.plugin.saveSettings();
+					});
+				// Redraw on leaving the field, so the warning and the override below follow it
+				text.inputEl.addEventListener('blur', () => this.display());
+			});
+
+		if (!hasPrefix) {
+			containerEl.createEl('p', {
+				text: 'No Custom URL prefix is set. An image with no cloud copy is linked by its file path, which only displays on this computer.',
+				cls: 'setting-item-description cmdspace-eagle-setting-required',
+			});
+		} else {
+			new Setting(containerEl)
+				.setName('Always use Custom URL prefix')
+				.setDesc('Link to your own server even when an image has a cloud copy. With "Also upload to the cloud" on, the copy is still made and listed in the metadata card and in Eagle Extra Links, but the embed does not use it.')
+				.addToggle(toggle => toggle
+					.setValue(this.plugin.settings.eagleAlwaysUseCustomUrl)
+					.onChange(async (value) => {
+						this.plugin.settings.eagleAlwaysUseCustomUrl = value;
 						await this.plugin.saveSettings();
 					}));
 		}
@@ -596,7 +635,7 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Embed images in Excalidraw by URL')
-			.setDesc('When you paste or drop an image or an Eagle item onto an Excalidraw drawing, embed it from a URL that works on your other devices instead of saving a vault attachment. Uses a cloud copy, or your Custom URL prefix for Eagle items in that mode. Without a way to make such a URL, Excalidraw handles the paste as usual. Requires the Excalidraw plugin.')
+			.setDesc('When you paste or drop an image or an Eagle item onto an Excalidraw drawing, embed it from a URL that works on your other devices instead of saving a vault attachment. Uses the same link as an embed in a note: a cloud copy, or your Custom URL prefix. With no Custom URL prefix, a cloud copy is always made. Without a way to make such a URL, Excalidraw handles the paste as usual. Requires the Excalidraw plugin.')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.excalidrawIntegration)
 				.onChange(async (value) => {
@@ -796,6 +835,74 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 				}));
 
 		this.renderAiTagSettings(containerEl);
+		this.renderAiHintTemplateSettings(containerEl);
+	}
+
+	private renderAiHintTemplateSettings(containerEl: HTMLElement): void {
+		new Setting(containerEl)
+			.setName('Hint templates')
+			.setDesc('Ready-made hints offered in the Templates list beside the AI hints box. Choosing one adds its text to the box, where you can still edit it. Each has a name for the list and the hint itself.')
+			.setHeading();
+
+		const templates = this.plugin.settings.aiHintTemplates;
+		templates.forEach((template, index) => {
+			const row = new Setting(containerEl)
+				.addText(text => {
+					text.inputEl.addClass('cmdspace-eagle-template-name');
+					text
+						.setPlaceholder('Name')
+						.setValue(template.name)
+						.onChange(async (value) => {
+							template.name = value;
+							await this.plugin.saveSettings();
+						});
+				})
+				.addText(text => {
+					text.inputEl.addClass('cmdspace-eagle-template-text');
+					text
+						.setPlaceholder('What the hint should say')
+						.setValue(template.text)
+						.onChange(async (value) => {
+							template.text = value;
+							await this.plugin.saveSettings();
+						});
+				})
+				.addExtraButton(button => button
+					.setIcon('trash')
+					.setTooltip('Delete this template')
+					.onClick(async () => {
+						templates.splice(index, 1);
+						await this.plugin.saveSettings();
+						this.display();
+					}));
+			row.settingEl.addClass('cmdspace-eagle-template-row');
+		});
+
+		let restoreArmed = false;
+		new Setting(containerEl)
+			.addButton(button => button
+				.setButtonText('Add template')
+				.setCta()
+				.onClick(async () => {
+					templates.push({ name: '', text: '' });
+					await this.plugin.saveSettings();
+					this.display();
+				}))
+			.addButton(button => button
+				.setButtonText('Restore defaults')
+				.setTooltip('Replace this list with the built-in templates')
+				.onClick(async () => {
+					// Replacing the list discards the user's own templates, so ask for a second click
+					if (!restoreArmed) {
+						restoreArmed = true;
+						button.setButtonText('Click again to replace all templates');
+						button.setWarning();
+						return;
+					}
+					this.plugin.settings.aiHintTemplates = DEFAULT_AI_HINT_TEMPLATES.map(template => ({ ...template }));
+					await this.plugin.saveSettings();
+					this.display();
+				}));
 	}
 
 	private renderAiTagSettings(containerEl: HTMLElement): void {
@@ -844,6 +951,37 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 			() => resolveAiTagLimits(this.plugin.settings).maxNewTags,
 			(value) => { this.plugin.settings.aiMaxNewTags = value; }
 		);
+
+		new Setting(containerEl)
+			.setName('New tag format')
+			.setDesc('How a tag that is not in your library yet is written. The first three choices matter only if your library files tags under prefixes, such as "Topic: AI" or "topic/ai"; the prefixes and the punctuation between prefix and value are read from your own tags. Follow the library\'s mix: one of your prefixes when one fits, plain otherwise. Always use a prefix: every new tag gets one, a new prefix being made if none of yours fits. Never use a prefix: every new tag is plain; your existing prefixed tags are still suggested. Use my own examples: new tags copy the form of examples you type, whatever your library does.')
+			.addDropdown(dropdown => dropdown
+				.addOption('mix', 'Follow the library\'s mix')
+				.addOption('always', 'Always use a prefix')
+				.addOption('never', 'Never use a prefix')
+				.addOption('custom', 'Use my own examples')
+				.setValue(resolveNewTagFormat(this.plugin.settings.aiNewTagFormat))
+				.onChange(async (value: AiNewTagFormat) => {
+					this.plugin.settings.aiNewTagFormat = value;
+					await this.plugin.saveSettings();
+					this.display();
+				}));
+
+		if (resolveNewTagFormat(this.plugin.settings.aiNewTagFormat) === 'custom') {
+			new Setting(containerEl)
+				.setName('Example new tags')
+				.setDesc('One or more tags written the way you want new tags to look, separated by commas. The model copies their form, not the tags themselves. While this is empty, the library\'s mix is followed.')
+				.addText(text => {
+					text.inputEl.addClass('cmdspace-eagle-tag-examples-input');
+					text
+						.setPlaceholder('Topic: World of Warcraft, Type: Illustration')
+						.setValue(this.plugin.settings.aiNewTagExamples || '')
+						.onChange(async (value) => {
+							this.plugin.settings.aiNewTagExamples = value;
+							await this.plugin.saveSettings();
+						});
+				});
+		}
 	}
 
 	// With no provider chosen, offer LM Studio if one is running on this computer
@@ -941,11 +1079,6 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 				}));
 
 		this.renderCloudProviderSettings(containerEl);
-	}
-
-	private renderCrossPlatformSection(containerEl: HTMLElement): void {
-		new Setting(containerEl).setName('Cross-platform paths').setHeading();
-		this.renderCrossPlatformSettings(containerEl);
 	}
 
 	private renderFooter(containerEl: HTMLElement): void {
@@ -1381,147 +1514,6 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 			}
 			await this.plugin.saveSettings();
 		})(); });
-	}
-
-	private renderCrossPlatformSettings(containerEl: HTMLElement): void {
-		const infoEl = containerEl.createEl('div', { cls: 'setting-item-description cmds-eagle-info-block' });
-		infoEl.createEl('p', { text: 'For notes that link to local files (the "Local file path" image link type) in a vault you open on more than one computer.' });
-		infoEl.createEl('p', { text: 'Local file links written on one computer are rewritten to match the computer you are on.', cls: 'cmds-eagle-muted' });
-
-		new Setting(containerEl)
-			.setName('Convert file paths between computers')
-			.setDesc('Rewrite file:// links between the computers registered below')
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.enableCrossPlatform)
-				.onChange(async (value) => {
-					this.plugin.settings.enableCrossPlatform = value;
-					await this.plugin.saveSettings();
-					this.display();
-				}));
-
-		if (!this.plugin.settings.enableCrossPlatform) {
-			return;
-		}
-
-		new Setting(containerEl)
-			.setName('Convert when a note is opened')
-			.setDesc('Convert paths automatically each time you open a note, instead of only when you run the convert command')
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.autoConvertCrossPlatformPaths)
-				.onChange(async (value) => {
-					this.plugin.settings.autoConvertCrossPlatformPaths = value;
-					await this.plugin.saveSettings();
-				}));
-
-
-
-		const currentPlatform = process.platform as PlatformType;
-		const currentUsername = this.detectCurrentUsername();
-
-		new Setting(containerEl)
-			.setName('Add current computer')
-			.setDesc(`Detected: ${currentPlatform === 'darwin' ? 'macOS' : 'Windows'} / ${currentUsername}`)
-			.addButton(button => button
-				.setButtonText('Add')
-				.onClick(async () => {
-					const existingIndex = this.plugin.settings.computers.findIndex(
-						c => c.platform === currentPlatform && c.username === currentUsername
-					);
-					
-					if (existingIndex >= 0) {
-						new Notice('This computer is already registered');
-						return;
-					}
-
-					const newProfile: ComputerProfile = {
-						id: `${currentPlatform}-${currentUsername}-${Date.now()}`,
-						name: currentPlatform === 'darwin' ? `Mac (${currentUsername})` : `Windows (${currentUsername})`,
-						platform: currentPlatform,
-						username: currentUsername,
-						subPath: '',
-						eagleLibraryPath: '',
-						isCurrentComputer: true,
-					};
-
-					this.plugin.settings.computers.push(newProfile);
-					await this.plugin.saveSettings();
-					this.display();
-					new Notice('Current computer added');
-				}));
-
-		if (this.plugin.settings.computers.length > 0) {
-			const listContainer = containerEl.createDiv({ cls: 'cmdspace-eagle-computer-list' });
-
-			listContainer.createEl('div', {
-				text: 'Registered Computers',
-				cls: 'cmdspace-eagle-computer-list-title'
-			});
-
-			for (const computer of this.plugin.settings.computers) {
-				const isCurrentComputer = computer.platform === currentPlatform && computer.username === currentUsername;
-				
-				const computerEl = listContainer.createDiv({ cls: 'cmdspace-eagle-computer-item' });
-				if (isCurrentComputer) {
-					computerEl.addClass('is-current');
-				}
-
-				const headerRow = computerEl.createDiv({ attr: { style: 'display: flex; justify-content: space-between; align-items: center; width: 100%;' } });
-
-				const infoDiv = headerRow.createDiv({ attr: { style: 'flex: 1;' } });
-				const platformIcon = computer.platform === 'darwin' ? '🍎' : '🪟';
-				infoDiv.createEl('div', { 
-					text: `${platformIcon} ${computer.name}`,
-					attr: { style: 'font-weight: 500;' }
-				});
-				infoDiv.createEl('div', { 
-					text: `${computer.platform === 'darwin' ? 'macOS' : 'Windows'} • ${computer.username}${isCurrentComputer ? ' (current)' : ''}`,
-					attr: { style: 'font-size: 12px; color: var(--text-muted);' }
-				});
-
-				const deleteBtn = headerRow.createEl('button', { text: '×', cls: 'cmdspace-eagle-computer-delete' });
-
-				const subPathContainer = computerEl.createDiv({ attr: { style: 'margin-top: 8px; width: 100%;' } });
-				subPathContainer.createEl('label', { 
-					text: 'Sub-path (folders between /Users/name/ and sync folder)',
-					attr: { style: 'font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px;' }
-				});
-				const subPathInput = subPathContainer.createEl('input', {
-					type: 'text',
-					value: computer.subPath || '',
-					placeholder: 'e.g., OneDrive or Dropbox/Work',
-					attr: { style: 'width: 100%; padding: 4px 8px; border-radius: 4px; border: 1px solid var(--background-modifier-border);' }
-				});
-				subPathInput.addEventListener('change', () => { void (async () => {
-					const idx = this.plugin.settings.computers.findIndex(c => c.id === computer.id);
-					if (idx >= 0) {
-						this.plugin.settings.computers[idx].subPath = subPathInput.value.trim();
-						await this.plugin.saveSettings();
-					}
-				})(); });
-				deleteBtn.addEventListener('click', () => { void (async () => {
-					this.plugin.settings.computers = this.plugin.settings.computers.filter(c => c.id !== computer.id);
-					await this.plugin.saveSettings();
-					this.display();
-					new Notice('Computer removed');
-				})(); });
-			}
-		}
-	}
-
-	private detectCurrentUsername(): string {
-		const adapter = this.app.vault.adapter as { basePath?: string };
-		const vaultPath = adapter.basePath || '';
-		const platform = String(process.platform);
-
-		if (platform === 'darwin') {
-			const match = vaultPath.match(/^\/Users\/([^/]+)/);
-			if (match) return match[1];
-		} else if (platform === 'win32') {
-			const match = vaultPath.match(/^[A-Za-z]:[/\\]Users[/\\]([^/\\]+)/i);
-			if (match) return match[1];
-		}
-
-		return 'unknown';
 	}
 
 	private renderExtraLinksSettings(containerEl: HTMLElement): void {
