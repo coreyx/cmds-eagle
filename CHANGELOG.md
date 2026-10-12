@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-10-12
+
 ### Added
 - **Hint Templates**: A **Templates** list beside the AI hints box adds a ready-made hint to the box, where it can still be edited. Seven are built in (Subjects, Art style and medium, Characters and people, Places and setting, Series and franchise, Colors and mood, Screenshot), and the list can be renamed, reworded, extended or reset under **Settings → AI → Hint templates**.
 - **Hints Can Steer the Suggestions**: A hint may say what you want as well as what the image is, for example "Only tag the character races". The request now tells the model to follow such instructions.

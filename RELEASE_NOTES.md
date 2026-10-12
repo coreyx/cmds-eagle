@@ -1,5 +1,57 @@
 # Release Notes
 
+## 1.11.0 - 2026-10-12
+
+This release requires Obsidian 1.5.7 or later.
+
+### Decide per Image Whether It Goes to the Cloud
+
+The "Where to save image?" dialog and the "Paste Eagle item" dialog now have an **Also upload to the cloud** toggle, labelled with your provider's name (for example "Also upload to Nextcloud").
+
+* **With it on,** an image saved to Eagle also gets a cloud copy, and the Eagle button reads "Eagle + Nextcloud".
+* **The button's description** always says what the note will link to, so you know before you choose.
+* **It starts from** **Settings → Embedding → Also upload to the cloud** and changes only that image, unless **Remember this choice** is on.
+* **Where there is no dialog** (search, the "Upload to Eagle" menu item, Excalidraw and Canvas), the setting decides.
+
+### What an Embedded Eagle Image Links To
+
+The "Link embedded images to" setting is replaced by a rule applied to each image:
+
+1. **Its cloud copy**, when it has one, whether just uploaded or made earlier.
+2. **Your Custom URL prefix**, when it has no cloud copy.
+3. **The file path on this computer**, when no Custom URL prefix is set. Such a link only displays on this computer, so the dialog says so, settings shows a warning while the prefix is empty, and a notice appears the first time it happens in a session.
+
+**Always use Custom URL prefix** (shown once a prefix is set) links to your own server even when an image has a cloud copy. Use it with **Also upload to the cloud** on if you want every image to have a cloud copy as a share link while your notes load images from your own server.
+
+Your settings are carried over: "Cloud copy" becomes **Also upload to the cloud** on, "Custom URL prefix" keeps your prefix with uploading off, and "Local file path" becomes uploading off.
+
+* **The Custom URL prefix is now empty unless you set it.** It used to hold `https://localhost:8080` even when unused; that unused default is cleared.
+* **If you used "Local file path" and had also typed a prefix,** embeds now use that prefix. Clear the field to keep linking by file path.
+* **Excalidraw and Canvas** get the same link as a note. They cannot use a file path, so with no Custom URL prefix a cloud copy is made even when uploading is off.
+
+### AI Tags: Your Library's Format, and Hints That Steer
+
+* **The tag format is read from your library.** New tags follow the prefix style your own tags use, with its exact punctuation and spacing: `Topic: AI`, `Topic:AI`, `topic/ai`, `Topic - AI` and similar. Ordinary hyphenated tags such as `sci-fi` are not mistaken for prefixes.
+* **New tag format** (under **Settings → AI → Tag suggestions**) decides how a tag that is not in your library yet is written: **Follow the library's mix** (the default), **Always use a prefix**, **Never use a prefix**, or **Use my own examples**, where new tags copy the form of examples you type. The last one also covers a library with no tags yet.
+* **Hints can steer the suggestions.** As well as saying what the image is, a hint can say what you want, for example `Only tag the character races`.
+* **Hint templates.** A **Templates** list beside the AI hints box adds a ready-made hint you can then edit. Seven are built in, and you can rename, reword, add or reset them under **Settings → AI → Hint templates**.
+* **Long tags show in full** when you hover over them, and the Eagle folder dialog is taller so its left pane no longer needs a scrollbar.
+
+### Saving to the Vault
+
+* **"Vault" is hidden by default.** Turn on **Settings → Adding images → Offer the vault as a destination** to show it in the paste dialog. If "Save to vault" was already your saved choice, it is turned on for you and nothing changes.
+* **It now follows Obsidian's settings.** Choosing "Vault" uses your attachment folder, your link style (wikilinks or Markdown) and your path style, names a clipboard image "Pasted image <time>" as Obsidian does, and replaces characters such as `#` that would break the link.
+
+### Cross-Platform Paths Removed
+
+The feature that rewrote `file://` image links between registered computers is gone, along with its command and settings. It only handled libraries inside a user folder on drive `C:`, rewrote note files as they were opened, and could mangle paths. Cloud copies and the Custom URL prefix give links that work on every device without changing your notes. Existing `file://` links in your notes are left as they are.
+
+### Fixes
+
+* **Temporary files no longer pile up in the vault.** Every image sent to Eagle or to the cloud was first copied into a hidden `.eagle-temp` folder and never deleted. A cloud-only upload now removes its copy when it finishes, and copies handed to Eagle are cleared once they are an hour old, including those already there.
+* **"Upload to Eagle"** in the right-click menu now appears on `![[image.png|300]]` and captioned embeds, on embeds whose path has spaces, and on paths containing parentheses.
+* **"Convert all images in note to cloud URLs"** now converts `![[…]]` embeds, vault files whose path has spaces, and `file://` images on Windows. A file embedded several times is uploaded once and every embed of it is replaced.
+
 ## 1.10.0 - 2026-10-11
 
 ### AI Suggestions for Name, Description and Tags
