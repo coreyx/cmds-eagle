@@ -90,6 +90,9 @@ var init_types = __esm({
       imagePasteBehavior: "ask",
       excalidrawIntegration: true,
       excalidrawImportToEagle: true,
+      canvasIntegration: true,
+      canvasImportToEagle: true,
+      canvasNodeType: "text",
       activeCloudProvider: "imghippo",
       searchScope: ["name", "tags"],
       searchFileTypes: [...SUPPORTED_IMAGE_EXTENSIONS],
@@ -818,6 +821,7 @@ var init_api = __esm({
 var modals_exports = {};
 __export(modals_exports, {
   AddFolderMappingModal: () => AddFolderMappingModal,
+  CanvasNodeChoiceModal: () => CanvasNodeChoiceModal,
   EagleFolderModal: () => EagleFolderModal,
   EagleFolderPickerModal: () => EagleFolderPickerModal,
   EagleLinkChoiceModal: () => EagleLinkChoiceModal,
@@ -837,7 +841,7 @@ function flattenEagleFolders(items, parentPath = "") {
   }
   return flattened;
 }
-var import_obsidian2, EagleSearchModal, EagleFolderModal, EagleTagPickerModal, EagleFolderPickerModal, AddFolderMappingModal, ImagePasteChoiceModal, EagleLinkChoiceModal;
+var import_obsidian2, EagleSearchModal, EagleFolderModal, EagleTagPickerModal, EagleFolderPickerModal, AddFolderMappingModal, CanvasNodeChoiceModal, ImagePasteChoiceModal, EagleLinkChoiceModal;
 var init_modals = __esm({
   "src/modals.ts"() {
     import_obsidian2 = require("obsidian");
@@ -2088,6 +2092,51 @@ var init_modals = __esm({
         this.contentEl.empty();
       }
     };
+    CanvasNodeChoiceModal = class extends import_obsidian2.Modal {
+      constructor() {
+        super(...arguments);
+        this.response = { rememberChoice: false };
+      }
+      onOpen() {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.addClass("cmdspace-paste-choice-modal");
+        contentEl.createEl("h2", { text: "Add image to canvas as" });
+        const optionContainer = contentEl.createDiv({ cls: "cmdspace-paste-options" });
+        this.addOption(optionContainer, "text", "Text card", "A card containing the image, with its metadata card when that is enabled.", true);
+        this.addOption(optionContainer, "link", "Link card", "A web card that loads the image address directly.");
+        new import_obsidian2.Setting(contentEl).setName("Remember this choice").setDesc("You can change this later in plugin settings").addToggle((toggle) => {
+          toggle.setValue(false).onChange((value) => {
+            this.response.rememberChoice = value;
+          });
+        });
+      }
+      addOption(containerEl, choice, title, description, primary = false) {
+        const optionBtn = containerEl.createEl("button", {
+          cls: primary ? "cmdspace-paste-option mod-cta" : "cmdspace-paste-option"
+        });
+        optionBtn.createDiv({ cls: "cmdspace-paste-option-title", text: title });
+        optionBtn.createDiv({ cls: "cmdspace-paste-option-desc", text: description });
+        optionBtn.addEventListener("click", () => {
+          this.response.choice = choice;
+          this.close();
+        });
+      }
+      onClose() {
+        var _a, _b;
+        if (this.resolvePromise) {
+          this.resolvePromise({
+            choice: (_a = this.response.choice) != null ? _a : "cancel",
+            rememberChoice: (_b = this.response.rememberChoice) != null ? _b : false
+          });
+        }
+      }
+      getResponse() {
+        return new Promise((resolve) => {
+          this.resolvePromise = resolve;
+        });
+      }
+    };
     ImagePasteChoiceModal = class extends import_obsidian2.Modal {
       constructor(app, descriptions) {
         super(app);
@@ -2877,7 +2926,7 @@ var SETTINGS_TABS = [
   { id: "cloud", label: "Cloud storage", description: "Where image copies are uploaded so they display on your other devices." },
   { id: "adding", label: "Adding images", description: "What happens when you paste or drop a new image into a note." },
   { id: "embedding", label: "Embedding", description: "How images that are in Eagle appear in your notes." },
-  { id: "extras", label: "Extras", description: "Excalidraw support, and using one vault on several computers." }
+  { id: "extras", label: "Extras", description: "Excalidraw and Canvas support, and using one vault on several computers." }
 ];
 var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
   constructor(app, plugin) {
@@ -2912,6 +2961,7 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
         break;
       case "extras":
         this.renderExcalidrawSection(containerEl);
+        this.renderCanvasSection(containerEl);
         this.renderCrossPlatformSection(containerEl);
         break;
     }
@@ -3182,14 +3232,34 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
   }
   renderExcalidrawSection(containerEl) {
     new import_obsidian4.Setting(containerEl).setName("Excalidraw").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("Embed images in Excalidraw via cloud").setDesc("When you paste or drop an image onto an Excalidraw canvas, upload it to your cloud provider and embed the URL instead of saving a vault attachment. Eagle assets are resolved to the original; screenshots are uploaded as-is. Requires the Excalidraw plugin and a configured cloud provider.").addToggle((toggle) => toggle.setValue(this.plugin.settings.excalidrawIntegration).onChange(async (value) => {
+    new import_obsidian4.Setting(containerEl).setName("Embed images in Excalidraw by URL").setDesc("When you paste or drop an image or an Eagle item onto an Excalidraw drawing, embed it from a URL that works on your other devices instead of saving a vault attachment. Uses a cloud copy, or your Custom URL prefix for Eagle items in that mode. Without a way to make such a URL, Excalidraw handles the paste as usual. Requires the Excalidraw plugin.").addToggle((toggle) => toggle.setValue(this.plugin.settings.excalidrawIntegration).onChange(async (value) => {
       this.plugin.settings.excalidrawIntegration = value;
       await this.plugin.saveSettings();
       if (value)
         this.plugin.scanAndAttachExcalidrawContainers();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Also add pasted screenshots to Eagle").setDesc("When pasting a clipboard image (not already in Eagle) onto a canvas, also import it into your Eagle library (into the default folder, if set).").addToggle((toggle) => toggle.setValue(this.plugin.settings.excalidrawImportToEagle).onChange(async (value) => {
+    new import_obsidian4.Setting(containerEl).setName("Also add new images to Eagle").setDesc("Add pasted or dropped images that are not in Eagle yet to your library, using the same folder, tags, source capture and backlink settings as images pasted into a note.").addToggle((toggle) => toggle.setValue(this.plugin.settings.excalidrawImportToEagle).onChange(async (value) => {
       this.plugin.settings.excalidrawImportToEagle = value;
+      await this.plugin.saveSettings();
+    }));
+  }
+  renderCanvasSection(containerEl) {
+    new import_obsidian4.Setting(containerEl).setName("Canvas").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("Embed images in Canvas by URL").setDesc("When you paste or drop an image or an Eagle item onto an Obsidian Canvas, add it as a card that loads the image from a URL that works on your other devices, instead of saving a vault attachment. Without a way to make such a URL, Canvas handles the paste as usual.").addToggle((toggle) => toggle.setValue(this.plugin.settings.canvasIntegration).onChange(async (value) => {
+      this.plugin.settings.canvasIntegration = value;
+      await this.plugin.saveSettings();
+      if (value)
+        this.plugin.scanAndAttachCanvasViews();
+      this.display();
+    }));
+    if (!this.plugin.settings.canvasIntegration)
+      return;
+    new import_obsidian4.Setting(containerEl).setName("Also add new images to Eagle").setDesc("Add pasted or dropped images that are not in Eagle yet to your library, using the same folder, tags, source capture and backlink settings as images pasted into a note.").addToggle((toggle) => toggle.setValue(this.plugin.settings.canvasImportToEagle).onChange(async (value) => {
+      this.plugin.settings.canvasImportToEagle = value;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian4.Setting(containerEl).setName("Card type").setDesc("Text card: a card containing the image, plus its metadata card when that is enabled. Link card: a web card that loads the image address directly.").addDropdown((dropdown) => dropdown.addOption("text", "Text card").addOption("link", "Link card").addOption("ask", "Ask every time").setValue(this.plugin.settings.canvasNodeType).onChange(async (value) => {
+      this.plugin.settings.canvasNodeType = value;
       await this.plugin.saveSettings();
     }));
   }
@@ -4165,6 +4235,7 @@ var ClipboardSourceService = class {
 };
 
 // src/main.ts
+var PORTABLE_URL_FAILED = "Could not get a shareable URL for the image";
 var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
   constructor() {
     super(...arguments);
@@ -4172,6 +4243,7 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     // Set once the "Extra Links not detected" warning has been shown; reset from settings
     this.extraLinksWarningShown = false;
     this.attachedExcalidrawContainers = /* @__PURE__ */ new WeakSet();
+    this.attachedCanvasContainers = /* @__PURE__ */ new WeakSet();
   }
   async onload() {
     console.log(`[Eagle Bridge] Loading plugin v${this.manifest.version}`);
@@ -4285,7 +4357,7 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     this.addRibbonIcon("image", "Eagle Bridge", () => {
       new EagleSearchModal(this.app, this.api, this.settings, (item) => this.uploadEagleItemCloudCopy(item)).open();
     });
-    this.registerExcalidrawIntegration();
+    this.registerSurfaceIntegrations();
   }
   onunload() {
     console.log("[Eagle Bridge] Unloading plugin");
@@ -5105,16 +5177,21 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     return this.settings.imagePasteBehavior !== "local";
   }
   async handleDrop(evt, editor) {
-    var _a;
     const { files } = evt.dataTransfer || { files: null };
     if (!files || !this.allFilesAreImages(files))
       return;
     if (this.settings.imagePasteBehavior === "local") {
       return;
     }
+    const sourceInfo = this.extractDropSourceInfo(evt.dataTransfer);
+    await this.handleDroppedImages(files, editor, sourceInfo);
+  }
+  // Works out where a dropped image came from. Must run synchronously inside the drop
+  // event, while the DataTransfer is still readable.
+  extractDropSourceInfo(dt) {
+    var _a;
     let sourceInfo = null;
-    if (evt.dataTransfer) {
-      const dt = evt.dataTransfer;
+    if (dt) {
       const uriList = dt.getData("text/uri-list");
       const html = dt.getData("text/html");
       const textPlain = (_a = dt.getData("text/plain")) == null ? void 0 : _a.trim();
@@ -5265,6 +5342,9 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
         sourceInfo = { pageUrl, imageUrl, localFilePath, altText };
       }
     }
+    return sourceInfo;
+  }
+  async handleDroppedImages(files, editor, sourceInfo) {
     const fileItems = Array.from(files).map((file) => ({
       file,
       localPath: this.extractLocalFilePath(file, sourceInfo)
@@ -5303,49 +5383,54 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     }
   }
   async saveImageLocally(file, editor) {
-    var _a, _b, _c;
     const activeFile = this.app.workspace.getActiveFile();
     if (!activeFile) {
       new import_obsidian5.Notice("No active file");
       return;
     }
     try {
-      const buffer = await file.arrayBuffer();
-      const timestamp = Date.now();
-      const filename = `${timestamp}-${file.name}`;
-      const vault = this.app.vault;
-      const attachmentFolder = ((_a = vault.getConfig) == null ? void 0 : _a.call(vault, "attachmentFolderPath")) || "";
-      let targetPath;
-      if (attachmentFolder === "./") {
-        const parentFolder = ((_b = activeFile.parent) == null ? void 0 : _b.path) || "";
-        targetPath = parentFolder ? `${parentFolder}/${filename}` : filename;
-      } else if (attachmentFolder.startsWith("./")) {
-        const parentFolder = ((_c = activeFile.parent) == null ? void 0 : _c.path) || "";
-        const relativeFolder = attachmentFolder.slice(2);
-        targetPath = parentFolder ? `${parentFolder}/${relativeFolder}/${filename}` : `${relativeFolder}/${filename}`;
-      } else if (attachmentFolder) {
-        targetPath = `${attachmentFolder}/${filename}`;
-      } else {
-        targetPath = filename;
-      }
-      targetPath = targetPath.replace(/\/+/g, "/");
-      if (targetPath.startsWith("/"))
-        targetPath = targetPath.substring(1);
-      const folderPath = targetPath.substring(0, targetPath.lastIndexOf("/"));
-      if (folderPath) {
-        const folderExists = await this.app.vault.adapter.exists(folderPath);
-        if (!folderExists) {
-          await this.app.vault.createFolder(folderPath);
-        }
-      }
-      await this.app.vault.createBinary(targetPath, buffer);
-      const markdownImage = `![${file.name}](${encodeURI(targetPath)})`;
+      const saved = await this.saveFileToVault(file, activeFile);
+      const markdownImage = `![${file.name}](${encodeURI(saved.path)})`;
       editor.replaceSelection(markdownImage);
       new import_obsidian5.Notice(`Saved locally: ${file.name}`);
     } catch (error) {
       console.error("Failed to save image locally:", error);
       new import_obsidian5.Notice(`Failed to save: ${file.name}`);
     }
+  }
+  // Saves a pasted or dropped file as a vault attachment, following the vault's attachment
+  // folder setting relative to `activeFile`. Throws if it cannot be written.
+  async saveFileToVault(file, activeFile) {
+    var _a, _b, _c;
+    const buffer = await file.arrayBuffer();
+    const timestamp = Date.now();
+    const filename = `${timestamp}-${file.name}`;
+    const vault = this.app.vault;
+    const attachmentFolder = ((_a = vault.getConfig) == null ? void 0 : _a.call(vault, "attachmentFolderPath")) || "";
+    let targetPath;
+    if (attachmentFolder === "./") {
+      const parentFolder = ((_b = activeFile == null ? void 0 : activeFile.parent) == null ? void 0 : _b.path) || "";
+      targetPath = parentFolder ? `${parentFolder}/${filename}` : filename;
+    } else if (attachmentFolder.startsWith("./")) {
+      const parentFolder = ((_c = activeFile == null ? void 0 : activeFile.parent) == null ? void 0 : _c.path) || "";
+      const relativeFolder = attachmentFolder.slice(2);
+      targetPath = parentFolder ? `${parentFolder}/${relativeFolder}/${filename}` : `${relativeFolder}/${filename}`;
+    } else if (attachmentFolder) {
+      targetPath = `${attachmentFolder}/${filename}`;
+    } else {
+      targetPath = filename;
+    }
+    targetPath = targetPath.replace(/\/+/g, "/");
+    if (targetPath.startsWith("/"))
+      targetPath = targetPath.substring(1);
+    const folderPath = targetPath.substring(0, targetPath.lastIndexOf("/"));
+    if (folderPath) {
+      const folderExists = await this.app.vault.adapter.exists(folderPath);
+      if (!folderExists) {
+        await this.app.vault.createFolder(folderPath);
+      }
+    }
+    return this.app.vault.createBinary(targetPath, buffer);
   }
   async uploadFileWithProgress(file, editor, sourceInfo, localFilePath) {
     const pasteId = this.generatePasteId();
@@ -5928,26 +6013,31 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     const originalFileName = `${name}.${ext}`;
     return `${folderPath}/${originalFileName}`;
   }
-  // ── Excalidraw integration ──────────────────────────────────────────────
-  // Obsidian's editor-paste/editor-drop events only fire in the Markdown editor,
-  // not in an Excalidraw canvas. And the Excalidraw plugin's onPasteHook receives
-  // an already-consumed clipboard (no image bytes). So we attach capture-phase
-  // paste/drop listeners on each Excalidraw view container: this intercepts BEFORE
-  // Excalidraw, handles Eagle references (embed the ORIGINAL) and pasted image
-  // files (upload to the cloud provider), and suppresses Excalidraw's default
-  // handling — embedding a portable cloud URL instead of a vault attachment.
-  registerExcalidrawIntegration() {
+  // ── Excalidraw and Canvas integration ───────────────────────────────────
+  // Obsidian's editor-paste/editor-drop events only fire in the Markdown editor, not on
+  // an Excalidraw drawing or an Obsidian Canvas. So pastes and drops on those surfaces are
+  // intercepted before the host handles them: Eagle references and image files are turned
+  // into URLs that work outside this computer (a cloud copy, or the Custom URL prefix
+  // address) and placed on the surface instead of saving a vault attachment.
+  //
+  // An event is only intercepted when such a URL can be made. Otherwise it is left alone,
+  // so the host's own handling still runs and nothing pasted is lost.
+  registerSurfaceIntegrations() {
     this.app.workspace.onLayoutReady(() => {
-      this.scanAndAttachExcalidrawContainers();
+      this.scanAndAttachSurfaces();
       this.registerEvent(this.app.workspace.on("active-leaf-change", () => {
-        this.scanAndAttachExcalidrawContainers();
+        this.scanAndAttachSurfaces();
       }));
       this.registerEvent(this.app.workspace.on("layout-change", () => {
-        this.scanAndAttachExcalidrawContainers();
+        this.scanAndAttachSurfaces();
       }));
     });
   }
-  // Public so the settings toggle can attach to already-open canvases immediately.
+  scanAndAttachSurfaces() {
+    this.scanAndAttachExcalidrawContainers();
+    this.scanAndAttachCanvasViews();
+  }
+  // Public so the settings toggle can attach to already-open drawings immediately.
   scanAndAttachExcalidrawContainers() {
     if (!this.settings.excalidrawIntegration)
       return;
@@ -5961,122 +6051,330 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       this.registerDomEvent(el, "drop", (evt) => this.onExcalidrawPasteOrDrop(evt, view), { capture: true });
     }
   }
+  // Public so the settings toggle can attach to already-open canvases immediately.
+  scanAndAttachCanvasViews() {
+    if (!this.settings.canvasIntegration)
+      return;
+    for (const leaf of this.app.workspace.getLeavesOfType("canvas")) {
+      const view = leaf.view;
+      const el = view == null ? void 0 : view.containerEl;
+      if (!el || this.attachedCanvasContainers.has(el) || !this.getCanvas(view))
+        continue;
+      this.attachedCanvasContainers.add(el);
+      this.registerDomEvent(el, "drop", (evt) => this.onCanvasDrop(evt, view), { capture: true });
+      if (typeof view.handlePaste === "function") {
+        const original = view.handlePaste;
+        view.handlePaste = (evt) => {
+          if (!this.onCanvasPaste(evt, view)) {
+            original.call(view, evt);
+          }
+        };
+        this.register(() => {
+          view.handlePaste = original;
+        });
+      }
+    }
+  }
+  // The view's canvas, if it has the functions we rely on.
+  getCanvas(view) {
+    const canvas = view == null ? void 0 : view.canvas;
+    if (!canvas || typeof canvas.createTextNode !== "function" || typeof canvas.createLinkNode !== "function" || typeof canvas.posFromEvt !== "function") {
+      return null;
+    }
+    return canvas;
+  }
   onExcalidrawPasteOrDrop(evt, view) {
     if (!this.settings.excalidrawIntegration)
       return;
-    const dt = evt instanceof ClipboardEvent ? evt.clipboardData : evt.dataTransfer;
-    if (!dt)
+    const content = this.readSurfaceEvent(evt, this.settings.excalidrawImportToEagle);
+    if (!content)
       return;
-    const text = (dt.getData("text/plain") || "").trim();
-    if (this.isEagleReference(text)) {
-      evt.preventDefault();
-      evt.stopImmediatePropagation();
-      void this.addEagleRefToCanvas(view, text);
-      return;
-    }
-    const images = Array.from(dt.files).filter((f) => f.type.startsWith("image/"));
-    if (images.length > 0) {
-      evt.preventDefault();
-      evt.stopImmediatePropagation();
-      void this.addImageFilesToCanvas(view, images);
-      return;
+    evt.preventDefault();
+    evt.stopImmediatePropagation();
+    void this.addToExcalidraw(view, content);
+  }
+  async addToExcalidraw(view, content) {
+    const progress = new import_obsidian5.Notice("Adding to Excalidraw\u2026", 0);
+    try {
+      const images = await this.resolveSurfaceContent(content, this.settings.excalidrawImportToEagle, false);
+      for (const image of images) {
+        if (image.kind === "url") {
+          await view.addImageWithURL(image.url);
+          new import_obsidian5.Notice(`Added to drawing: ${image.name}`);
+        } else {
+          new import_obsidian5.Notice(`Could not upload ${image.name}. It was saved to ${image.file.path} in your vault instead; drag it onto the drawing from there.`, 1e4);
+        }
+      }
+    } catch (error) {
+      console.error("[Eagle Bridge] Excalidraw embed failed:", error);
+      new import_obsidian5.Notice("Failed to add image to Excalidraw");
+    } finally {
+      progress.hide();
     }
   }
-  isEagleReference(text) {
-    return !!text && (isEagleLocalhostUrl(text) || this.isEagleLibraryPath(text));
+  // Returns true when the paste was taken over, false to let Canvas handle it.
+  onCanvasPaste(evt, view) {
+    var _a, _b;
+    if (!this.settings.canvasIntegration)
+      return false;
+    const canvas = this.getCanvas(view);
+    if (!canvas)
+      return false;
+    const content = this.readSurfaceEvent(evt, this.settings.canvasImportToEagle);
+    if (!content)
+      return false;
+    evt.preventDefault();
+    const pos = canvas.pointer ? { x: canvas.pointer.x, y: canvas.pointer.y } : (_b = (_a = canvas.posCenter) == null ? void 0 : _a.call(canvas)) != null ? _b : { x: 0, y: 0 };
+    void this.addToCanvas(canvas, content, pos);
+    return true;
+  }
+  onCanvasDrop(evt, view) {
+    var _a;
+    if (!this.settings.canvasIntegration)
+      return;
+    const canvas = this.getCanvas(view);
+    if (!canvas)
+      return;
+    const target = evt.target;
+    if ((_a = target == null ? void 0 : target.closest) == null ? void 0 : _a.call(target, ".cm-editor, input, textarea"))
+      return;
+    const content = this.readSurfaceEvent(evt, this.settings.canvasImportToEagle);
+    if (!content)
+      return;
+    evt.preventDefault();
+    evt.stopImmediatePropagation();
+    void this.addToCanvas(canvas, content, canvas.posFromEvt(evt));
+  }
+  async addToCanvas(canvas, content, pos) {
+    const nodeType = await this.chooseCanvasNodeType();
+    if (!nodeType)
+      return;
+    const progress = new import_obsidian5.Notice("Adding to canvas\u2026", 0);
+    try {
+      const images = await this.resolveSurfaceContent(
+        content,
+        this.settings.canvasImportToEagle,
+        nodeType === "text" && this.settings.insertThumbnail
+      );
+      let left = null;
+      for (const image of images) {
+        const size = image.kind === "url" ? this.getCanvasNodeSize(image, nodeType) : { width: 400, height: 300 };
+        if (left === null)
+          left = pos.x - size.width / 2;
+        const center = { x: left + size.width / 2, y: pos.y };
+        left += size.width + 20;
+        if (image.kind === "vault") {
+          if (typeof canvas.createFileNode === "function") {
+            canvas.createFileNode({ pos: center, position: "center", size, file: image.file, focus: false });
+            new import_obsidian5.Notice(`Could not upload ${image.name}. It was added as a vault attachment instead.`, 1e4);
+          } else {
+            new import_obsidian5.Notice(`Could not upload ${image.name}. It was saved to ${image.file.path} in your vault instead.`, 1e4);
+          }
+        } else if (nodeType === "link") {
+          canvas.createLinkNode({ pos: center, position: "center", size, url: image.url, focus: false });
+          new import_obsidian5.Notice(`Added to canvas: ${image.name}`);
+        } else {
+          let text = `![${image.name}](${image.url.replace(/ /g, "%20")})`;
+          if (image.card)
+            text += "\n\n" + image.card;
+          canvas.createTextNode({ pos: center, position: "center", size, text, focus: false });
+          new import_obsidian5.Notice(`Added to canvas: ${image.name}`);
+        }
+      }
+    } catch (error) {
+      console.error("[Eagle Bridge] Canvas embed failed:", error);
+      new import_obsidian5.Notice("Failed to add image to the canvas");
+    } finally {
+      progress.hide();
+    }
+  }
+  // Card type for images added to a canvas, or null when the user cancels the prompt.
+  async chooseCanvasNodeType() {
+    if (this.settings.canvasNodeType !== "ask") {
+      return this.settings.canvasNodeType;
+    }
+    const modal = new CanvasNodeChoiceModal(this.app);
+    modal.open();
+    const response = await modal.getResponse();
+    if (response.choice === "cancel")
+      return null;
+    if (response.rememberChoice) {
+      this.settings.canvasNodeType = response.choice;
+      await this.saveSettings();
+    }
+    return response.choice;
+  }
+  getCanvasNodeSize(image, nodeType) {
+    const hasSize = image.width > 0 && image.height > 0;
+    const width = hasSize ? Math.min(Math.max(image.width, 240), 480) : 400;
+    const imageHeight = hasSize ? Math.round(width * image.height / image.width) : 300;
+    const extra = nodeType === "text" ? image.card ? 130 : 40 : 0;
+    return { width, height: Math.min(imageHeight, 900) + extra };
+  }
+  /**
+   * Decides, synchronously inside the event, whether a paste or drop is something we can
+   * place as a portable image. Returns null to leave the event to the host view, including
+   * when no shareable URL could be made for what was pasted.
+   */
+  readSurfaceEvent(evt, importToEagle) {
+    const isDrop = evt.type === "drop";
+    const dt = isDrop ? evt.dataTransfer : evt.clipboardData;
+    if (!dt)
+      return null;
+    const refs = this.parseEagleReferences(dt.getData("text/plain") || "");
+    if (refs.length > 0) {
+      return this.canShareEagleItems() ? { refs, files: [], isDrop, dropSourceInfo: null } : null;
+    }
+    const files = Array.from(dt.files).filter((f) => f.type.startsWith("image/"));
+    if (files.length > 0 && this.canShareNewImages(importToEagle)) {
+      return { refs: [], files, isDrop, dropSourceInfo: isDrop ? this.extractDropSourceInfo(dt) : null };
+    }
+    return null;
+  }
+  // One Eagle reference per line (item links or library file paths), as Eagle copies them.
+  // Empty unless every line is a reference, so ordinary text is never taken over.
+  parseEagleReferences(text) {
+    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+    if (lines.length === 0)
+      return [];
+    const isReference = (line) => !!extractEagleItemId(line) || this.isEagleLibraryPath(line);
+    return lines.every(isReference) ? lines : [];
+  }
+  // An item already in Eagle can be shared through a cloud copy or the Custom URL prefix.
+  canShareEagleItems() {
+    return this.settings.eagleEmbedUrlMode === "custom-url" || !!this.getActiveCloudProvider();
+  }
+  // A new image needs a cloud provider, unless it is added to Eagle and served from there.
+  canShareNewImages(importToEagle) {
+    return !!this.getActiveCloudProvider() || importToEagle && this.settings.eagleEmbedUrlMode === "custom-url";
+  }
+  async resolveSurfaceContent(content, importToEagle, withCard) {
+    const images = [];
+    for (const ref of content.refs) {
+      const image = await this.resolveEagleReferenceForSurface(ref, withCard);
+      if (image)
+        images.push(image);
+    }
+    if (content.files.length > 0) {
+      let sourceInfo = content.dropSourceInfo;
+      if (!content.isDrop) {
+        try {
+          sourceInfo = await this.clipboardSourceService.getSourceInfo();
+        } catch (e) {
+          console.warn("[Eagle Bridge] Error retrieving clipboard source info:", e);
+        }
+      }
+      for (const file of content.files) {
+        const image = await this.resolveImageFileForSurface(file, sourceInfo, importToEagle, withCard);
+        if (image)
+          images.push(image);
+      }
+    }
+    return images;
   }
   async resolveEagleItemFromReference(text) {
-    if (isEagleLocalhostUrl(text)) {
-      const id = parseEagleLocalhostUrl(text);
-      return id ? this.api.getItemInfo(id) : null;
-    }
-    const idMatch = text.replace(/\\/g, "/").match(/\/([A-Za-z0-9]+)\.info\//);
-    return idMatch ? this.api.getItemInfo(idMatch[1]) : null;
+    var _a;
+    const id = extractEagleItemId(text) || ((_a = text.replace(/\\/g, "/").match(/\/([A-Za-z0-9]+)\.info\//)) == null ? void 0 : _a[1]);
+    return id ? this.api.getItemInfo(id) : null;
   }
-  async getEaglePublicUrl(item) {
-    const existing = this.api.getCloudUrl(item);
-    if (existing)
-      return existing;
-    const provider = this.getActiveCloudProvider();
-    if (!provider) {
-      new import_obsidian5.Notice("No cloud provider configured for Excalidraw embed");
+  /**
+   * URL for an Eagle item that works outside this computer: its Custom URL prefix address
+   * in that mode (nothing is uploaded), otherwise its cloud copy.
+   */
+  async getPortableEagleUrl(item) {
+    if (this.settings.eagleEmbedUrlMode === "custom-url") {
+      const libraryName = await this.api.getLibraryName() || "Main";
+      const url = buildEagleCustomEmbedUrl(
+        this.settings.eagleCustomUrlPrefix,
+        libraryName,
+        item.id,
+        item.name,
+        item.ext,
+        false
+      );
+      return { url, cloudUrl: null };
+    }
+    const cloudUrl = await this.uploadEagleItemCloudCopy(item);
+    return { url: cloudUrl, cloudUrl };
+  }
+  async resolveEagleReferenceForSurface(ref, withCard) {
+    const item = await this.resolveEagleItemFromReference(ref);
+    if (!item) {
+      new import_obsidian5.Notice("Could not fetch item info from Eagle");
       return null;
     }
-    const originalPath = await this.api.getOriginalFilePath(item);
-    if (!originalPath)
+    const { url, cloudUrl } = await this.getPortableEagleUrl(item);
+    if (!url) {
+      new import_obsidian5.Notice(`Could not get a shareable URL for ${item.name}`);
       return null;
-    const result = await provider.upload(originalPath, `${item.name}.${item.ext}`, getMimeType2(item.ext));
-    return result.success && result.publicUrl ? result.publicUrl : null;
-  }
-  async addEagleRefToCanvas(view, text) {
-    try {
-      const item = await this.resolveEagleItemFromReference(text);
-      if (!item) {
-        new import_obsidian5.Notice("Could not fetch item info from Eagle");
-        return;
-      }
-      const url = await this.getEaglePublicUrl(item);
-      if (!url) {
-        new import_obsidian5.Notice(`Could not get a cloud URL for ${item.name}`);
-        return;
-      }
-      await view.addImageWithURL(url);
-      new import_obsidian5.Notice(`Added to canvas: ${item.name}.${item.ext}`);
-    } catch (error) {
-      console.error("[Eagle Bridge] Excalidraw Eagle-ref embed failed:", error);
-      new import_obsidian5.Notice("Failed to add Eagle image to Excalidraw canvas");
     }
-  }
-  async addImageFilesToCanvas(view, files) {
-    const provider = this.getActiveCloudProvider();
-    if (!provider) {
-      new import_obsidian5.Notice("No cloud provider configured for Excalidraw embed");
-      return;
+    let card = null;
+    if (withCard) {
+      const sources = await this.resolveMetadataSources(item);
+      card = this.buildMetadataCard(item, sources, cloudUrl);
     }
-    const providerName = this.getActiveCloudProviderName();
-    for (const file of files) {
+    void this.applyObsidianBacklink(item.id);
+    return {
+      kind: "url",
+      url,
+      name: `${item.name}.${item.ext}`,
+      width: item.width || 0,
+      height: item.height || 0,
+      card
+    };
+  }
+  /**
+   * Turns a pasted or dropped image file into a portable image. Tries, in order: adding it
+   * to Eagle through the normal import (when enabled), uploading it to the cloud provider
+   * on its own, and finally saving it to the vault so the paste is never simply lost.
+   */
+  async resolveImageFileForSurface(file, sourceInfo, importToEagle, withCard) {
+    var _a, _b;
+    const dimensions = await this.getImageDimensions(file);
+    const width = (_a = dimensions == null ? void 0 : dimensions.width) != null ? _a : 0;
+    const height = (_b = dimensions == null ? void 0 : dimensions.height) != null ? _b : 0;
+    const localPath = this.extractLocalFilePath(file, sourceInfo);
+    let tryCloudOnly = true;
+    if (importToEagle) {
+      try {
+        const { url, item, cloudUrl } = await this.uploadImageToEagle(file, sourceInfo, { portable: true });
+        let card = null;
+        if (withCard && item) {
+          const sources = await this.resolveMetadataSources(item, sourceInfo, localPath);
+          card = this.buildMetadataCard(item, sources, cloudUrl);
+        }
+        return { kind: "url", url, name: item ? `${item.name}.${item.ext}` : file.name, width, height, card };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown error";
+        if (message === PORTABLE_URL_FAILED) {
+          new import_obsidian5.Notice(`${file.name} was added to Eagle, but could not be uploaded.`);
+          tryCloudOnly = false;
+        } else if (message !== "Upload cancelled") {
+          new import_obsidian5.Notice(`Could not add ${file.name} to Eagle (${message}). Uploading it without Eagle.`);
+        }
+      }
+    }
+    const provider = tryCloudOnly ? this.getActiveCloudProvider() : null;
+    if (provider) {
       try {
         const tempPath = await this.saveToTempLocation(file);
-        let eagleNote = "";
-        if (this.settings.excalidrawImportToEagle) {
-          const backlinkData = await this.getEagleBacklinkPayload();
-          const filenameWithoutExt = resolveImageFileName(file);
-          const folderResolution = await this.resolveEagleFolderForUpload({
-            file,
-            fileName: filenameWithoutExt
-          });
-          if (!folderResolution.cancelled) {
-            const finalName = folderResolution.name || filenameWithoutExt;
-            const finalTags = folderResolution.tags !== void 0 ? folderResolution.tags : this.getDefaultTags();
-            const finalAnnotation = [folderResolution.annotation, backlinkData.annotation].filter(Boolean).join("\n\n") || void 0;
-            const added = await this.api.addFromPath({
-              path: tempPath,
-              name: finalName,
-              tags: finalTags,
-              folderId: folderResolution.folderId,
-              star: folderResolution.star,
-              ...backlinkData,
-              annotation: finalAnnotation
-            });
-            if (added.success) {
-              eagleNote = " + Eagle";
-              if (added.itemId) {
-                void this.applyObsidianBacklink(added.itemId);
-              }
-            }
-          }
-        }
         const result = await provider.upload(tempPath, file.name, getMimeType2(getExtFromFilename(file.name)));
         if (result.success && result.publicUrl) {
-          await view.addImageWithURL(result.publicUrl);
-          new import_obsidian5.Notice(`Uploaded to ${providerName}${eagleNote} & added to canvas: ${file.name}`);
-        } else {
-          new import_obsidian5.Notice(`Failed to upload ${file.name}`);
+          const card = withCard ? await this.buildCloudMetadataCard(file, result.publicUrl, sourceInfo, localPath) : null;
+          return { kind: "url", url: result.publicUrl, name: file.name, width, height, card };
         }
+        console.error("[Eagle Bridge] Cloud upload failed:", result.error);
       } catch (error) {
-        console.error("[Eagle Bridge] Excalidraw image upload failed:", error);
-        new import_obsidian5.Notice(`Failed to add image to Excalidraw canvas: ${file.name}`);
+        console.error("[Eagle Bridge] Cloud upload failed:", error);
       }
+    }
+    try {
+      const saved = await this.saveFileToVault(file, this.app.workspace.getActiveFile());
+      return { kind: "vault", file: saved, name: file.name };
+    } catch (error) {
+      console.error("[Eagle Bridge] Failed to save image to the vault:", error);
+      new import_obsidian5.Notice(`Failed to add ${file.name}`);
+      return null;
     }
   }
   safeDecodeUri(str) {
@@ -6355,6 +6653,18 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     }
     return this.settings.defaultFolder || void 0;
   }
+  // Advanced URI that opens `file`. Markdown notes are identified by a frontmatter ID so the
+  // link survives renames. Other files, such as .canvas, have no frontmatter (writing one
+  // would corrupt them), so they are linked by path only.
+  async buildBacklinkUri(file) {
+    const vaultName = encodeURIComponent(this.app.vault.getName());
+    const filePath = encodeURIComponent(file.path);
+    if (file.extension !== "md") {
+      return `obsidian://adv-uri?vault=${vaultName}&filepath=${filePath}`;
+    }
+    const id = await this.getOrCreateActiveNoteId(file);
+    return `obsidian://adv-uri?vault=${vaultName}&uid=${id}&filepath=${filePath}`;
+  }
   async getOrCreateActiveNoteId(activeFile) {
     var _a, _b, _c, _d, _e, _f;
     const cache = this.app.metadataCache.getFileCache(activeFile);
@@ -6395,11 +6705,8 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     if (!activeFile) {
       return {};
     }
-    const vaultName = encodeURIComponent(this.app.vault.getName());
-    const filePath = encodeURIComponent(activeFile.path);
     const basename = activeFile.basename;
-    const id = await this.getOrCreateActiveNoteId(activeFile);
-    const advancedUri = `obsidian://adv-uri?vault=${vaultName}&uid=${id}&filepath=${filePath}`;
+    const advancedUri = await this.buildBacklinkUri(activeFile);
     const result = {};
     const dest = this.settings.backlinkDestination;
     if (dest === "url" || dest === "both") {
@@ -6422,11 +6729,8 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     if (!activeFile) {
       return;
     }
-    const vaultName = encodeURIComponent(this.app.vault.getName());
-    const filePath = encodeURIComponent(activeFile.path);
     const basename = activeFile.basename;
-    const id = await this.getOrCreateActiveNoteId(activeFile);
-    const advancedUri = `obsidian://adv-uri?vault=${vaultName}&uid=${id}&filepath=${filePath}`;
+    const advancedUri = await this.buildBacklinkUri(activeFile);
     if (this.settings.backlinkMode === "extra-links") {
       await this.sendExtraLink(itemId, { title: basename, url: advancedUri });
     } else {
@@ -6455,7 +6759,13 @@ ${updates.annotation}`;
       }
     }
   }
-  async uploadImageToEagle(file, sourceInfo) {
+  /**
+   * Adds a pasted or dropped image to Eagle and returns the URL to embed.
+   * With `portable`, the URL must work outside this computer (for Excalidraw and Canvas):
+   * a local file link is never returned, and PORTABLE_URL_FAILED is thrown if none can be
+   * made. The image is already in Eagle at that point.
+   */
+  async uploadImageToEagle(file, sourceInfo, options = {}) {
     const tempPath = await this.saveToTempLocation(file);
     const connected = await this.api.isConnected();
     if (!connected) {
@@ -6533,7 +6843,8 @@ ${updates.annotation}`;
     const nameWithoutExt = item ? item.name : filenameWithoutExt;
     let embedUrl = null;
     let cloudUrl = null;
-    if (this.settings.eagleEmbedUrlMode === "cloud") {
+    const useCloudCopy = this.settings.eagleEmbedUrlMode === "cloud" || options.portable && this.settings.eagleEmbedUrlMode !== "custom-url";
+    if (useCloudCopy) {
       cloudUrl = await this.ensureEagleCloudCopy(
         { id: itemId, name: nameWithoutExt, ext, tags: item == null ? void 0 : item.tags },
         async () => tempPath,
@@ -6552,6 +6863,9 @@ ${updates.annotation}`;
       );
     }
     if (!embedUrl) {
+      if (options.portable) {
+        throw new Error(PORTABLE_URL_FAILED);
+      }
       const localPath = thumbnailPath || tempPath;
       embedUrl = this.pathToFileUrl(localPath);
     }

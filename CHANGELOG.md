@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Canvas Integration**: Pasting or dropping an image or an Eagle item onto an Obsidian Canvas adds it as a card that loads the image by URL instead of saving a vault attachment. A "Card type" setting chooses **Text card** (default; the image plus its metadata card), **Link card**, or **Ask every time**. Cards are placed at the pointer or drop position and sized to the image. Settings are under **Extras → Canvas**, including "Also add new images to Eagle".
+- **Excalidraw: Eagle Link Types and Multiple Items**: `eagle://item/…` links are now recognized on Excalidraw drawings, and several items copied from Eagle at once are all added.
+- **Excalidraw: Custom URL Prefix**: With "Link embedded images to" set to Custom URL prefix, Eagle items are embedded from your own server and nothing is uploaded.
 - **Cloud Copy Embed Mode**: Added a "Cloud copy" option to the image link setting (now "Link embedded images to", previously "Eagle embed URL mode"), the default for new installs. Images added to Eagle are also uploaded to the active cloud provider and the note embeds that URL, so they display on other devices. It applies to paste and drop, search and embed, pasted Eagle links and paths, and converting vault images to Eagle. Without a configured provider, or if the upload fails, the note links to the local file.
 - **Reuse of Existing Cloud Files**: In Cloud copy mode, an image pasted or dropped from the WebDAV server itself (under its Server URL or Public URL) is embedded from its existing location instead of being uploaded again, after checking that the public URL serves it.
 - **One Cloud Copy per Eagle Item**: Embedding the same Eagle item again reuses its cloud copy instead of uploading another one. Each copy is recorded on the item as a "Cloud Copy" link in Eagle's Extra Links, and on WebDAV copies are stored under a stable name (`<Eagle item ID>.<ext>`) that is looked up before uploading. A recorded copy the server reports as deleted is uploaded again.
@@ -15,6 +18,7 @@ All notable changes to this project will be documented in this file.
 - **Docs**: Added a "WebDAV with Nextcloud" section to the `README.md` covering public share setup for embedded images.
 
 ### Changed
+- **Excalidraw Uses the Normal Import**: New images added to Eagle from an Excalidraw drawing now go through the same import as images pasted into a note, so they get the captured source URL, source links and a "Cloud Copy" record, and Eagle items reuse their single cloud copy instead of being uploaded again. A progress notice is shown while an image is being added. "Also add pasted screenshots to Eagle" is renamed **Also add new images to Eagle**.
 - **Settings Reorganized**: The settings are now split into five tabs (Connections, Cloud storage, Adding images, Embedding, Extras) with related options grouped together, and many options have clearer names and descriptions. No setting changed its behaviour or stored value. Notable moves and renames:
   - The metadata card options are together under **Embedding → Metadata card**, and its source-link options no longer disappear when source capture is turned off.
   - "Eagle embed URL mode" is now **Link embedded images to**, "Eagle link paste behavior" is **When pasting an Eagle item**, and "Eagle item link format" is **"Open in Eagle" link format**, all under **Embedding → Image links**.
@@ -27,6 +31,8 @@ All notable changes to this project will be documented in this file.
 - **WebDAV Password Field**: The WebDAV password is now masked in settings.
 
 ### Fixed
+- **Images Lost When Pasting Into Excalidraw**: With no cloud provider set up, or when an upload failed, an image pasted or dropped onto an Excalidraw drawing was discarded. The paste is now left to Excalidraw when no shareable URL can be made, and a failed upload saves the image to the vault instead.
+- **Backlinks From Non-Markdown Files**: Adding a backlink while a `.canvas` (or other non-Markdown) file was active tried to write a note ID into that file's frontmatter. Such files are now linked by path only and never modified.
 - **"No cloud provider configured" With Valid Settings**: Fixed cloud uploads being refused when a provider's credentials were entered in a different order than the settings expected (for example the WebDAV password before the server URL). Whether a provider is configured is now derived from its fields instead of a stored flag.
 - **WebDAV Uploads to Nextcloud Failing With 404**: The upload folder is now created when the server answers 404 as well as 409 for a missing folder, and each level of a nested upload path is created in turn.
 - **WebDAV Public URL Double Slash**: Fixed image links containing `//` when the Public URL or Server URL ended with a slash.

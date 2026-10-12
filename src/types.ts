@@ -92,6 +92,8 @@ export type EagleLinkPasteMode = 'ask' | 'embed' | 'inline';
 
 export type EagleEmbedUrlMode = 'cloud' | 'custom-url' | 'file';
 
+export type CanvasNodeType = 'text' | 'link' | 'ask';
+
 export type EagleItemLinkFormat = 'http' | 'eagle';
 
 export type ImageSourceUrlPriority = 'page-first' | 'image-first' | 'page-only' | 'image-only';
@@ -293,6 +295,9 @@ export interface CMDSPACEEagleSettings {
 	imagePasteBehavior: ImagePasteBehavior;
 	excalidrawIntegration: boolean;
 	excalidrawImportToEagle: boolean;
+	canvasIntegration: boolean;
+	canvasImportToEagle: boolean;
+	canvasNodeType: CanvasNodeType;
 	activeCloudProvider: CloudProviderType;
 	searchScope: SearchScope[];
 	searchFileTypes: string[];
@@ -354,6 +359,9 @@ export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
 	imagePasteBehavior: 'ask',
 	excalidrawIntegration: true,
 	excalidrawImportToEagle: true,
+	canvasIntegration: true,
+	canvasImportToEagle: true,
+	canvasNodeType: 'text',
 	activeCloudProvider: 'imghippo',
 	searchScope: ['name', 'tags'],
 	searchFileTypes: [...SUPPORTED_IMAGE_EXTENSIONS],

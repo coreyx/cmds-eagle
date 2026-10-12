@@ -8,6 +8,7 @@ import {
 	BacklinkMode,
 	EagleLinkPasteMode,
 	EagleEmbedUrlMode,
+	CanvasNodeType,
 	EagleItemLinkFormat,
 	ImageSourceUrlPriority,
 	ExtraLinksImageSource,
@@ -29,7 +30,7 @@ const SETTINGS_TABS: Array<{ id: SettingsTabId; label: string; description: stri
 	{ id: 'cloud', label: 'Cloud storage', description: 'Where image copies are uploaded so they display on your other devices.' },
 	{ id: 'adding', label: 'Adding images', description: 'What happens when you paste or drop a new image into a note.' },
 	{ id: 'embedding', label: 'Embedding', description: 'How images that are in Eagle appear in your notes.' },
-	{ id: 'extras', label: 'Extras', description: 'Excalidraw support, and using one vault on several computers.' },
+	{ id: 'extras', label: 'Extras', description: 'Excalidraw and Canvas support, and using one vault on several computers.' },
 ];
 
 export class CMDSPACEEagleSettingTab extends PluginSettingTab {
@@ -71,6 +72,7 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 				break;
 			case 'extras':
 				this.renderExcalidrawSection(containerEl);
+				this.renderCanvasSection(containerEl);
 				this.renderCrossPlatformSection(containerEl);
 				break;
 		}
@@ -556,28 +558,68 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 		new Setting(containerEl).setName('Excalidraw').setHeading();
 
 		new Setting(containerEl)
-			.setName('Embed images in Excalidraw via cloud')
-			.setDesc('When you paste or drop an image onto an Excalidraw canvas, upload it to your cloud provider and embed the URL instead of saving a vault attachment. Eagle assets are resolved to the original; screenshots are uploaded as-is. Requires the Excalidraw plugin and a configured cloud provider.')
+			.setName('Embed images in Excalidraw by URL')
+			.setDesc('When you paste or drop an image or an Eagle item onto an Excalidraw drawing, embed it from a URL that works on your other devices instead of saving a vault attachment. Uses a cloud copy, or your Custom URL prefix for Eagle items in that mode. Without a way to make such a URL, Excalidraw handles the paste as usual. Requires the Excalidraw plugin.')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.excalidrawIntegration)
 				.onChange(async (value) => {
 					this.plugin.settings.excalidrawIntegration = value;
 					await this.plugin.saveSettings();
-					// Attach to any open canvases now; disabling takes effect immediately
+					// Attach to any open drawings now; disabling takes effect immediately
 					// because the paste/drop handlers no-op when the setting is off.
 					if (value) this.plugin.scanAndAttachExcalidrawContainers();
 				}));
 
 		new Setting(containerEl)
-			.setName('Also add pasted screenshots to Eagle')
-			.setDesc('When pasting a clipboard image (not already in Eagle) onto a canvas, also import it into your Eagle library (into the default folder, if set).')
+			.setName('Also add new images to Eagle')
+			.setDesc('Add pasted or dropped images that are not in Eagle yet to your library, using the same folder, tags, source capture and backlink settings as images pasted into a note.')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.excalidrawImportToEagle)
 				.onChange(async (value) => {
 					this.plugin.settings.excalidrawImportToEagle = value;
 					await this.plugin.saveSettings();
 				}));
+	}
 
+	private renderCanvasSection(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName('Canvas').setHeading();
+
+		new Setting(containerEl)
+			.setName('Embed images in Canvas by URL')
+			.setDesc('When you paste or drop an image or an Eagle item onto an Obsidian Canvas, add it as a card that loads the image from a URL that works on your other devices, instead of saving a vault attachment. Without a way to make such a URL, Canvas handles the paste as usual.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.canvasIntegration)
+				.onChange(async (value) => {
+					this.plugin.settings.canvasIntegration = value;
+					await this.plugin.saveSettings();
+					if (value) this.plugin.scanAndAttachCanvasViews();
+					this.display();
+				}));
+
+		if (!this.plugin.settings.canvasIntegration) return;
+
+		new Setting(containerEl)
+			.setName('Also add new images to Eagle')
+			.setDesc('Add pasted or dropped images that are not in Eagle yet to your library, using the same folder, tags, source capture and backlink settings as images pasted into a note.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.canvasImportToEagle)
+				.onChange(async (value) => {
+					this.plugin.settings.canvasImportToEagle = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Card type')
+			.setDesc('Text card: a card containing the image, plus its metadata card when that is enabled. Link card: a web card that loads the image address directly.')
+			.addDropdown(dropdown => dropdown
+				.addOption('text', 'Text card')
+				.addOption('link', 'Link card')
+				.addOption('ask', 'Ask every time')
+				.setValue(this.plugin.settings.canvasNodeType)
+				.onChange(async (value: CanvasNodeType) => {
+					this.plugin.settings.canvasNodeType = value;
+					await this.plugin.saveSettings();
+				}));
 	}
 
 	private renderSearchSection(containerEl: HTMLElement): void {

@@ -1556,6 +1556,71 @@ export class AddFolderMappingModal extends Modal {
 	}
 }
 
+export interface CanvasNodeChoiceResponse {
+	choice: 'text' | 'link' | 'cancel';
+	rememberChoice: boolean;
+}
+
+export class CanvasNodeChoiceModal extends Modal {
+	private response: Partial<CanvasNodeChoiceResponse> = { rememberChoice: false };
+	private resolvePromise?: (value: CanvasNodeChoiceResponse) => void;
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass('cmdspace-paste-choice-modal');
+
+		contentEl.createEl('h2', { text: 'Add image to canvas as' });
+
+		const optionContainer = contentEl.createDiv({ cls: 'cmdspace-paste-options' });
+
+		this.addOption(optionContainer, 'text', 'Text card', 'A card containing the image, with its metadata card when that is enabled.', true);
+		this.addOption(optionContainer, 'link', 'Link card', 'A web card that loads the image address directly.');
+
+		new Setting(contentEl)
+			.setName('Remember this choice')
+			.setDesc('You can change this later in plugin settings')
+			.addToggle((toggle) => {
+				toggle.setValue(false).onChange((value) => {
+					this.response.rememberChoice = value;
+				});
+			});
+	}
+
+	private addOption(
+		containerEl: HTMLElement,
+		choice: 'text' | 'link',
+		title: string,
+		description: string,
+		primary = false
+	): void {
+		const optionBtn = containerEl.createEl('button', {
+			cls: primary ? 'cmdspace-paste-option mod-cta' : 'cmdspace-paste-option'
+		});
+		optionBtn.createDiv({ cls: 'cmdspace-paste-option-title', text: title });
+		optionBtn.createDiv({ cls: 'cmdspace-paste-option-desc', text: description });
+		optionBtn.addEventListener('click', () => {
+			this.response.choice = choice;
+			this.close();
+		});
+	}
+
+	onClose(): void {
+		if (this.resolvePromise) {
+			this.resolvePromise({
+				choice: this.response.choice ?? 'cancel',
+				rememberChoice: this.response.rememberChoice ?? false,
+			});
+		}
+	}
+
+	getResponse(): Promise<CanvasNodeChoiceResponse> {
+		return new Promise((resolve) => {
+			this.resolvePromise = resolve;
+		});
+	}
+}
+
 export interface ImagePasteChoiceResponse {
 	choice: 'eagle' | 'local' | 'cloud' | 'cancel';
 	rememberChoice: boolean;

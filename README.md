@@ -17,6 +17,7 @@ Eagle Bridge started as a fork of [CMDS Eagle](https://github.com/johnfkoo951/cm
 - **Batch Convert**: Convert all local images in a note to cloud URLs
 - **Cross-Platform Sync**: Automatically convert image paths between Mac and Windows
 - **Excalidraw Integration**: Paste or drop images onto an Excalidraw canvas — Eagle assets embed the original, and clipboard screenshots are uploaded to your cloud provider (and optionally added to your Eagle library) instead of bloating the vault with attachments
+- **Canvas Integration**: Paste or drop images and Eagle items onto an Obsidian Canvas as text or link cards that load the image by URL
 
 ## Installation
 
@@ -115,11 +116,26 @@ Both are under **Settings → Extras → Cross-platform paths**.
 
 Paste or drop images directly onto an Excalidraw canvas and let Eagle handle them:
 
-- **Eagle assets** (copied/dragged from Eagle) resolve to the **original** image (not the thumbnail).
-- **Clipboard screenshots** are uploaded to your active cloud provider and embedded by URL — and, when enabled, added to your Eagle library.
-- Images are embedded as portable cloud URLs, keeping the `.excalidraw` file small instead of storing vault attachments.
+- **Eagle assets** (copied or dragged from Eagle, or pasted as an `eagle://` or localhost item link) resolve to the **original** image (not the thumbnail). Several items copied at once are all added.
+- **New images** such as clipboard screenshots are uploaded to your active cloud provider and embedded by URL. When **Also add new images to Eagle** is on, they go through the same import as images pasted into a note: folder routing, default tags, source capture and backlinks.
+- Images are embedded as portable URLs, keeping the `.excalidraw` file small instead of storing vault attachments. Each Eagle item uses its single cloud copy, or your Custom URL prefix address when that link type is selected.
+- If no portable URL can be made (no cloud provider is set up), Excalidraw handles the paste as it normally would. If an upload fails, the image is saved to your vault instead of being lost.
 
-Requires the [Excalidraw](https://github.com/zsviczian/obsidian-excalidraw-plugin) plugin and a configured cloud provider. Toggle it under **Settings → Extras → Excalidraw**.
+Requires the [Excalidraw](https://github.com/zsviczian/obsidian-excalidraw-plugin) plugin. Toggle it under **Settings → Extras → Excalidraw**.
+
+### Canvas
+
+The same works on an Obsidian Canvas: paste or drop an image or an Eagle item onto the canvas and it is added as a card that loads the image by URL.
+
+- **Card type** (under **Settings → Extras → Canvas**):
+  - **Text card** (default): a card containing the image, followed by its metadata card when that is enabled.
+  - **Link card**: a web card that loads the image address directly.
+  - **Ask every time**: choose per paste.
+- The card is placed at the pointer or drop position and sized to the image. Several images are laid out side by side.
+- Pasting or dropping into a card you are editing is left to that card.
+- As with Excalidraw, Canvas handles the paste itself when no portable URL can be made, and a failed upload falls back to an ordinary vault attachment card.
+
+Canvas support relies on Canvas functions that are not part of Obsidian's public plugin interface. If a future Obsidian version changes them, Eagle Bridge steps aside and Canvas behaves as it does without the plugin.
 
 ## Settings
 
@@ -131,7 +147,7 @@ The settings are organized into five tabs:
 | **Cloud storage** | Which cloud provider to use and its credentials |
 | **Adding images** | Where pasted or dropped images go, the Eagle folder and tags they get, source capture, and backlinks to your notes |
 | **Embedding** | What embedded Eagle images link to, the metadata card, and search defaults |
-| **Extras** | Excalidraw support and cross-platform path conversion |
+| **Extras** | Excalidraw and Canvas support, and cross-platform path conversion |
 
 
 ![Settings](assets/CMDS-eagle6.png)
