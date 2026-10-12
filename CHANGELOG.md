@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
-- **Cloud Copy Embed Mode**: Added a "Cloud copy" option to "Eagle embed URL mode", now the default for new installs. Images added to Eagle are also uploaded to the active cloud provider and the note embeds that URL, so they display on other devices. It applies to paste and drop, search and embed, pasted Eagle links and paths, and converting vault images to Eagle. Without a configured provider, or if the upload fails, the note links to the local file.
+- **Cloud Copy Embed Mode**: Added a "Cloud copy" option to the image link setting (now "Link embedded images to", previously "Eagle embed URL mode"), the default for new installs. Images added to Eagle are also uploaded to the active cloud provider and the note embeds that URL, so they display on other devices. It applies to paste and drop, search and embed, pasted Eagle links and paths, and converting vault images to Eagle. Without a configured provider, or if the upload fails, the note links to the local file.
 - **Reuse of Existing Cloud Files**: In Cloud copy mode, an image pasted or dropped from the WebDAV server itself (under its Server URL or Public URL) is embedded from its existing location instead of being uploaded again, after checking that the public URL serves it.
 - **One Cloud Copy per Eagle Item**: Embedding the same Eagle item again reuses its cloud copy instead of uploading another one. Each copy is recorded on the item as a "Cloud Copy" link in Eagle's Extra Links, and on WebDAV copies are stored under a stable name (`<Eagle item ID>.<ext>`) that is looked up before uploading. A recorded copy the server reports as deleted is uploaded again.
 - **Eagle Extra Links Setting**: Added a "Use Eagle Extra Links" toggle that turns all use of the Extra Links plugin on or off, with its Base URL, a status line that checks for the plugin whenever the settings open, and a "Test" button. When it is on but the plugin cannot be reached, a warning is shown once per session.
@@ -15,8 +15,13 @@ All notable changes to this project will be documented in this file.
 - **Docs**: Added a "WebDAV with Nextcloud" section to the `README.md` covering public share setup for embedded images.
 
 ### Changed
+- **Settings Reorganized**: The settings are now split into five tabs (Connections, Cloud storage, Adding images, Embedding, Extras) with related options grouped together, and many options have clearer names and descriptions. No setting changed its behaviour or stored value. Notable moves and renames:
+  - The metadata card options are together under **Embedding → Metadata card**, and its source-link options no longer disappear when source capture is turned off.
+  - "Eagle embed URL mode" is now **Link embedded images to**, "Eagle link paste behavior" is **When pasting an Eagle item**, and "Eagle item link format" is **"Open in Eagle" link format**, all under **Embedding → Image links**.
+  - "Default image behavior" is now **When pasting or dropping an image**; "Backlink Mode" is **Save backlinks to**; "Active Cloud Provider" is **Cloud provider**.
+  - Re-rendering the settings no longer jumps back to the top of the page.
 - **Paste/Drop Destination Dialog**: The "Where to save image?" dialog now lists **Eagle**, **Vault** and **Cloud only** with a one-line description of what each does, including how the note will link to an Eagle image under the current embed mode.
-- **Pasted Eagle File Paths**: Pasting a file path from inside the Eagle library (what Eagle copies for an image) is now handled exactly like pasting an Eagle item link: it follows "Eagle link paste behavior", honours every embed mode including Custom URL prefix, and adds the Obsidian backlink.
+- **Pasted Eagle File Paths**: Pasting a file path from inside the Eagle library (what Eagle copies for an image) is now handled exactly like pasting an Eagle item link: it follows "When pasting an Eagle item" (previously "Eagle link paste behavior"), honours every embed mode including Custom URL prefix, and adds the Obsidian backlink.
 - **Extra Links Base URL**: Moved from the Obsidian Backlinks section to the new Eagle Extra Links section.
 - **Extra Links Warnings**: A failed backlink no longer shows a notice on every paste; the "not detected" warning appears once per session.
 - **WebDAV Password Field**: The WebDAV password is now masked in settings.

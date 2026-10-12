@@ -2028,7 +2028,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		await this.pasteEagleItem(item, editor);
 	}
 
-	// Inserts an existing Eagle item per "Eagle link paste behavior". Shared by pasted item
+	// Inserts an existing Eagle item per the "When pasting an Eagle item" setting. Shared by pasted item
 	// links and pasted library file paths so both behave the same.
 	private async pasteEagleItem(item: EagleItem, editor: Editor): Promise<void> {
 		let action: 'embed' | 'inline' = 'embed';

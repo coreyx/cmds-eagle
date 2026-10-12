@@ -59,14 +59,14 @@ Search your Eagle library and embed images directly into notes.
 
 When pasting or dropping images, choose where to save them:
 
-- **Eagle**: adds the image to your Eagle library. How the note links to it follows **Settings → Eagle embed URL mode**:
+- **Eagle**: adds the image to your Eagle library. How the note links to it follows **Settings → Embedding → Link embedded images to**:
   - **Cloud copy** (default): uploads a copy to the active cloud provider and embeds that URL, so the image displays on your other devices. If the image was copied from the cloud provider itself (for example while browsing your WebDAV folder in a browser), the existing file is linked instead of uploading a duplicate. Without a configured cloud provider, the note links to the local file.
   - **Custom URL prefix**: links into the Eagle library through your own HTTP/WebDAV server.
   - **Local file path**: links to the file on this computer.
 - **Vault**: saves the image as an attachment in the vault.
 - **Cloud only**: uploads the image to the active cloud provider without adding it to Eagle.
 
-The Eagle embed URL mode also applies when you embed an existing Eagle item from search or by pasting an Eagle link or library file path.
+That setting also applies when you embed an existing Eagle item from search or by pasting an Eagle link or library file path.
 
 Each Eagle item gets one cloud copy. It is recorded on the item as a **Cloud Copy** link in Eagle's Extra Links (when **Use Eagle Extra Links** is on), and on WebDAV it is stored as `<Eagle item ID>.<ext>`, so embedding the same item again reuses the copy instead of uploading a new one.
 
@@ -75,7 +75,7 @@ Each Eagle item gets one cloud copy. It is recorded on the item as a **Cloud Cop
 
 ### Target Folder Routing
 
-Control where newly added images are stored in your Eagle library with 4 workflow options under **Settings → When adding an item to Eagle**:
+Control where newly added images are stored in your Eagle library with 4 workflow options under **Settings → Adding images → When adding an item to Eagle**:
 
 - **Ask**: Prompts before each upload with an interactive Eagle Extension-style split modal:
   - **Left Pane (Metadata & Preview)**: Live thumbnail preview with inset dimensions badge (e.g. `800x600`), 5-star ratings picker, editable "Name" field, "Description" field (pre-populated with HTML `alt` text), removable tag pills, and a dedicated 2-column bulleted Tag Picker popup (`• TagName (Count)`) with search and custom tag creation.
@@ -103,8 +103,10 @@ Use the same Eagle library across Mac and Windows with automatic path conversion
 3. Image paths automatically convert when opening notes on different platforms
 
 **Settings:**
-- `Enable cross-platform path conversion`: Turn on/off the feature
-- `Auto-convert paths on file open`: Automatically convert paths when opening notes
+- `Convert file paths between computers`: Turn on/off the feature
+- `Convert when a note is opened`: Automatically convert paths when opening notes
+
+Both are under **Settings → Extras → Cross-platform paths**.
 
 **Manual conversion:**
 - Command: `Convert cross-platform image paths in current note`
@@ -117,11 +119,19 @@ Paste or drop images directly onto an Excalidraw canvas and let Eagle handle the
 - **Clipboard screenshots** are uploaded to your active cloud provider and embedded by URL — and, when enabled, added to your Eagle library.
 - Images are embedded as portable cloud URLs, keeping the `.excalidraw` file small instead of storing vault attachments.
 
-Requires the [Excalidraw](https://github.com/zsviczian/obsidian-excalidraw-plugin) plugin and a configured cloud provider. Toggle it under **Settings → Excalidraw integration**.
+Requires the [Excalidraw](https://github.com/zsviczian/obsidian-excalidraw-plugin) plugin and a configured cloud provider. Toggle it under **Settings → Extras → Excalidraw**.
 
 ## Settings
 
-Configure your preferred cloud provider and search defaults.
+The settings are organized into five tabs:
+
+| Tab | What it covers |
+|-----|----------------|
+| **Connections** | The Eagle app and the Eagle Extra Links plugin, each with a connection test |
+| **Cloud storage** | Which cloud provider to use and its credentials |
+| **Adding images** | Where pasted or dropped images go, the Eagle folder and tags they get, source capture, and backlinks to your notes |
+| **Embedding** | What embedded Eagle images link to, the metadata card, and search defaults |
+| **Extras** | Excalidraw support and cross-platform path conversion |
 
 
 ![Settings](assets/CMDS-eagle6.png)
@@ -141,24 +151,24 @@ Configure your preferred cloud provider and search defaults.
 
 Obsidian loads embedded images without logging in, so the **Public URL** must serve files to anyone who has the link. Nextcloud's regular WebDAV address (`/remote.php/dav/files/...`) requires a login: uploads through it succeed, but the embedded images will not display. Point the Public URL at a public share link instead. This needs Nextcloud 29 or later, which added the [public share WebDAV endpoint](https://docs.nextcloud.com/server/stable/developer_manual/client_apis/WebDAV/basic.html).
 
-The plugin builds each image link as **Public URL + Upload Path + filename**, so the folder you share must be the *parent* of the upload folder:
+The plugin builds each image link as **Public URL + Upload path + filename**, so the folder you share must be the *parent* of the upload folder:
 
 1. In Nextcloud, create a folder to hold your uploads, for example `Obsidian`.
 2. Share that folder with a **public link**: view only, no password. The link looks like `https://cloud.example.com/s/AbCdEf123`; the last part is the share token.
-3. In **Settings → Eagle Bridge**, set the active cloud provider to **WebDAV** and fill in:
+3. In **Settings → Eagle Bridge → Cloud storage**, set the cloud provider to **WebDAV** and fill in:
 
    | Setting | Value |
    |---------|-------|
    | Server URL | `https://cloud.example.com/remote.php/dav/files/USERNAME/Obsidian` |
    | Username / Password | Your Nextcloud login (an app password is recommended) |
-   | Upload Path | `/eagle-uploads` |
+   | Upload path | `/eagle-uploads` |
    | Public URL | `https://cloud.example.com/public.php/dav/files/AbCdEf123` |
 
    There is no separate setting for the shared folder: it is the last part of the Server URL (`Obsidian` above), and the share token in the Public URL points at that same folder.
 
    You can also paste the share link itself (`https://cloud.example.com/s/AbCdEf123`) as the Public URL; the plugin converts it to the form above when it builds image links. If your Public URL has that shape but is not a Nextcloud share, turn on **Disable Nextcloud share link conversion** to have it used exactly as entered.
 
-4. Click **Test** under **Test Connection**. It checks the server login and that the public share works without a login, without uploading anything.
+4. Click **Test** under **Test connection**. It checks the server login and that the public share works without a login, without uploading anything.
 5. Paste an image and choose **Cloud**. The plugin creates the `eagle-uploads` folder on the first upload.
 6. Open the embedded image URL in a private browser window. If it loads there without a login, it will display in Obsidian.
 

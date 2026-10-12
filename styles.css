@@ -949,6 +949,42 @@
 	flex-shrink: 0;
 }
 
+.cmdspace-eagle-settings-tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	margin-bottom: 12px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.cmdspace-eagle-settings-tab-btn {
+	padding: 8px 12px;
+	height: auto;
+	border: none;
+	border-bottom: 2px solid transparent;
+	border-radius: 0;
+	background: transparent;
+	box-shadow: none;
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.cmdspace-eagle-settings-tab-btn:hover {
+	background: transparent;
+	box-shadow: none;
+	color: var(--text-normal);
+}
+
+.cmdspace-eagle-settings-tab-btn.is-active {
+	border-bottom-color: var(--interactive-accent);
+	color: var(--text-accent);
+	font-weight: 600;
+}
+
+.cmdspace-eagle-settings-tab-desc {
+	margin: 0 0 4px;
+}
+
 .cmdspace-eagle-setting-required {
 	color: var(--text-error) !important;
 	font-weight: 500;

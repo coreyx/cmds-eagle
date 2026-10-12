@@ -2872,27 +2872,89 @@ function getExtFromFilename(filename) {
 
 // src/settings.ts
 init_types();
+var SETTINGS_TABS = [
+  { id: "connections", label: "Connections", description: "How Eagle Bridge reaches Eagle and its Extra Links plugin." },
+  { id: "cloud", label: "Cloud storage", description: "Where image copies are uploaded so they display on your other devices." },
+  { id: "adding", label: "Adding images", description: "What happens when you paste or drop a new image into a note." },
+  { id: "embedding", label: "Embedding", description: "How images that are in Eagle appear in your notes." },
+  { id: "extras", label: "Extras", description: "Excalidraw support, and using one vault on several computers." }
+];
 var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
+    this.activeTab = "connections";
     this.plugin = plugin;
   }
   display() {
     const { containerEl } = this;
+    const scrollTop = containerEl.scrollTop;
     containerEl.empty();
-    new import_obsidian4.Setting(containerEl).setName("Connection").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("Eagle API Base URL").setDesc("The base URL for Eagle's local API (default: http://localhost:41595)").addText((text) => text.setPlaceholder("http://localhost:41595").setValue(this.plugin.settings.eagleApiBaseUrl).onChange(async (value) => {
+    this.renderTabBar(containerEl);
+    switch (this.activeTab) {
+      case "connections":
+        this.renderEagleConnectionSection(containerEl);
+        this.renderExtraLinksSettings(containerEl);
+        break;
+      case "cloud":
+        this.renderCloudSection(containerEl);
+        break;
+      case "adding":
+        this.renderPasteDestinationSection(containerEl);
+        this.renderEagleFolderSection(containerEl);
+        this.renderEagleTagsSection(containerEl);
+        this.renderSourceCaptureSection(containerEl);
+        this.renderBacklinksSection(containerEl);
+        break;
+      case "embedding":
+        this.renderImageLinksSection(containerEl);
+        this.renderMetadataCardSection(containerEl);
+        this.renderSearchSection(containerEl);
+        break;
+      case "extras":
+        this.renderExcalidrawSection(containerEl);
+        this.renderCrossPlatformSection(containerEl);
+        break;
+    }
+    this.renderFooter(containerEl);
+    containerEl.scrollTop = scrollTop;
+  }
+  renderTabBar(containerEl) {
+    const tabBar = containerEl.createDiv({ cls: "cmdspace-eagle-settings-tabs" });
+    for (const tab of SETTINGS_TABS) {
+      const tabBtn = tabBar.createEl("button", {
+        text: tab.label,
+        cls: `cmdspace-eagle-settings-tab-btn ${tab.id === this.activeTab ? "is-active" : ""}`
+      });
+      tabBtn.addEventListener("click", () => {
+        if (tab.id === this.activeTab)
+          return;
+        this.activeTab = tab.id;
+        this.display();
+        containerEl.scrollTop = 0;
+      });
+    }
+    const activeTab = SETTINGS_TABS.find((tab) => tab.id === this.activeTab);
+    if (activeTab) {
+      containerEl.createEl("p", {
+        text: activeTab.description,
+        cls: "setting-item-description cmdspace-eagle-settings-tab-desc"
+      });
+    }
+  }
+  renderEagleConnectionSection(containerEl) {
+    new import_obsidian4.Setting(containerEl).setName("Eagle app").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("Eagle API base URL").setDesc("Address of Eagle's local API (default: http://localhost:41595)").addText((text) => text.setPlaceholder("http://localhost:41595").setValue(this.plugin.settings.eagleApiBaseUrl).onChange(async (value) => {
       this.plugin.settings.eagleApiBaseUrl = value || "http://localhost:41595";
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Connection Timeout").setDesc("Timeout in milliseconds for API requests").addText((text) => text.setPlaceholder("5000").setValue(this.plugin.settings.connectionTimeout.toString()).onChange(async (value) => {
+    new import_obsidian4.Setting(containerEl).setName("Connection timeout").setDesc("How long to wait for Eagle to answer, in milliseconds").addText((text) => text.setPlaceholder("5000").setValue(this.plugin.settings.connectionTimeout.toString()).onChange(async (value) => {
       const num = parseInt(value, 10);
       if (!isNaN(num) && num > 0) {
         this.plugin.settings.connectionTimeout = num;
         await this.plugin.saveSettings();
       }
     }));
-    new import_obsidian4.Setting(containerEl).setName("Test Connection").setDesc("Check if Eagle is running and accessible").addButton((button) => button.setButtonText("Test").onClick(async () => {
+    new import_obsidian4.Setting(containerEl).setName("Test connection").setDesc("Check that Eagle is running and reachable").addButton((button) => button.setButtonText("Test").onClick(async () => {
       const api = new EagleApiService(this.plugin.settings);
       const info = await api.getApplicationInfo();
       if (info) {
@@ -2901,54 +2963,84 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
         new import_obsidian4.Notice("\u2717 Failed to connect to Eagle. Make sure Eagle is running.");
       }
     }));
-    this.renderExtraLinksSettings(containerEl);
-    new import_obsidian4.Setting(containerEl).setName("Image paste/drop behavior").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("Default image behavior").setDesc("What to do when pasting or dropping images").addDropdown((dropdown) => dropdown.addOption("ask", "Ask every time").addOption("eagle", "Always save to Eagle").addOption("local", "Always save to vault").addOption("cloud", "Always upload to cloud only").setValue(this.plugin.settings.imagePasteBehavior).onChange(async (value) => {
+  }
+  renderPasteDestinationSection(containerEl) {
+    new import_obsidian4.Setting(containerEl).setName("Destination").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("When pasting or dropping an image").setDesc('Where a new image is saved. "Ask every time" shows the choices with a description of what each one does.').addDropdown((dropdown) => dropdown.addOption("ask", "Ask every time").addOption("eagle", "Save to Eagle").addOption("local", "Save to vault").addOption("cloud", "Upload to cloud only").setValue(this.plugin.settings.imagePasteBehavior).onChange(async (value) => {
       this.plugin.settings.imagePasteBehavior = value;
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Image source URL capture").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("Capture image source URL on paste").setDesc("When an image copied from a web browser is pasted into Obsidian, automatically extract its origin URL and pass it to Eagle.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableImageSourceUrl).onChange(async (value) => {
+  }
+  renderSourceCaptureSection(containerEl) {
+    new import_obsidian4.Setting(containerEl).setName("Image source").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("Capture where an image came from").setDesc("When you paste or drop an image from a web browser, record the page and image URLs it came from and pass them to Eagle.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableImageSourceUrl).onChange(async (value) => {
       this.plugin.settings.enableImageSourceUrl = value;
       await this.plugin.saveSettings();
       this.display();
     }));
     if (this.plugin.settings.enableImageSourceUrl) {
-      new import_obsidian4.Setting(containerEl).setName("Source URL priority (Eagle website field)").setDesc("Choose which URL is pushed to Eagle's primary website / origin link field.").addDropdown((dropdown) => dropdown.addOption("page-first", "Webpage URL (fallback to image URL)").addOption("image-first", "Direct image URL (fallback to webpage URL)").addOption("page-only", "Webpage URL only").addOption("image-only", "Direct image URL only").setValue(this.plugin.settings.imageSourceUrlPriority).onChange(async (value) => {
+      new import_obsidian4.Setting(containerEl).setName("URL saved as the Eagle website").setDesc("Which captured URL goes into the item's website field in Eagle.").addDropdown((dropdown) => dropdown.addOption("page-first", "Webpage URL (fallback to image URL)").addOption("image-first", "Direct image URL (fallback to webpage URL)").addOption("page-only", "Webpage URL only").addOption("image-only", "Direct image URL only").setValue(this.plugin.settings.imageSourceUrlPriority).onChange(async (value) => {
         this.plugin.settings.imageSourceUrlPriority = value;
         await this.plugin.saveSettings();
       }));
-      new import_obsidian4.Setting(containerEl).setName("Add image source to Extra Links").setDesc("Push the captured image source URLs into Eagle's Extra Links panel alongside any Obsidian backlinks. Requires Extra Links plugin for Eagle." + (this.plugin.settings.enableExtraLinks ? "" : " Eagle Extra Links is currently turned off, so nothing is added.")).addDropdown((dropdown) => dropdown.addOption("none", "None (do not add to Extra Links)").addOption("page", "Page URL only").addOption("image", "Image src URL only").addOption("both", "Both Page URL and Image src").setValue(this.plugin.settings.extraLinksImageSource).onChange(async (value) => {
+      new import_obsidian4.Setting(containerEl).setName("Save source links to Extra Links").setDesc("Also list the captured URLs in the item's Extra Links panel in Eagle." + (this.plugin.settings.enableExtraLinks ? "" : " Eagle Extra Links is turned off (Connections tab), so nothing is saved.")).addDropdown((dropdown) => dropdown.addOption("none", "None").addOption("page", "Page URL").addOption("image", "Image URL").addOption("both", "Page URL and image URL").setValue(this.plugin.settings.extraLinksImageSource).onChange(async (value) => {
         this.plugin.settings.extraLinksImageSource = value;
         await this.plugin.saveSettings();
       }));
-      new import_obsidian4.Setting(containerEl).setName("Include source in metadata card").setDesc("When embedding an image with metadata card enabled, include a clickable markdown link to the captured source URL.").addDropdown((dropdown) => dropdown.addOption("none", "None (do not include source)").addOption("page", "Page URL only").addOption("image", "Direct image URL only").addOption("both", "Both Page URL and Direct image URL").setValue(this.plugin.settings.includeSourceInMetadataCard).onChange(async (value) => {
-        this.plugin.settings.includeSourceInMetadataCard = value;
-        await this.plugin.saveSettings();
-      }));
-      new import_obsidian4.Setting(containerEl).setName("Include local file source in metadata card").setDesc("When embedding an image dragged or pasted from File Explorer or Finder, include a clickable file:// link to the original local file.").addToggle((toggle) => toggle.setValue(this.plugin.settings.includeLocalSourceInMetadataCard).onChange(async (value) => {
-        this.plugin.settings.includeLocalSourceInMetadataCard = value;
-        await this.plugin.saveSettings();
-      }));
     }
-    new import_obsidian4.Setting(containerEl).setName("Eagle link paste").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("Eagle link paste behavior").setDesc("What to do when pasting an Eagle item link into a note").addDropdown((dropdown) => dropdown.addOption("ask", "Always ask").addOption("embed", "Embed image").addOption("inline", "Inline link").setValue(this.plugin.settings.eagleLinkPasteMode).onChange(async (value) => {
-      this.plugin.settings.eagleLinkPasteMode = value;
-      await this.plugin.saveSettings();
-    }));
-    new import_obsidian4.Setting(containerEl).setName("Eagle embed URL mode").setDesc("How notes link to images stored in Eagle. Cloud copy uploads a copy to the active cloud provider so the image displays on your other devices; without a configured provider it falls back to the local file path.").addDropdown((dropdown) => dropdown.addOption("cloud", "Cloud copy (active cloud provider)").addOption("custom-url", "Custom URL prefix (HTTP / WebDAV)").addOption("file", "Local file path (file://)").setValue(this.plugin.settings.eagleEmbedUrlMode).onChange(async (value) => {
+  }
+  renderImageLinksSection(containerEl) {
+    new import_obsidian4.Setting(containerEl).setName("Image links").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("Link embedded images to").setDesc("What an embedded Eagle image points to. Cloud copy uploads a copy to your cloud provider so the image displays on your other devices. Custom URL prefix links into the Eagle library through your own web server. Local file path only works on this computer.").addDropdown((dropdown) => dropdown.addOption("cloud", "Cloud copy").addOption("custom-url", "Custom URL prefix").addOption("file", "Local file path").setValue(this.plugin.settings.eagleEmbedUrlMode).onChange(async (value) => {
       this.plugin.settings.eagleEmbedUrlMode = value;
       await this.plugin.saveSettings();
       this.display();
     }));
+    if (this.plugin.settings.eagleEmbedUrlMode === "cloud") {
+      const activeProvider = this.plugin.settings.cloudProviders[this.plugin.settings.activeCloudProvider];
+      if (!activeProvider || !isCloudProviderConfigured(activeProvider)) {
+        containerEl.createEl("p", {
+          text: "No cloud provider is set up yet, so embeds link to the local file. Set one up in the Cloud storage tab.",
+          cls: "setting-item-description cmdspace-eagle-setting-required"
+        });
+      }
+    }
     if (this.plugin.settings.eagleEmbedUrlMode === "custom-url") {
-      new import_obsidian4.Setting(containerEl).setName("Custom URL prefix").setDesc("Base URL for serving Eagle library files over HTTP/WebDAV (e.g. https://localhost:8080)").addText((text) => text.setPlaceholder("https://localhost:8080").setValue(this.plugin.settings.eagleCustomUrlPrefix).onChange(async (value) => {
+      new import_obsidian4.Setting(containerEl).setName("Custom URL prefix").setDesc("Address of the web or WebDAV server that serves your Eagle library folder (e.g. https://localhost:8080)").addText((text) => text.setPlaceholder("https://localhost:8080").setValue(this.plugin.settings.eagleCustomUrlPrefix).onChange(async (value) => {
         this.plugin.settings.eagleCustomUrlPrefix = value.trim() || "https://localhost:8080";
         await this.plugin.saveSettings();
       }));
     }
+    new import_obsidian4.Setting(containerEl).setName("When pasting an Eagle item").setDesc("What to insert when you paste an Eagle item link, or an image copied inside Eagle.").addDropdown((dropdown) => dropdown.addOption("ask", "Ask every time").addOption("embed", "Embed the image").addOption("inline", "Insert a link").setValue(this.plugin.settings.eagleLinkPasteMode).onChange(async (value) => {
+      this.plugin.settings.eagleLinkPasteMode = value;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian4.Setting(containerEl).setName('"Open in Eagle" link format').setDesc("Format of links that open an item in Eagle, used in metadata cards and inserted links.").addDropdown((dropdown) => dropdown.addOption("http", "HTTP (http://localhost:41595/item?id=\u2026)").addOption("eagle", "Eagle protocol (eagle://item/\u2026)").setValue(this.plugin.settings.eagleItemLinkFormat).onChange(async (value) => {
+      this.plugin.settings.eagleItemLinkFormat = value;
+      await this.plugin.saveSettings();
+    }));
+  }
+  renderMetadataCardSection(containerEl) {
+    new import_obsidian4.Setting(containerEl).setName("Metadata card").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("Include metadata card").setDesc("Add a short card below each embedded image with its type, size, dimensions, tags and links. Images uploaded straight to the cloud have no tags or Eagle link.").addToggle((toggle) => toggle.setValue(this.plugin.settings.insertThumbnail).onChange(async (value) => {
+      this.plugin.settings.insertThumbnail = value;
+      await this.plugin.saveSettings();
+      this.display();
+    }));
+    if (!this.plugin.settings.insertThumbnail)
+      return;
+    new import_obsidian4.Setting(containerEl).setName("Source links in the card").setDesc("Link back to where the image came from: the web page, the image file on that page, or both.").addDropdown((dropdown) => dropdown.addOption("none", "None").addOption("page", "Page URL").addOption("image", "Image URL").addOption("both", "Page URL and image URL").setValue(this.plugin.settings.includeSourceInMetadataCard).onChange(async (value) => {
+      this.plugin.settings.includeSourceInMetadataCard = value;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian4.Setting(containerEl).setName("Local file link in the card").setDesc("For images dragged or pasted from File Explorer or Finder, link to the original file on this computer.").addToggle((toggle) => toggle.setValue(this.plugin.settings.includeLocalSourceInMetadataCard).onChange(async (value) => {
+      this.plugin.settings.includeLocalSourceInMetadataCard = value;
+      await this.plugin.saveSettings();
+    }));
+  }
+  renderEagleFolderSection(containerEl) {
     new import_obsidian4.Setting(containerEl).setName("Eagle folder").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("When adding an item to Eagle").setDesc("Choose how newly added images and attachments are routed to folders in your Eagle library.").addDropdown((dropdown) => dropdown.addOption("ask", "Ask").addOption("target", "Add to Target Folder").addOption("mirror", "Mirror Obsidian Folder Hierarchy").addOption("map", "Use Folder Map").setValue(this.plugin.settings.addFolderMode || (this.plugin.settings.enableDefaultFolder ? "target" : "target")).onChange(async (value) => {
+    new import_obsidian4.Setting(containerEl).setName("When adding an item to Eagle").setDesc("Which folder in your Eagle library new images go into.").addDropdown((dropdown) => dropdown.addOption("ask", "Ask").addOption("target", "Add to Target Folder").addOption("mirror", "Mirror Obsidian Folder Hierarchy").addOption("map", "Use Folder Map").setValue(this.plugin.settings.addFolderMode || (this.plugin.settings.enableDefaultFolder ? "target" : "target")).onChange(async (value) => {
       this.plugin.settings.addFolderMode = value;
       await this.plugin.saveSettings();
       this.display();
@@ -3040,30 +3132,34 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
         emptyEl.createEl("p", { text: 'No folder mappings configured yet. Click "Add Folder Mapping" to create one.', cls: "cmds-eagle-muted" });
       }
     }
+  }
+  renderEagleTagsSection(containerEl) {
     new import_obsidian4.Setting(containerEl).setName("Eagle tags").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("Add default tags to new Eagle attachments").setDesc("Automatically append specific tags to images you paste or drop into Eagle.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableDefaultTags).onChange(async (value) => {
+    new import_obsidian4.Setting(containerEl).setName("Add default tags").setDesc("Tag every image you paste or drop into Eagle with the tags below.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableDefaultTags).onChange(async (value) => {
       this.plugin.settings.enableDefaultTags = value;
       await this.plugin.saveSettings();
       this.display();
     }));
     if (this.plugin.settings.enableDefaultTags) {
-      new import_obsidian4.Setting(containerEl).setName("Default Tags").setDesc("Comma-separated list of tags to add (e.g. obsidian, reference)").addText((text) => text.setPlaceholder("obsidian, reference").setValue(this.plugin.settings.defaultTags).onChange(async (value) => {
+      new import_obsidian4.Setting(containerEl).setName("Default tags").setDesc("Comma-separated list of tags to add (e.g. obsidian, reference)").addText((text) => text.setPlaceholder("obsidian, reference").setValue(this.plugin.settings.defaultTags).onChange(async (value) => {
         this.plugin.settings.defaultTags = value;
         await this.plugin.saveSettings();
       }));
     }
-    new import_obsidian4.Setting(containerEl).setName("Obsidian Backlinks").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("Add Obsidian backlink to Eagle attachments").setDesc("Automatically generate an Advanced URI backlink to the current note when adding or pasting Eagle items.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableBacklinks).onChange(async (value) => {
+  }
+  renderBacklinksSection(containerEl) {
+    new import_obsidian4.Setting(containerEl).setName("Backlinks to your notes").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("Add a backlink to the note").setDesc("When an image is added to Eagle or an Eagle item is pasted, save a link on the item that opens the note it was used in. Uses the Advanced URI plugin.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableBacklinks).onChange(async (value) => {
       this.plugin.settings.enableBacklinks = value;
       await this.plugin.saveSettings();
       this.display();
     }));
     if (this.plugin.settings.enableBacklinks) {
-      new import_obsidian4.Setting(containerEl).setName("UID field in frontmatter").setDesc(`Frontmatter property used to identify the note for Advanced URI linking (matches Advanced URI's "UID field"). Defaults to "id".`).addText((text) => text.setPlaceholder("id").setValue(this.plugin.settings.frontmatterIdField).onChange(async (value) => {
+      new import_obsidian4.Setting(containerEl).setName("Note ID property").setDesc('Frontmatter property that identifies the note, so the link survives renames. Must match the "UID field" setting in Advanced URI. Created on the note if missing. Defaults to "id".').addText((text) => text.setPlaceholder("id").setValue(this.plugin.settings.frontmatterIdField).onChange(async (value) => {
         this.plugin.settings.frontmatterIdField = value.trim() || "id";
         await this.plugin.saveSettings();
       }));
-      new import_obsidian4.Setting(containerEl).setName("Backlink Mode").setDesc("Choose how backlinks are registered with Eagle").addDropdown((dropdown) => dropdown.addOption("extra-links", "Eagle Extra Links Plugin (REST API)").addOption("legacy", "Eagle Native Fields (Website / Note)").setValue(this.plugin.settings.backlinkMode).onChange(async (value) => {
+      new import_obsidian4.Setting(containerEl).setName("Save backlinks to").setDesc("Extra Links keeps backlinks in their own panel in Eagle. Eagle's own fields puts them in the item's website or notes field instead.").addDropdown((dropdown) => dropdown.addOption("extra-links", "Eagle Extra Links").addOption("legacy", "Eagle's own fields").setValue(this.plugin.settings.backlinkMode).onChange(async (value) => {
         this.plugin.settings.backlinkMode = value;
         await this.plugin.saveSettings();
         this.display();
@@ -3071,19 +3167,21 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
       if (this.plugin.settings.backlinkMode === "extra-links") {
         if (!this.plugin.settings.enableExtraLinks) {
           const pausedEl = containerEl.createEl("p", {
-            text: "Eagle Extra Links is turned off, so no backlinks are being saved. Turn it on above, or switch the backlink mode to Eagle Native Fields.",
+            text: "Eagle Extra Links is turned off, so no backlinks are being saved. Turn it on in the Connections tab, or save backlinks to Eagle's own fields.",
             cls: "setting-item-description cmdspace-eagle-setting-required"
           });
           pausedEl.style.marginTop = "0";
         }
       } else {
-        new import_obsidian4.Setting(containerEl).setName("Backlink Destination").setDesc("Where should the backlink be saved in Eagle?").addDropdown((dropdown) => dropdown.addOption("url", "URL/Link Field").addOption("note", "Note/Annotation Field").addOption("both", "Both").setValue(this.plugin.settings.backlinkDestination).onChange(async (value) => {
+        new import_obsidian4.Setting(containerEl).setName("Eagle field").setDesc("Which of the item's fields in Eagle receives the backlink.").addDropdown((dropdown) => dropdown.addOption("url", "Website (URL)").addOption("note", "Notes").addOption("both", "Both").setValue(this.plugin.settings.backlinkDestination).onChange(async (value) => {
           this.plugin.settings.backlinkDestination = value;
           await this.plugin.saveSettings();
         }));
       }
     }
-    new import_obsidian4.Setting(containerEl).setName("Excalidraw integration").setHeading();
+  }
+  renderExcalidrawSection(containerEl) {
+    new import_obsidian4.Setting(containerEl).setName("Excalidraw").setHeading();
     new import_obsidian4.Setting(containerEl).setName("Embed images in Excalidraw via cloud").setDesc("When you paste or drop an image onto an Excalidraw canvas, upload it to your cloud provider and embed the URL instead of saving a vault attachment. Eagle assets are resolved to the original; screenshots are uploaded as-is. Requires the Excalidraw plugin and a configured cloud provider.").addToggle((toggle) => toggle.setValue(this.plugin.settings.excalidrawIntegration).onChange(async (value) => {
       this.plugin.settings.excalidrawIntegration = value;
       await this.plugin.saveSettings();
@@ -3094,25 +3192,25 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
       this.plugin.settings.excalidrawImportToEagle = value;
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Search & embed").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("Include metadata card").setDesc("Add metadata (type, size, tags, Eagle link) below the image when embedding. Images uploaded straight to the cloud get type, size, dimensions and source links.").addToggle((toggle) => toggle.setValue(this.plugin.settings.insertThumbnail).onChange(async (value) => {
-      this.plugin.settings.insertThumbnail = value;
-      await this.plugin.saveSettings();
-    }));
-    new import_obsidian4.Setting(containerEl).setName("Eagle item link format").setDesc('Choose the link format for opening items in Eagle (used in metadata cards, link cards, and inline links). Default is HTTP localhost URL (e.g. http://localhost:41595/item?id=UUID); "eagle://" protocol remains available.').addDropdown((dropdown) => dropdown.addOption("http", "HTTP URL (http://localhost:41595/item?id=UUID)").addOption("eagle", "Eagle Protocol (eagle://item/UUID)").setValue(this.plugin.settings.eagleItemLinkFormat).onChange(async (value) => {
-      this.plugin.settings.eagleItemLinkFormat = value;
-      await this.plugin.saveSettings();
-    }));
+  }
+  renderSearchSection(containerEl) {
+    new import_obsidian4.Setting(containerEl).setName("Search").setDesc('Defaults for the "Search Eagle library and embed" command. You can still change them in the search window.').setHeading();
     this.renderSearchFiltersSettings(containerEl);
-    new import_obsidian4.Setting(containerEl).setName("Cloud storage provider").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("Active Cloud Provider").setDesc("Select which cloud storage to use for image uploads").addDropdown((dropdown) => dropdown.addOption("r2", "Cloudflare R2").addOption("imghippo", "ImgHippo (Free)").addOption("s3", "Amazon S3").addOption("webdav", "WebDAV (Synology/NAS)").addOption("custom", "Custom Server").setValue(this.plugin.settings.activeCloudProvider).onChange(async (value) => {
+  }
+  renderCloudSection(containerEl) {
+    new import_obsidian4.Setting(containerEl).setName("Provider").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("Cloud provider").setDesc("The service images are uploaded to. Only the selected provider is used; its settings appear below.").addDropdown((dropdown) => dropdown.addOption("r2", "Cloudflare R2").addOption("imghippo", "ImgHippo (Free)").addOption("s3", "Amazon S3").addOption("webdav", "WebDAV (Synology/NAS)").addOption("custom", "Custom Server").setValue(this.plugin.settings.activeCloudProvider).onChange(async (value) => {
       this.plugin.settings.activeCloudProvider = value;
       await this.plugin.saveSettings();
       this.display();
     }));
     this.renderCloudProviderSettings(containerEl);
-    new import_obsidian4.Setting(containerEl).setName("Cross-platform sync").setHeading();
+  }
+  renderCrossPlatformSection(containerEl) {
+    new import_obsidian4.Setting(containerEl).setName("Cross-platform paths").setHeading();
     this.renderCrossPlatformSettings(containerEl);
+  }
+  renderFooter(containerEl) {
     containerEl.createEl("hr", { attr: { style: "margin: 24px 0; border: none; border-top: 1px solid var(--background-modifier-border);" } });
     const footerEl = containerEl.createEl("div", { attr: { style: "text-align: center; color: var(--text-muted); font-size: 12px;" } });
     footerEl.createEl("div", { text: `Eagle Bridge v${this.plugin.manifest.version}`, attr: { style: "margin-bottom: 8px;" } });
@@ -3190,7 +3288,7 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
       this.plugin.settings.cloudProviders.imghippo.apiKey = value.trim();
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Test Connection").setDesc("Verify API key is valid").addButton((button) => button.setButtonText("Test").onClick(async () => {
+    new import_obsidian4.Setting(containerEl).setName("Test connection").setDesc("Check that an API key has been entered").addButton((button) => button.setButtonText("Test").onClick(async () => {
       const config = this.plugin.settings.cloudProviders.imghippo;
       if (!config.apiKey) {
         new import_obsidian4.Notice("\u2717 Please enter an API key first");
@@ -3232,7 +3330,7 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
       text: "Works with Synology NAS, Nextcloud, ownCloud, or any WebDAV server.",
       cls: "setting-item-description"
     });
-    new import_obsidian4.Setting(containerEl).setName("Server URL").addText((text) => text.setPlaceholder("https://nas.example.com/webdav").setValue(this.plugin.settings.cloudProviders.webdav.serverUrl).onChange(async (value) => {
+    new import_obsidian4.Setting(containerEl).setName("Server URL").setDesc("WebDAV address that uploads are sent to. It requires your login.").addText((text) => text.setPlaceholder("https://nas.example.com/webdav").setValue(this.plugin.settings.cloudProviders.webdav.serverUrl).onChange(async (value) => {
       this.plugin.settings.cloudProviders.webdav.serverUrl = value.trim();
       await this.plugin.saveSettings();
     }));
@@ -3247,11 +3345,11 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian4.Setting(containerEl).setName("Upload Path").setDesc("Directory path for uploads").addText((text) => text.setPlaceholder("/eagle-uploads").setValue(this.plugin.settings.cloudProviders.webdav.uploadPath).onChange(async (value) => {
+    new import_obsidian4.Setting(containerEl).setName("Upload path").setDesc("Folder under the Server URL that uploads go into. Created if it does not exist.").addText((text) => text.setPlaceholder("/eagle-uploads").setValue(this.plugin.settings.cloudProviders.webdav.uploadPath).onChange(async (value) => {
       this.plugin.settings.cloudProviders.webdav.uploadPath = value.trim() || "/eagle-uploads";
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Public URL").setDesc("Public URL prefix for accessing uploaded files. A Nextcloud public share link (https://host/s/TOKEN) is converted automatically.").addText((text) => text.setPlaceholder("https://public.example.com").setValue(this.plugin.settings.cloudProviders.webdav.publicUrl).onChange(async (value) => {
+    new import_obsidian4.Setting(containerEl).setName("Public URL").setDesc("Address that notes use to display uploaded files. It must work without a login. A Nextcloud public share link (https://host/s/TOKEN) is converted automatically.").addText((text) => text.setPlaceholder("https://public.example.com").setValue(this.plugin.settings.cloudProviders.webdav.publicUrl).onChange(async (value) => {
       this.plugin.settings.cloudProviders.webdav.publicUrl = value.trim();
       await this.plugin.saveSettings();
     }));
@@ -3259,7 +3357,7 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
       this.plugin.settings.cloudProviders.webdav.disableShareLinkConversion = value;
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Test Connection").setDesc("Check the server login and, for a Nextcloud share, that the Public URL works without a login. Nothing is uploaded.").addButton((button) => button.setButtonText("Test").onClick(async () => {
+    new import_obsidian4.Setting(containerEl).setName("Test connection").setDesc("Check the server login and, for a Nextcloud share, that the Public URL works without a login. Nothing is uploaded.").addButton((button) => button.setButtonText("Test").onClick(async () => {
       button.setDisabled(true);
       try {
         const provider = new WebDAVProvider(this.plugin.settings.cloudProviders.webdav);
@@ -3409,9 +3507,9 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
   }
   renderCrossPlatformSettings(containerEl) {
     const infoEl = containerEl.createEl("div", { cls: "setting-item-description cmds-eagle-info-block" });
-    infoEl.createEl("p", { text: "Enable this to use the same vault on multiple computers (macOS/Windows)." });
-    infoEl.createEl("p", { text: "File paths will be automatically converted based on the current computer.", cls: "cmds-eagle-muted" });
-    new import_obsidian4.Setting(containerEl).setName("Enable cross-platform path conversion").setDesc("Convert file:// paths between registered computers").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableCrossPlatform).onChange(async (value) => {
+    infoEl.createEl("p", { text: 'For notes that link to local files (the "Local file path" image link type) in a vault you open on more than one computer.' });
+    infoEl.createEl("p", { text: "Local file links written on one computer are rewritten to match the computer you are on.", cls: "cmds-eagle-muted" });
+    new import_obsidian4.Setting(containerEl).setName("Convert file paths between computers").setDesc("Rewrite file:// links between the computers registered below").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableCrossPlatform).onChange(async (value) => {
       this.plugin.settings.enableCrossPlatform = value;
       await this.plugin.saveSettings();
       this.display();
@@ -3419,7 +3517,7 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
     if (!this.plugin.settings.enableCrossPlatform) {
       return;
     }
-    new import_obsidian4.Setting(containerEl).setName("Auto-convert paths on file open").setDesc("Automatically convert cross-platform paths when opening a note").addToggle((toggle) => toggle.setValue(this.plugin.settings.autoConvertCrossPlatformPaths).onChange(async (value) => {
+    new import_obsidian4.Setting(containerEl).setName("Convert when a note is opened").setDesc("Convert paths automatically each time you open a note, instead of only when you run the convert command").addToggle((toggle) => toggle.setValue(this.plugin.settings.autoConvertCrossPlatformPaths).onChange(async (value) => {
       this.plugin.settings.autoConvertCrossPlatformPaths = value;
       await this.plugin.saveSettings();
     }));
@@ -3527,12 +3625,12 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
     }));
     if (!this.plugin.settings.enableExtraLinks)
       return;
-    new import_obsidian4.Setting(containerEl).setName("Eagle Extra Links Base URL").setDesc("Address of the Extra Links plugin's server in Eagle (default: http://127.0.0.1:41598)").addText((text) => text.setPlaceholder("http://127.0.0.1:41598").setValue(this.plugin.settings.extraLinksBaseUrl).onChange(async (value) => {
+    new import_obsidian4.Setting(containerEl).setName("Extra Links base URL").setDesc("Address of the Extra Links plugin's server in Eagle (default: http://127.0.0.1:41598)").addText((text) => text.setPlaceholder("http://127.0.0.1:41598").setValue(this.plugin.settings.extraLinksBaseUrl).onChange(async (value) => {
       this.plugin.settings.extraLinksBaseUrl = value.trim() || "http://127.0.0.1:41598";
       this.plugin.extraLinksWarningShown = false;
       await this.plugin.saveSettings();
     }));
-    const statusSetting = new import_obsidian4.Setting(containerEl).setName("Test Connection").setDesc("Checking for the Extra Links plugin\u2026");
+    const statusSetting = new import_obsidian4.Setting(containerEl).setName("Test connection").setDesc("Checking for the Extra Links plugin\u2026");
     const check = async (notify) => {
       const api = new EagleApiService(this.plugin.settings);
       const health = await api.checkExtraLinks(this.plugin.settings.extraLinksBaseUrl);
@@ -5708,7 +5806,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     }
     await this.pasteEagleItem(item, editor);
   }
-  // Inserts an existing Eagle item per "Eagle link paste behavior". Shared by pasted item
+  // Inserts an existing Eagle item per the "When pasting an Eagle item" setting. Shared by pasted item
   // links and pasted library file paths so both behave the same.
   async pasteEagleItem(item, editor) {
     let action = "embed";

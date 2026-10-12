@@ -1,7 +1,7 @@
 import { App, PluginSettingTab, Setting, Notice } from 'obsidian';
 import CMDSPACELinkEagle from './main';
 import { EagleApiService } from './api';
-import { WebDAVProvider } from './cloud-providers';
+import { WebDAVProvider, isCloudProviderConfigured } from './cloud-providers';
 import { 
 	CloudProviderType, 
 	ImagePasteBehavior,
@@ -22,8 +22,19 @@ import {
 	PlatformType,
 } from './types';
 
+type SettingsTabId = 'connections' | 'cloud' | 'adding' | 'embedding' | 'extras';
+
+const SETTINGS_TABS: Array<{ id: SettingsTabId; label: string; description: string }> = [
+	{ id: 'connections', label: 'Connections', description: 'How Eagle Bridge reaches Eagle and its Extra Links plugin.' },
+	{ id: 'cloud', label: 'Cloud storage', description: 'Where image copies are uploaded so they display on your other devices.' },
+	{ id: 'adding', label: 'Adding images', description: 'What happens when you paste or drop a new image into a note.' },
+	{ id: 'embedding', label: 'Embedding', description: 'How images that are in Eagle appear in your notes.' },
+	{ id: 'extras', label: 'Extras', description: 'Excalidraw support, and using one vault on several computers.' },
+];
+
 export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 	plugin: CMDSPACELinkEagle;
+	private activeTab: SettingsTabId = 'connections';
 
 	constructor(app: App, plugin: CMDSPACELinkEagle) {
 		super(app, plugin);
@@ -32,13 +43,72 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 
 	display(): void {
 		const { containerEl } = this;
+		// Many settings re-render the page to show or hide dependent options; keep the scroll position
+		const scrollTop = containerEl.scrollTop;
 		containerEl.empty();
 
-		new Setting(containerEl).setName('Connection').setHeading();
+		this.renderTabBar(containerEl);
+
+		switch (this.activeTab) {
+			case 'connections':
+				this.renderEagleConnectionSection(containerEl);
+				this.renderExtraLinksSettings(containerEl);
+				break;
+			case 'cloud':
+				this.renderCloudSection(containerEl);
+				break;
+			case 'adding':
+				this.renderPasteDestinationSection(containerEl);
+				this.renderEagleFolderSection(containerEl);
+				this.renderEagleTagsSection(containerEl);
+				this.renderSourceCaptureSection(containerEl);
+				this.renderBacklinksSection(containerEl);
+				break;
+			case 'embedding':
+				this.renderImageLinksSection(containerEl);
+				this.renderMetadataCardSection(containerEl);
+				this.renderSearchSection(containerEl);
+				break;
+			case 'extras':
+				this.renderExcalidrawSection(containerEl);
+				this.renderCrossPlatformSection(containerEl);
+				break;
+		}
+
+		this.renderFooter(containerEl);
+		containerEl.scrollTop = scrollTop;
+	}
+
+	private renderTabBar(containerEl: HTMLElement): void {
+		const tabBar = containerEl.createDiv({ cls: 'cmdspace-eagle-settings-tabs' });
+		for (const tab of SETTINGS_TABS) {
+			const tabBtn = tabBar.createEl('button', {
+				text: tab.label,
+				cls: `cmdspace-eagle-settings-tab-btn ${tab.id === this.activeTab ? 'is-active' : ''}`,
+			});
+			tabBtn.addEventListener('click', () => {
+				if (tab.id === this.activeTab) return;
+				this.activeTab = tab.id;
+				this.display();
+				containerEl.scrollTop = 0;
+			});
+		}
+
+		const activeTab = SETTINGS_TABS.find(tab => tab.id === this.activeTab);
+		if (activeTab) {
+			containerEl.createEl('p', {
+				text: activeTab.description,
+				cls: 'setting-item-description cmdspace-eagle-settings-tab-desc',
+			});
+		}
+	}
+
+	private renderEagleConnectionSection(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName('Eagle app').setHeading();
 
 		new Setting(containerEl)
-			.setName('Eagle API Base URL')
-			.setDesc('The base URL for Eagle\'s local API (default: http://localhost:41595)')
+			.setName('Eagle API base URL')
+			.setDesc('Address of Eagle\'s local API (default: http://localhost:41595)')
 			.addText(text => text
 				.setPlaceholder('http://localhost:41595')
 				.setValue(this.plugin.settings.eagleApiBaseUrl)
@@ -48,8 +118,8 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName('Connection Timeout')
-			.setDesc('Timeout in milliseconds for API requests')
+			.setName('Connection timeout')
+			.setDesc('How long to wait for Eagle to answer, in milliseconds')
 			.addText(text => text
 				.setPlaceholder('5000')
 				.setValue(this.plugin.settings.connectionTimeout.toString())
@@ -62,8 +132,8 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName('Test Connection')
-			.setDesc('Check if Eagle is running and accessible')
+			.setName('Test connection')
+			.setDesc('Check that Eagle is running and reachable')
 			.addButton(button => button
 				.setButtonText('Test')
 				.onClick(async () => {
@@ -76,29 +146,33 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 					}
 				}));
 
-		this.renderExtraLinksSettings(containerEl);
+	}
 
-		new Setting(containerEl).setName('Image paste/drop behavior').setHeading();
+	private renderPasteDestinationSection(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName('Destination').setHeading();
 
 		new Setting(containerEl)
-			.setName('Default image behavior')
-			.setDesc('What to do when pasting or dropping images')
+			.setName('When pasting or dropping an image')
+			.setDesc('Where a new image is saved. "Ask every time" shows the choices with a description of what each one does.')
 			.addDropdown(dropdown => dropdown
 				.addOption('ask', 'Ask every time')
-				.addOption('eagle', 'Always save to Eagle')
-				.addOption('local', 'Always save to vault')
-				.addOption('cloud', 'Always upload to cloud only')
+				.addOption('eagle', 'Save to Eagle')
+				.addOption('local', 'Save to vault')
+				.addOption('cloud', 'Upload to cloud only')
 				.setValue(this.plugin.settings.imagePasteBehavior)
 				.onChange(async (value: ImagePasteBehavior) => {
 					this.plugin.settings.imagePasteBehavior = value;
 					await this.plugin.saveSettings();
 				}));
 
-		new Setting(containerEl).setName('Image source URL capture').setHeading();
+	}
+
+	private renderSourceCaptureSection(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName('Image source').setHeading();
 
 		new Setting(containerEl)
-			.setName('Capture image source URL on paste')
-			.setDesc('When an image copied from a web browser is pasted into Obsidian, automatically extract its origin URL and pass it to Eagle.')
+			.setName('Capture where an image came from')
+			.setDesc('When you paste or drop an image from a web browser, record the page and image URLs it came from and pass them to Eagle.')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.enableImageSourceUrl)
 				.onChange(async (value) => {
@@ -109,8 +183,8 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 
 		if (this.plugin.settings.enableImageSourceUrl) {
 			new Setting(containerEl)
-				.setName('Source URL priority (Eagle website field)')
-				.setDesc('Choose which URL is pushed to Eagle\'s primary website / origin link field.')
+				.setName('URL saved as the Eagle website')
+				.setDesc('Which captured URL goes into the item\'s website field in Eagle.')
 				.addDropdown(dropdown => dropdown
 					.addOption('page-first', 'Webpage URL (fallback to image URL)')
 					.addOption('image-first', 'Direct image URL (fallback to webpage URL)')
@@ -123,67 +197,33 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 					}));
 
 			new Setting(containerEl)
-				.setName('Add image source to Extra Links')
-				.setDesc('Push the captured image source URLs into Eagle\'s Extra Links panel alongside any Obsidian backlinks. Requires Extra Links plugin for Eagle.'
-					+ (this.plugin.settings.enableExtraLinks ? '' : ' Eagle Extra Links is currently turned off, so nothing is added.'))
+				.setName('Save source links to Extra Links')
+				.setDesc('Also list the captured URLs in the item\'s Extra Links panel in Eagle.'
+					+ (this.plugin.settings.enableExtraLinks ? '' : ' Eagle Extra Links is turned off (Connections tab), so nothing is saved.'))
 				.addDropdown(dropdown => dropdown
-					.addOption('none', 'None (do not add to Extra Links)')
-					.addOption('page', 'Page URL only')
-					.addOption('image', 'Image src URL only')
-					.addOption('both', 'Both Page URL and Image src')
+					.addOption('none', 'None')
+					.addOption('page', 'Page URL')
+					.addOption('image', 'Image URL')
+					.addOption('both', 'Page URL and image URL')
 					.setValue(this.plugin.settings.extraLinksImageSource)
 					.onChange(async (value: ExtraLinksImageSource) => {
 						this.plugin.settings.extraLinksImageSource = value;
 						await this.plugin.saveSettings();
 					}));
 
-			new Setting(containerEl)
-				.setName('Include source in metadata card')
-				.setDesc('When embedding an image with metadata card enabled, include a clickable markdown link to the captured source URL.')
-				.addDropdown(dropdown => dropdown
-					.addOption('none', 'None (do not include source)')
-					.addOption('page', 'Page URL only')
-					.addOption('image', 'Direct image URL only')
-					.addOption('both', 'Both Page URL and Direct image URL')
-					.setValue(this.plugin.settings.includeSourceInMetadataCard)
-					.onChange(async (value: MetadataCardImageSource) => {
-						this.plugin.settings.includeSourceInMetadataCard = value;
-						await this.plugin.saveSettings();
-					}));
-
-			new Setting(containerEl)
-				.setName('Include local file source in metadata card')
-				.setDesc('When embedding an image dragged or pasted from File Explorer or Finder, include a clickable file:// link to the original local file.')
-				.addToggle(toggle => toggle
-					.setValue(this.plugin.settings.includeLocalSourceInMetadataCard)
-					.onChange(async (value) => {
-						this.plugin.settings.includeLocalSourceInMetadataCard = value;
-						await this.plugin.saveSettings();
-					}));
 		}
+	}
 
-		new Setting(containerEl).setName('Eagle link paste').setHeading();
-
-		new Setting(containerEl)
-			.setName('Eagle link paste behavior')
-			.setDesc('What to do when pasting an Eagle item link into a note')
-			.addDropdown(dropdown => dropdown
-				.addOption('ask', 'Always ask')
-				.addOption('embed', 'Embed image')
-				.addOption('inline', 'Inline link')
-				.setValue(this.plugin.settings.eagleLinkPasteMode)
-				.onChange(async (value: EagleLinkPasteMode) => {
-					this.plugin.settings.eagleLinkPasteMode = value;
-					await this.plugin.saveSettings();
-				}));
+	private renderImageLinksSection(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName('Image links').setHeading();
 
 		new Setting(containerEl)
-			.setName('Eagle embed URL mode')
-			.setDesc('How notes link to images stored in Eagle. Cloud copy uploads a copy to the active cloud provider so the image displays on your other devices; without a configured provider it falls back to the local file path.')
+			.setName('Link embedded images to')
+			.setDesc('What an embedded Eagle image points to. Cloud copy uploads a copy to your cloud provider so the image displays on your other devices. Custom URL prefix links into the Eagle library through your own web server. Local file path only works on this computer.')
 			.addDropdown(dropdown => dropdown
-				.addOption('cloud', 'Cloud copy (active cloud provider)')
-				.addOption('custom-url', 'Custom URL prefix (HTTP / WebDAV)')
-				.addOption('file', 'Local file path (file://)')
+				.addOption('cloud', 'Cloud copy')
+				.addOption('custom-url', 'Custom URL prefix')
+				.addOption('file', 'Local file path')
 				.setValue(this.plugin.settings.eagleEmbedUrlMode)
 				.onChange(async (value: EagleEmbedUrlMode) => {
 					this.plugin.settings.eagleEmbedUrlMode = value;
@@ -191,10 +231,20 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 					this.display();
 				}));
 
+		if (this.plugin.settings.eagleEmbedUrlMode === 'cloud') {
+			const activeProvider = this.plugin.settings.cloudProviders[this.plugin.settings.activeCloudProvider];
+			if (!activeProvider || !isCloudProviderConfigured(activeProvider)) {
+				containerEl.createEl('p', {
+					text: 'No cloud provider is set up yet, so embeds link to the local file. Set one up in the Cloud storage tab.',
+					cls: 'setting-item-description cmdspace-eagle-setting-required',
+				});
+			}
+		}
+
 		if (this.plugin.settings.eagleEmbedUrlMode === 'custom-url') {
 			new Setting(containerEl)
 				.setName('Custom URL prefix')
-				.setDesc('Base URL for serving Eagle library files over HTTP/WebDAV (e.g. https://localhost:8080)')
+				.setDesc('Address of the web or WebDAV server that serves your Eagle library folder (e.g. https://localhost:8080)')
 				.addText(text => text
 					.setPlaceholder('https://localhost:8080')
 					.setValue(this.plugin.settings.eagleCustomUrlPrefix)
@@ -204,11 +254,79 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 					}));
 		}
 
+		new Setting(containerEl)
+			.setName('When pasting an Eagle item')
+			.setDesc('What to insert when you paste an Eagle item link, or an image copied inside Eagle.')
+			.addDropdown(dropdown => dropdown
+				.addOption('ask', 'Ask every time')
+				.addOption('embed', 'Embed the image')
+				.addOption('inline', 'Insert a link')
+				.setValue(this.plugin.settings.eagleLinkPasteMode)
+				.onChange(async (value: EagleLinkPasteMode) => {
+					this.plugin.settings.eagleLinkPasteMode = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('"Open in Eagle" link format')
+			.setDesc('Format of links that open an item in Eagle, used in metadata cards and inserted links.')
+			.addDropdown(dropdown => dropdown
+				.addOption('http', 'HTTP (http://localhost:41595/item?id=…)')
+				.addOption('eagle', 'Eagle protocol (eagle://item/…)')
+				.setValue(this.plugin.settings.eagleItemLinkFormat)
+				.onChange(async (value: EagleItemLinkFormat) => {
+					this.plugin.settings.eagleItemLinkFormat = value;
+					await this.plugin.saveSettings();
+				}));
+	}
+
+	private renderMetadataCardSection(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName('Metadata card').setHeading();
+
+		new Setting(containerEl)
+			.setName('Include metadata card')
+			.setDesc('Add a short card below each embedded image with its type, size, dimensions, tags and links. Images uploaded straight to the cloud have no tags or Eagle link.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.insertThumbnail)
+				.onChange(async (value) => {
+					this.plugin.settings.insertThumbnail = value;
+					await this.plugin.saveSettings();
+					this.display();
+				}));
+
+		if (!this.plugin.settings.insertThumbnail) return;
+
+		new Setting(containerEl)
+			.setName('Source links in the card')
+			.setDesc('Link back to where the image came from: the web page, the image file on that page, or both.')
+			.addDropdown(dropdown => dropdown
+				.addOption('none', 'None')
+				.addOption('page', 'Page URL')
+				.addOption('image', 'Image URL')
+				.addOption('both', 'Page URL and image URL')
+				.setValue(this.plugin.settings.includeSourceInMetadataCard)
+				.onChange(async (value: MetadataCardImageSource) => {
+					this.plugin.settings.includeSourceInMetadataCard = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Local file link in the card')
+			.setDesc('For images dragged or pasted from File Explorer or Finder, link to the original file on this computer.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.includeLocalSourceInMetadataCard)
+				.onChange(async (value) => {
+					this.plugin.settings.includeLocalSourceInMetadataCard = value;
+					await this.plugin.saveSettings();
+				}));
+	}
+
+	private renderEagleFolderSection(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName('Eagle folder').setHeading();
 
 		new Setting(containerEl)
 			.setName('When adding an item to Eagle')
-			.setDesc('Choose how newly added images and attachments are routed to folders in your Eagle library.')
+			.setDesc('Which folder in your Eagle library new images go into.')
 			.addDropdown(dropdown => dropdown
 				.addOption('ask', 'Ask')
 				.addOption('target', 'Add to Target Folder')
@@ -338,11 +456,14 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 			}
 		}
 
+	}
+
+	private renderEagleTagsSection(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName('Eagle tags').setHeading();
 
 		new Setting(containerEl)
-			.setName('Add default tags to new Eagle attachments')
-			.setDesc('Automatically append specific tags to images you paste or drop into Eagle.')
+			.setName('Add default tags')
+			.setDesc('Tag every image you paste or drop into Eagle with the tags below.')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.enableDefaultTags)
 				.onChange(async (value) => {
@@ -353,7 +474,7 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 
 		if (this.plugin.settings.enableDefaultTags) {
 			new Setting(containerEl)
-				.setName('Default Tags')
+				.setName('Default tags')
 				.setDesc('Comma-separated list of tags to add (e.g. obsidian, reference)')
 				.addText(text => text
 					.setPlaceholder('obsidian, reference')
@@ -364,11 +485,14 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 					}));
 		}
 
-		new Setting(containerEl).setName('Obsidian Backlinks').setHeading();
+	}
+
+	private renderBacklinksSection(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName('Backlinks to your notes').setHeading();
 
 		new Setting(containerEl)
-			.setName('Add Obsidian backlink to Eagle attachments')
-			.setDesc('Automatically generate an Advanced URI backlink to the current note when adding or pasting Eagle items.')
+			.setName('Add a backlink to the note')
+			.setDesc('When an image is added to Eagle or an Eagle item is pasted, save a link on the item that opens the note it was used in. Uses the Advanced URI plugin.')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.enableBacklinks)
 				.onChange(async (value) => {
@@ -379,8 +503,8 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 
 		if (this.plugin.settings.enableBacklinks) {
 			new Setting(containerEl)
-				.setName('UID field in frontmatter')
-				.setDesc('Frontmatter property used to identify the note for Advanced URI linking (matches Advanced URI\'s "UID field"). Defaults to "id".')
+				.setName('Note ID property')
+				.setDesc('Frontmatter property that identifies the note, so the link survives renames. Must match the "UID field" setting in Advanced URI. Created on the note if missing. Defaults to "id".')
 				.addText(text => text
 					.setPlaceholder('id')
 					.setValue(this.plugin.settings.frontmatterIdField)
@@ -390,11 +514,11 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 					}));
 
 			new Setting(containerEl)
-				.setName('Backlink Mode')
-				.setDesc('Choose how backlinks are registered with Eagle')
+				.setName('Save backlinks to')
+				.setDesc('Extra Links keeps backlinks in their own panel in Eagle. Eagle\'s own fields puts them in the item\'s website or notes field instead.')
 				.addDropdown(dropdown => dropdown
-					.addOption('extra-links', 'Eagle Extra Links Plugin (REST API)')
-					.addOption('legacy', 'Eagle Native Fields (Website / Note)')
+					.addOption('extra-links', 'Eagle Extra Links')
+					.addOption('legacy', 'Eagle\'s own fields')
 					.setValue(this.plugin.settings.backlinkMode)
 					.onChange(async (value: BacklinkMode) => {
 						this.plugin.settings.backlinkMode = value;
@@ -405,18 +529,18 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 			if (this.plugin.settings.backlinkMode === 'extra-links') {
 				if (!this.plugin.settings.enableExtraLinks) {
 					const pausedEl = containerEl.createEl('p', {
-						text: 'Eagle Extra Links is turned off, so no backlinks are being saved. Turn it on above, or switch the backlink mode to Eagle Native Fields.',
+						text: 'Eagle Extra Links is turned off, so no backlinks are being saved. Turn it on in the Connections tab, or save backlinks to Eagle\'s own fields.',
 						cls: 'setting-item-description cmdspace-eagle-setting-required',
 					});
 					pausedEl.style.marginTop = '0';
 				}
 			} else {
 				new Setting(containerEl)
-					.setName('Backlink Destination')
-					.setDesc('Where should the backlink be saved in Eagle?')
+					.setName('Eagle field')
+					.setDesc('Which of the item\'s fields in Eagle receives the backlink.')
 					.addDropdown(dropdown => dropdown
-						.addOption('url', 'URL/Link Field')
-						.addOption('note', 'Note/Annotation Field')
+						.addOption('url', 'Website (URL)')
+						.addOption('note', 'Notes')
 						.addOption('both', 'Both')
 						.setValue(this.plugin.settings.backlinkDestination)
 						.onChange(async (value: 'url' | 'note' | 'both') => {
@@ -426,7 +550,10 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 			}
 		}
 
-		new Setting(containerEl).setName('Excalidraw integration').setHeading();
+	}
+
+	private renderExcalidrawSection(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName('Excalidraw').setHeading();
 
 		new Setting(containerEl)
 			.setName('Embed images in Excalidraw via cloud')
@@ -451,37 +578,23 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		new Setting(containerEl).setName('Search & embed').setHeading();
+	}
 
+	private renderSearchSection(containerEl: HTMLElement): void {
 		new Setting(containerEl)
-			.setName('Include metadata card')
-			.setDesc('Add metadata (type, size, tags, Eagle link) below the image when embedding. Images uploaded straight to the cloud get type, size, dimensions and source links.')
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.insertThumbnail)
-				.onChange(async (value) => {
-					this.plugin.settings.insertThumbnail = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(containerEl)
-			.setName('Eagle item link format')
-			.setDesc('Choose the link format for opening items in Eagle (used in metadata cards, link cards, and inline links). Default is HTTP localhost URL (e.g. http://localhost:41595/item?id=UUID); "eagle://" protocol remains available.')
-			.addDropdown(dropdown => dropdown
-				.addOption('http', 'HTTP URL (http://localhost:41595/item?id=UUID)')
-				.addOption('eagle', 'Eagle Protocol (eagle://item/UUID)')
-				.setValue(this.plugin.settings.eagleItemLinkFormat)
-				.onChange(async (value: EagleItemLinkFormat) => {
-					this.plugin.settings.eagleItemLinkFormat = value;
-					await this.plugin.saveSettings();
-				}));
+			.setName('Search')
+			.setDesc('Defaults for the "Search Eagle library and embed" command. You can still change them in the search window.')
+			.setHeading();
 
 		this.renderSearchFiltersSettings(containerEl);
+	}
 
-		new Setting(containerEl).setName('Cloud storage provider').setHeading();
+	private renderCloudSection(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName('Provider').setHeading();
 
 		new Setting(containerEl)
-			.setName('Active Cloud Provider')
-			.setDesc('Select which cloud storage to use for image uploads')
+			.setName('Cloud provider')
+			.setDesc('The service images are uploaded to. Only the selected provider is used; its settings appear below.')
 			.addDropdown(dropdown => dropdown
 				.addOption('r2', 'Cloudflare R2')
 				.addOption('imghippo', 'ImgHippo (Free)')
@@ -496,10 +609,14 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 				}));
 
 		this.renderCloudProviderSettings(containerEl);
+	}
 
-		new Setting(containerEl).setName('Cross-platform sync').setHeading();
+	private renderCrossPlatformSection(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName('Cross-platform paths').setHeading();
 		this.renderCrossPlatformSettings(containerEl);
+	}
 
+	private renderFooter(containerEl: HTMLElement): void {
 		containerEl.createEl('hr', { attr: { style: 'margin: 24px 0; border: none; border-top: 1px solid var(--background-modifier-border);' } });
 		
 		const footerEl = containerEl.createEl('div', { attr: { style: 'text-align: center; color: var(--text-muted); font-size: 12px;' } });
@@ -616,8 +733,8 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName('Test Connection')
-			.setDesc('Verify API key is valid')
+			.setName('Test connection')
+			.setDesc('Check that an API key has been entered')
 			.addButton(button => button
 				.setButtonText('Test')
 				.onClick(async () => {
@@ -703,6 +820,7 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 		
 		new Setting(containerEl)
 			.setName('Server URL')
+			.setDesc('WebDAV address that uploads are sent to. It requires your login.')
 			.addText(text => text
 				.setPlaceholder('https://nas.example.com/webdav')
 				.setValue(this.plugin.settings.cloudProviders.webdav.serverUrl)
@@ -733,8 +851,8 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 			});
 
 		new Setting(containerEl)
-			.setName('Upload Path')
-			.setDesc('Directory path for uploads')
+			.setName('Upload path')
+			.setDesc('Folder under the Server URL that uploads go into. Created if it does not exist.')
 			.addText(text => text
 				.setPlaceholder('/eagle-uploads')
 				.setValue(this.plugin.settings.cloudProviders.webdav.uploadPath)
@@ -745,7 +863,7 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Public URL')
-			.setDesc('Public URL prefix for accessing uploaded files. A Nextcloud public share link (https://host/s/TOKEN) is converted automatically.')
+			.setDesc('Address that notes use to display uploaded files. It must work without a login. A Nextcloud public share link (https://host/s/TOKEN) is converted automatically.')
 			.addText(text => text
 				.setPlaceholder('https://public.example.com')
 				.setValue(this.plugin.settings.cloudProviders.webdav.publicUrl)
@@ -765,7 +883,7 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName('Test Connection')
+			.setName('Test connection')
 			.setDesc('Check the server login and, for a Nextcloud share, that the Public URL works without a login. Nothing is uploaded.')
 			.addButton(button => button
 				.setButtonText('Test')
@@ -935,12 +1053,12 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 
 	private renderCrossPlatformSettings(containerEl: HTMLElement): void {
 		const infoEl = containerEl.createEl('div', { cls: 'setting-item-description cmds-eagle-info-block' });
-		infoEl.createEl('p', { text: 'Enable this to use the same vault on multiple computers (macOS/Windows).' });
-		infoEl.createEl('p', { text: 'File paths will be automatically converted based on the current computer.', cls: 'cmds-eagle-muted' });
+		infoEl.createEl('p', { text: 'For notes that link to local files (the "Local file path" image link type) in a vault you open on more than one computer.' });
+		infoEl.createEl('p', { text: 'Local file links written on one computer are rewritten to match the computer you are on.', cls: 'cmds-eagle-muted' });
 
 		new Setting(containerEl)
-			.setName('Enable cross-platform path conversion')
-			.setDesc('Convert file:// paths between registered computers')
+			.setName('Convert file paths between computers')
+			.setDesc('Rewrite file:// links between the computers registered below')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.enableCrossPlatform)
 				.onChange(async (value) => {
@@ -954,8 +1072,8 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 		}
 
 		new Setting(containerEl)
-			.setName('Auto-convert paths on file open')
-			.setDesc('Automatically convert cross-platform paths when opening a note')
+			.setName('Convert when a note is opened')
+			.setDesc('Convert paths automatically each time you open a note, instead of only when you run the convert command')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.autoConvertCrossPlatformPaths)
 				.onChange(async (value) => {
@@ -1092,7 +1210,7 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 		if (!this.plugin.settings.enableExtraLinks) return;
 
 		new Setting(containerEl)
-			.setName('Eagle Extra Links Base URL')
+			.setName('Extra Links base URL')
 			.setDesc('Address of the Extra Links plugin\'s server in Eagle (default: http://127.0.0.1:41598)')
 			.addText(text => text
 				.setPlaceholder('http://127.0.0.1:41598')
@@ -1104,7 +1222,7 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 				}));
 
 		const statusSetting = new Setting(containerEl)
-			.setName('Test Connection')
+			.setName('Test connection')
 			.setDesc('Checking for the Extra Links plugin…');
 
 		// Shown inline every time the settings open, so a missing plugin is visible without a click
