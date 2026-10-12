@@ -69,10 +69,11 @@ var init_types = __esm({
       enableBacklinks: false,
       frontmatterIdField: "id",
       backlinkMode: "extra-links",
+      enableExtraLinks: true,
       extraLinksBaseUrl: "http://127.0.0.1:41598",
       backlinkDestination: "both",
       eagleLinkPasteMode: "ask",
-      eagleEmbedUrlMode: "file",
+      eagleEmbedUrlMode: "cloud",
       eagleCustomUrlPrefix: "https://localhost:8080",
       eagleItemLinkFormat: "http",
       enableImageSourceUrl: true,
@@ -120,7 +121,8 @@ var init_types = __esm({
           username: "",
           password: "",
           uploadPath: "/eagle-uploads",
-          publicUrl: ""
+          publicUrl: "",
+          disableShareLinkConversion: false
         },
         imghippo: {
           type: "imghippo",
@@ -292,7 +294,7 @@ function resolveImageFileName(file, sourceInfo) {
   }
   return fileBaseName || "Image";
 }
-var import_obsidian, EagleApiService, MIME_TYPES;
+var import_obsidian, EagleApiService, CLOUD_COPY_LINK_TITLE, MIME_TYPES;
 var init_api = __esm({
   "src/api.ts"() {
     import_obsidian = require("obsidian");
@@ -716,43 +718,84 @@ var init_api = __esm({
         }
         return { success: false, error: "Request failed after retries" };
       }
+      // Asks the Eagle Extra Links plugin's server whether it is running. Read-only.
+      async checkExtraLinks(baseUrl) {
+        const cleanBaseUrl = baseUrl.replace(/\/+$/, "");
+        try {
+          const response = await (0, import_obsidian.requestUrl)({
+            url: `${cleanBaseUrl}/health`,
+            method: "GET",
+            throw: false
+          });
+          if (response.status === 403) {
+            return { ok: false, message: "Eagle Extra Links refused the connection (403). Add this computer to its allowed clients in the plugin's settings." };
+          }
+          if (response.status === 200) {
+            const json = response.json;
+            if ((json == null ? void 0 : json.status) === "ok") {
+              const version = json.version ? ` v${json.version}` : "";
+              const library = json.library ? ` Library: ${json.library}` : "";
+              return { ok: true, message: `Eagle Extra Links${version} detected.${library}` };
+            }
+          }
+          return { ok: false, message: `Eagle Extra Links was not detected at ${cleanBaseUrl} (HTTP ${response.status}).` };
+        } catch (e) {
+          return { ok: false, message: `Eagle Extra Links was not detected at ${cleanBaseUrl}. Make sure Eagle is running, the Extra Links plugin is installed, and its server is turned on.` };
+        }
+      }
       async getExtraLinkWebSource(itemId) {
         const sources = await this.getExtraLinkWebSources(itemId);
         return sources.pageUrl || sources.imageUrl || null;
       }
       async getExtraLinkWebSources(itemId) {
+        let pageUrl = null;
+        let imageUrl = null;
+        for (const link of await this.readExtraLinks(itemId)) {
+          if (link.title.startsWith(CLOUD_COPY_LINK_TITLE))
+            continue;
+          if (link.title.startsWith("Direct Image") || /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(link.url)) {
+            if (!imageUrl)
+              imageUrl = link.url;
+          } else {
+            if (!pageUrl)
+              pageUrl = link.url;
+          }
+        }
+        return { pageUrl, imageUrl };
+      }
+      // URL of the cloud copy recorded on the item as a "Cloud Copy" Extra Link, if any.
+      async getExtraLinkCloudCopy(itemId) {
+        var _a, _b;
+        const links = await this.readExtraLinks(itemId);
+        return (_b = (_a = links.find((link) => link.title.startsWith(CLOUD_COPY_LINK_TITLE))) == null ? void 0 : _a.url) != null ? _b : null;
+      }
+      // http(s) links from the item's extra-links.json on disk; empty when there is none.
+      async readExtraLinks(itemId) {
         try {
           const libraryPath = await this.getLibraryPath();
           if (!libraryPath)
-            return { pageUrl: null, imageUrl: null };
+            return [];
           const extraPath = `${libraryPath}/images/${itemId}.info/extra-links.json`;
           const buffer = await fsp.readFile(extraPath);
           const data = JSON.parse(buffer.toString("utf8"));
-          let pageUrl = null;
-          let imageUrl = null;
-          if (Array.isArray(data == null ? void 0 : data.links)) {
-            for (const link of data.links) {
-              if (link && typeof link.url === "string") {
-                const clean = link.url.replace(/\0/g, "").trim();
-                if (/^https?:\/\//i.test(clean)) {
-                  const title = typeof link.title === "string" ? link.title : "";
-                  if (title.startsWith("Direct Image") || /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(clean)) {
-                    if (!imageUrl)
-                      imageUrl = clean;
-                  } else {
-                    if (!pageUrl)
-                      pageUrl = clean;
-                  }
-                }
+          if (!Array.isArray(data == null ? void 0 : data.links))
+            return [];
+          const links = [];
+          for (const link of data.links) {
+            if (link && typeof link.url === "string") {
+              const clean = link.url.replace(/\0/g, "").trim();
+              if (/^https?:\/\//i.test(clean)) {
+                links.push({ title: typeof link.title === "string" ? link.title : "", url: clean });
               }
             }
           }
-          return { pageUrl, imageUrl };
+          return links;
         } catch (e) {
-          return { pageUrl: null, imageUrl: null };
+          return [];
         }
       }
     };
+    CLOUD_COPY_LINK_TITLE = "Cloud Copy";
     MIME_TYPES = {
       "jpg": "image/jpeg",
       "jpeg": "image/jpeg",
@@ -801,8 +844,9 @@ var init_modals = __esm({
     init_types();
     init_api();
     EagleSearchModal = class extends import_obsidian2.FuzzySuggestModal {
-      constructor(app, api, settings) {
+      constructor(app, api, settings, uploadCloudCopy) {
         super(app);
+        this.uploadCloudCopy = uploadCloudCopy;
         this.allItems = [];
         this.isLoading = false;
         this.filterContainer = null;
@@ -1016,6 +1060,18 @@ var init_modals = __esm({
         const editor = activeView.editor;
         if (this.settings.insertAsEmbed) {
           const filename = `${item.name}.${item.ext}`;
+          if (this.settings.eagleEmbedUrlMode === "cloud" && this.uploadCloudCopy) {
+            const cloudUrl = await this.uploadCloudCopy(item);
+            if (cloudUrl) {
+              let output = `![${filename}](${cloudUrl})`;
+              if (this.settings.insertThumbnail) {
+                output += "\n\n" + this.buildMetadataLine(item);
+              }
+              editor.replaceSelection(output);
+              new import_obsidian2.Notice(`Embedded: ${item.name}`);
+              return;
+            }
+          }
           if (this.settings.eagleEmbedUrlMode === "custom-url") {
             const libraryName = await this.api.getLibraryName() || "Main";
             const embedUrl = buildEagleCustomEmbedUrl(
@@ -2033,42 +2089,35 @@ var init_modals = __esm({
       }
     };
     ImagePasteChoiceModal = class extends import_obsidian2.Modal {
-      constructor(app, cloudProviderName = "Cloud") {
+      constructor(app, descriptions) {
         super(app);
         this.response = { rememberChoice: false };
-        this.cloudProviderName = cloudProviderName;
+        this.descriptions = descriptions;
       }
       onOpen() {
         const { contentEl } = this;
         contentEl.empty();
         contentEl.addClass("cmdspace-paste-choice-modal");
         contentEl.createEl("h2", { text: "Where to save image?" });
-        const buttonContainer = contentEl.createDiv({ cls: "cmdspace-paste-buttons" });
-        const eagleBtn = buttonContainer.createEl("button", {
-          text: "Eagle (Local)",
-          cls: "mod-cta"
-        });
-        eagleBtn.addEventListener("click", () => {
-          this.response.choice = "eagle";
-          this.close();
-        });
-        const localBtn = buttonContainer.createEl("button", { text: "Vault (Local)" });
-        localBtn.addEventListener("click", () => {
-          this.response.choice = "local";
-          this.close();
-        });
-        const cloudBtn = buttonContainer.createEl("button", {
-          text: `${this.cloudProviderName} (Cloud)`,
-          cls: "mod-warning"
-        });
-        cloudBtn.addEventListener("click", () => {
-          this.response.choice = "cloud";
-          this.close();
-        });
+        const optionContainer = contentEl.createDiv({ cls: "cmdspace-paste-options" });
+        this.addOption(optionContainer, "eagle", "Eagle", this.descriptions.eagleDescription, true);
+        this.addOption(optionContainer, "local", "Vault", "Saved as an attachment in this vault.");
+        this.addOption(optionContainer, "cloud", "Cloud only", this.descriptions.cloudDescription);
         new import_obsidian2.Setting(contentEl).setName("Remember this choice").setDesc("You can change this later in plugin settings").addToggle((toggle) => {
           toggle.setValue(false).onChange((value) => {
             this.response.rememberChoice = value;
           });
+        });
+      }
+      addOption(containerEl, choice, title, description, primary = false) {
+        const optionBtn = containerEl.createEl("button", {
+          cls: primary ? "cmdspace-paste-option mod-cta" : "cmdspace-paste-option"
+        });
+        optionBtn.createDiv({ cls: "cmdspace-paste-option-title", text: title });
+        optionBtn.createDiv({ cls: "cmdspace-paste-option-desc", text: description });
+        optionBtn.addEventListener("click", () => {
+          this.response.choice = choice;
+          this.close();
         });
       }
       onClose() {
@@ -2202,690 +2251,25 @@ init_api();
 init_modals();
 
 // src/settings.ts
-var import_obsidian3 = require("obsidian");
+var import_obsidian4 = require("obsidian");
 init_api();
-init_types();
-var CMDSPACEEagleSettingTab = class extends import_obsidian3.PluginSettingTab {
-  constructor(app, plugin) {
-    super(app, plugin);
-    this.plugin = plugin;
-  }
-  display() {
-    const { containerEl } = this;
-    containerEl.empty();
-    new import_obsidian3.Setting(containerEl).setName("Connection").setHeading();
-    new import_obsidian3.Setting(containerEl).setName("Eagle API Base URL").setDesc("The base URL for Eagle's local API (default: http://localhost:41595)").addText((text) => text.setPlaceholder("http://localhost:41595").setValue(this.plugin.settings.eagleApiBaseUrl).onChange(async (value) => {
-      this.plugin.settings.eagleApiBaseUrl = value || "http://localhost:41595";
-      await this.plugin.saveSettings();
-    }));
-    new import_obsidian3.Setting(containerEl).setName("Connection Timeout").setDesc("Timeout in milliseconds for API requests").addText((text) => text.setPlaceholder("5000").setValue(this.plugin.settings.connectionTimeout.toString()).onChange(async (value) => {
-      const num = parseInt(value, 10);
-      if (!isNaN(num) && num > 0) {
-        this.plugin.settings.connectionTimeout = num;
-        await this.plugin.saveSettings();
-      }
-    }));
-    new import_obsidian3.Setting(containerEl).setName("Test Connection").setDesc("Check if Eagle is running and accessible").addButton((button) => button.setButtonText("Test").onClick(async () => {
-      const api = new EagleApiService(this.plugin.settings);
-      const info = await api.getApplicationInfo();
-      if (info) {
-        new import_obsidian3.Notice(`\u2713 Connected to Eagle ${info.version} (${info.platform})`);
-      } else {
-        new import_obsidian3.Notice("\u2717 Failed to connect to Eagle. Make sure Eagle is running.");
-      }
-    }));
-    new import_obsidian3.Setting(containerEl).setName("Image paste/drop behavior").setHeading();
-    new import_obsidian3.Setting(containerEl).setName("Default image behavior").setDesc("What to do when pasting or dropping images").addDropdown((dropdown) => dropdown.addOption("ask", "Ask every time").addOption("eagle", "Always upload to Eagle (local)").addOption("local", "Always save to vault (local)").addOption("cloud", "Always upload to cloud").setValue(this.plugin.settings.imagePasteBehavior).onChange(async (value) => {
-      this.plugin.settings.imagePasteBehavior = value;
-      await this.plugin.saveSettings();
-    }));
-    new import_obsidian3.Setting(containerEl).setName("Image source URL capture").setHeading();
-    new import_obsidian3.Setting(containerEl).setName("Capture image source URL on paste").setDesc("When an image copied from a web browser is pasted into Obsidian, automatically extract its origin URL and pass it to Eagle.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableImageSourceUrl).onChange(async (value) => {
-      this.plugin.settings.enableImageSourceUrl = value;
-      await this.plugin.saveSettings();
-      this.display();
-    }));
-    if (this.plugin.settings.enableImageSourceUrl) {
-      new import_obsidian3.Setting(containerEl).setName("Source URL priority (Eagle website field)").setDesc("Choose which URL is pushed to Eagle's primary website / origin link field.").addDropdown((dropdown) => dropdown.addOption("page-first", "Webpage URL (fallback to image URL)").addOption("image-first", "Direct image URL (fallback to webpage URL)").addOption("page-only", "Webpage URL only").addOption("image-only", "Direct image URL only").setValue(this.plugin.settings.imageSourceUrlPriority).onChange(async (value) => {
-        this.plugin.settings.imageSourceUrlPriority = value;
-        await this.plugin.saveSettings();
-      }));
-      new import_obsidian3.Setting(containerEl).setName("Add image source to Extra Links").setDesc("Push the captured image source URLs into Eagle's Extra Links panel alongside any Obsidian backlinks. Requires Extra Links plugin for Eagle.").addDropdown((dropdown) => dropdown.addOption("none", "None (do not add to Extra Links)").addOption("page", "Page URL only").addOption("image", "Image src URL only").addOption("both", "Both Page URL and Image src").setValue(this.plugin.settings.extraLinksImageSource).onChange(async (value) => {
-        this.plugin.settings.extraLinksImageSource = value;
-        await this.plugin.saveSettings();
-      }));
-      new import_obsidian3.Setting(containerEl).setName("Include source in metadata card").setDesc("When embedding an image with metadata card enabled, include a clickable markdown link to the captured source URL.").addDropdown((dropdown) => dropdown.addOption("none", "None (do not include source)").addOption("page", "Page URL only").addOption("image", "Direct image URL only").addOption("both", "Both Page URL and Direct image URL").setValue(this.plugin.settings.includeSourceInMetadataCard).onChange(async (value) => {
-        this.plugin.settings.includeSourceInMetadataCard = value;
-        await this.plugin.saveSettings();
-      }));
-      new import_obsidian3.Setting(containerEl).setName("Include local file source in metadata card").setDesc("When embedding an image dragged or pasted from File Explorer or Finder, include a clickable file:// link to the original local file.").addToggle((toggle) => toggle.setValue(this.plugin.settings.includeLocalSourceInMetadataCard).onChange(async (value) => {
-        this.plugin.settings.includeLocalSourceInMetadataCard = value;
-        await this.plugin.saveSettings();
-      }));
-    }
-    new import_obsidian3.Setting(containerEl).setName("Eagle link paste").setHeading();
-    new import_obsidian3.Setting(containerEl).setName("Eagle link paste behavior").setDesc("What to do when pasting an Eagle item link into a note").addDropdown((dropdown) => dropdown.addOption("ask", "Always ask").addOption("embed", "Embed image").addOption("inline", "Inline link").setValue(this.plugin.settings.eagleLinkPasteMode).onChange(async (value) => {
-      this.plugin.settings.eagleLinkPasteMode = value;
-      await this.plugin.saveSettings();
-    }));
-    new import_obsidian3.Setting(containerEl).setName("Eagle embed URL mode").setDesc("How to reference the Eagle image when embedding").addDropdown((dropdown) => dropdown.addOption("file", "Local file path (file://)").addOption("custom-url", "Custom URL prefix (HTTP / WebDAV)").setValue(this.plugin.settings.eagleEmbedUrlMode).onChange(async (value) => {
-      this.plugin.settings.eagleEmbedUrlMode = value;
-      await this.plugin.saveSettings();
-      this.display();
-    }));
-    if (this.plugin.settings.eagleEmbedUrlMode === "custom-url") {
-      new import_obsidian3.Setting(containerEl).setName("Custom URL prefix").setDesc("Base URL for serving Eagle library files over HTTP/WebDAV (e.g. https://localhost:8080)").addText((text) => text.setPlaceholder("https://localhost:8080").setValue(this.plugin.settings.eagleCustomUrlPrefix).onChange(async (value) => {
-        this.plugin.settings.eagleCustomUrlPrefix = value.trim() || "https://localhost:8080";
-        await this.plugin.saveSettings();
-      }));
-    }
-    new import_obsidian3.Setting(containerEl).setName("Eagle folder").setHeading();
-    new import_obsidian3.Setting(containerEl).setName("When adding an item to Eagle").setDesc("Choose how newly added images and attachments are routed to folders in your Eagle library.").addDropdown((dropdown) => dropdown.addOption("ask", "Ask").addOption("target", "Add to Target Folder").addOption("mirror", "Mirror Obsidian Folder Hierarchy").addOption("map", "Use Folder Map").setValue(this.plugin.settings.addFolderMode || (this.plugin.settings.enableDefaultFolder ? "target" : "target")).onChange(async (value) => {
-      this.plugin.settings.addFolderMode = value;
-      await this.plugin.saveSettings();
-      this.display();
-    }));
-    if (this.plugin.settings.addFolderMode === "target") {
-      new import_obsidian3.Setting(containerEl).setName("Target folder").setDesc(this.plugin.settings.defaultFolderName || "No folder selected (Root library)").addButton((button) => button.setButtonText("Select Folder").onClick(async () => {
-        const api = new EagleApiService(this.plugin.settings);
-        const folders = await api.listFolders();
-        if (!folders || folders.length === 0) {
-          new import_obsidian3.Notice("No folders found or Eagle is not connected.");
-          return;
-        }
-        const { flattenEagleFolders: flattenEagleFolders2, EagleFolderModal: EagleFolderModal2 } = await Promise.resolve().then(() => (init_modals(), modals_exports));
-        const flattened = flattenEagleFolders2(folders);
-        const modal = new EagleFolderModal2(this.app, flattened, async (folderId) => {
-          const selected = flattened.find((f) => f.id === folderId);
-          if (selected) {
-            this.plugin.settings.defaultFolder = selected.id;
-            this.plugin.settings.defaultFolderName = selected.path;
-            await this.plugin.saveSettings();
-            this.display();
-          }
-        });
-        modal.open();
-      })).addButton((button) => button.setButtonText("Clear").onClick(async () => {
-        this.plugin.settings.defaultFolder = "";
-        this.plugin.settings.defaultFolderName = "";
-        await this.plugin.saveSettings();
-        this.display();
-      }));
-    } else if (this.plugin.settings.addFolderMode === "ask") {
-      const recentCount = (this.plugin.settings.recentEagleFolders || []).length;
-      const desc = recentCount > 0 ? `Prompts you with a searchable folder picker before each upload, featuring ${recentCount} recently used folder(s).` : "Prompts you with a searchable folder picker before each upload, featuring your recently used folders.";
-      const askSetting = new import_obsidian3.Setting(containerEl).setName("Folder prompt").setDesc(desc);
-      if (recentCount > 0) {
-        askSetting.addButton((button) => button.setButtonText("Clear Recent History").onClick(async () => {
-          this.plugin.settings.recentEagleFolders = [];
-          await this.plugin.saveSettings();
-          new import_obsidian3.Notice("Recent Eagle folders cleared.");
-          this.display();
-        }));
-      }
-      this.renderMirrorRootFolderSettings(containerEl, true);
-    } else if (this.plugin.settings.addFolderMode === "mirror") {
-      new import_obsidian3.Setting(containerEl).setName("Folder hierarchy mirroring").setDesc("Automatically creates and mirrors the active note\u2019s folder hierarchy inside Eagle relative to the vault and library roots. If the note is at the vault root, attachments are placed in the root library.");
-      this.renderMirrorRootFolderSettings(containerEl, false);
-    } else if (this.plugin.settings.addFolderMode === "map") {
-      new import_obsidian3.Setting(containerEl).setName("Folder mappings").setDesc("Map Obsidian vault folders to corresponding Eagle folders. Subfolders automatically inherit their parent folder mapping unless specifically mapped.").addButton((button) => button.setButtonText("Add Folder Mapping").setCta().onClick(async () => {
-        const api = new EagleApiService(this.plugin.settings);
-        const connected = await api.isConnected();
-        if (!connected) {
-          new import_obsidian3.Notice("Eagle is not running. Please start Eagle and try again.");
-          return;
-        }
-        const { AddFolderMappingModal: AddFolderMappingModal2 } = await Promise.resolve().then(() => (init_modals(), modals_exports));
-        const modal = new AddFolderMappingModal2(this.app, api, async (newMapping) => {
-          this.plugin.settings.folderMappings = this.plugin.settings.folderMappings || [];
-          const existingIndex = this.plugin.settings.folderMappings.findIndex(
-            (m) => m.obsidianFolder.toLowerCase() === newMapping.obsidianFolder.toLowerCase()
-          );
-          if (existingIndex >= 0) {
-            this.plugin.settings.folderMappings[existingIndex] = newMapping;
-          } else {
-            this.plugin.settings.folderMappings.push(newMapping);
-          }
-          await this.plugin.saveSettings();
-          this.display();
-        });
-        modal.open();
-      }));
-      const mappings = this.plugin.settings.folderMappings || [];
-      if (mappings.length > 0) {
-        const listEl = containerEl.createDiv({ cls: "cmdspace-eagle-mapping-list" });
-        for (const mapping of mappings) {
-          const rowEl = listEl.createDiv({ cls: "cmdspace-eagle-mapping-row" });
-          const pathsEl = rowEl.createDiv({ cls: "cmdspace-eagle-mapping-paths" });
-          pathsEl.createSpan({ cls: "cmdspace-eagle-mapping-vault", text: mapping.obsidianFolder || "/" });
-          pathsEl.createSpan({ cls: "cmdspace-eagle-mapping-arrow", text: " \u2794 " });
-          pathsEl.createSpan({ cls: "cmdspace-eagle-mapping-eagle", text: mapping.eagleFolderName || mapping.eagleFolderId });
-          const btn = rowEl.createEl("button", { text: "Delete", cls: "mod-warning" });
-          btn.onclick = async () => {
-            this.plugin.settings.folderMappings = (this.plugin.settings.folderMappings || []).filter((m) => m.id !== mapping.id);
-            await this.plugin.saveSettings();
-            this.display();
-          };
-        }
-      } else {
-        const emptyEl = containerEl.createDiv({ cls: "cmdspace-eagle-mapping-empty" });
-        emptyEl.createEl("p", { text: 'No folder mappings configured yet. Click "Add Folder Mapping" to create one.', cls: "cmds-eagle-muted" });
-      }
-    }
-    new import_obsidian3.Setting(containerEl).setName("Eagle tags").setHeading();
-    new import_obsidian3.Setting(containerEl).setName("Add default tags to new Eagle attachments").setDesc("Automatically append specific tags to images you paste or drop into Eagle.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableDefaultTags).onChange(async (value) => {
-      this.plugin.settings.enableDefaultTags = value;
-      await this.plugin.saveSettings();
-      this.display();
-    }));
-    if (this.plugin.settings.enableDefaultTags) {
-      new import_obsidian3.Setting(containerEl).setName("Default Tags").setDesc("Comma-separated list of tags to add (e.g. obsidian, reference)").addText((text) => text.setPlaceholder("obsidian, reference").setValue(this.plugin.settings.defaultTags).onChange(async (value) => {
-        this.plugin.settings.defaultTags = value;
-        await this.plugin.saveSettings();
-      }));
-    }
-    new import_obsidian3.Setting(containerEl).setName("Obsidian Backlinks").setHeading();
-    new import_obsidian3.Setting(containerEl).setName("Add Obsidian backlink to Eagle attachments").setDesc("Automatically generate an Advanced URI backlink to the current note when adding or pasting Eagle items.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableBacklinks).onChange(async (value) => {
-      this.plugin.settings.enableBacklinks = value;
-      await this.plugin.saveSettings();
-      this.display();
-    }));
-    if (this.plugin.settings.enableBacklinks) {
-      new import_obsidian3.Setting(containerEl).setName("UID field in frontmatter").setDesc(`Frontmatter property used to identify the note for Advanced URI linking (matches Advanced URI's "UID field"). Defaults to "id".`).addText((text) => text.setPlaceholder("id").setValue(this.plugin.settings.frontmatterIdField).onChange(async (value) => {
-        this.plugin.settings.frontmatterIdField = value.trim() || "id";
-        await this.plugin.saveSettings();
-      }));
-      new import_obsidian3.Setting(containerEl).setName("Backlink Mode").setDesc("Choose how backlinks are registered with Eagle").addDropdown((dropdown) => dropdown.addOption("extra-links", "Eagle Extra Links Plugin (REST API)").addOption("legacy", "Eagle Native Fields (Website / Note)").setValue(this.plugin.settings.backlinkMode).onChange(async (value) => {
-        this.plugin.settings.backlinkMode = value;
-        await this.plugin.saveSettings();
-        this.display();
-      }));
-      if (this.plugin.settings.backlinkMode === "extra-links") {
-        new import_obsidian3.Setting(containerEl).setName("Eagle Extra Links Base URL").setDesc("REST endpoint URL for the eagle-extra-links plugin in Eagle").addText((text) => text.setPlaceholder("http://127.0.0.1:41598").setValue(this.plugin.settings.extraLinksBaseUrl).onChange(async (value) => {
-          this.plugin.settings.extraLinksBaseUrl = value.trim() || "http://127.0.0.1:41598";
-          await this.plugin.saveSettings();
-        }));
-      } else {
-        new import_obsidian3.Setting(containerEl).setName("Backlink Destination").setDesc("Where should the backlink be saved in Eagle?").addDropdown((dropdown) => dropdown.addOption("url", "URL/Link Field").addOption("note", "Note/Annotation Field").addOption("both", "Both").setValue(this.plugin.settings.backlinkDestination).onChange(async (value) => {
-          this.plugin.settings.backlinkDestination = value;
-          await this.plugin.saveSettings();
-        }));
-      }
-    }
-    new import_obsidian3.Setting(containerEl).setName("Excalidraw integration").setHeading();
-    new import_obsidian3.Setting(containerEl).setName("Embed images in Excalidraw via cloud").setDesc("When you paste or drop an image onto an Excalidraw canvas, upload it to your cloud provider and embed the URL instead of saving a vault attachment. Eagle assets are resolved to the original; screenshots are uploaded as-is. Requires the Excalidraw plugin and a configured cloud provider.").addToggle((toggle) => toggle.setValue(this.plugin.settings.excalidrawIntegration).onChange(async (value) => {
-      this.plugin.settings.excalidrawIntegration = value;
-      await this.plugin.saveSettings();
-      if (value)
-        this.plugin.scanAndAttachExcalidrawContainers();
-    }));
-    new import_obsidian3.Setting(containerEl).setName("Also add pasted screenshots to Eagle").setDesc("When pasting a clipboard image (not already in Eagle) onto a canvas, also import it into your Eagle library (into the default folder, if set).").addToggle((toggle) => toggle.setValue(this.plugin.settings.excalidrawImportToEagle).onChange(async (value) => {
-      this.plugin.settings.excalidrawImportToEagle = value;
-      await this.plugin.saveSettings();
-    }));
-    new import_obsidian3.Setting(containerEl).setName("Search & embed").setHeading();
-    new import_obsidian3.Setting(containerEl).setName("Include metadata card").setDesc("Add metadata (type, size, tags, Eagle link) below the image when embedding").addToggle((toggle) => toggle.setValue(this.plugin.settings.insertThumbnail).onChange(async (value) => {
-      this.plugin.settings.insertThumbnail = value;
-      await this.plugin.saveSettings();
-    }));
-    new import_obsidian3.Setting(containerEl).setName("Eagle item link format").setDesc('Choose the link format for opening items in Eagle (used in metadata cards, link cards, and inline links). Default is HTTP localhost URL (e.g. http://localhost:41595/item?id=UUID); "eagle://" protocol remains available.').addDropdown((dropdown) => dropdown.addOption("http", "HTTP URL (http://localhost:41595/item?id=UUID)").addOption("eagle", "Eagle Protocol (eagle://item/UUID)").setValue(this.plugin.settings.eagleItemLinkFormat).onChange(async (value) => {
-      this.plugin.settings.eagleItemLinkFormat = value;
-      await this.plugin.saveSettings();
-    }));
-    this.renderSearchFiltersSettings(containerEl);
-    new import_obsidian3.Setting(containerEl).setName("Cloud storage provider").setHeading();
-    new import_obsidian3.Setting(containerEl).setName("Active Cloud Provider").setDesc("Select which cloud storage to use for image uploads").addDropdown((dropdown) => dropdown.addOption("r2", "Cloudflare R2").addOption("imghippo", "ImgHippo (Free)").addOption("s3", "Amazon S3").addOption("webdav", "WebDAV (Synology/NAS)").addOption("custom", "Custom Server").setValue(this.plugin.settings.activeCloudProvider).onChange(async (value) => {
-      this.plugin.settings.activeCloudProvider = value;
-      await this.plugin.saveSettings();
-      this.display();
-    }));
-    this.renderCloudProviderSettings(containerEl);
-    new import_obsidian3.Setting(containerEl).setName("Cross-platform sync").setHeading();
-    this.renderCrossPlatformSettings(containerEl);
-    containerEl.createEl("hr", { attr: { style: "margin: 24px 0; border: none; border-top: 1px solid var(--background-modifier-border);" } });
-    const footerEl = containerEl.createEl("div", { attr: { style: "text-align: center; color: var(--text-muted); font-size: 12px;" } });
-    footerEl.createEl("div", { text: `Eagle Bridge v${this.plugin.manifest.version}`, attr: { style: "margin-bottom: 8px;" } });
-    const linksEl = footerEl.createEl("div");
-    linksEl.createSpan({ text: "Corey Struzan \xB7 " });
-    const ghLink = linksEl.createEl("a", { text: "GitHub", href: "https://github.com/coreyx/obsidian-eagle-bridge" });
-    ghLink.setAttr("target", "_blank");
-    const creditEl = footerEl.createEl("div", { attr: { style: "margin-top: 4px;" } });
-    creditEl.createSpan({ text: "Based on " });
-    const upstreamLink = creditEl.createEl("a", { text: "CMDS Eagle", href: "https://github.com/johnfkoo951/cmds-eagle" });
-    upstreamLink.setAttr("target", "_blank");
-    creditEl.createSpan({ text: " by Yohan Koo" });
-  }
-  renderCloudProviderSettings(containerEl) {
-    const provider = this.plugin.settings.activeCloudProvider;
-    const providerContainer = containerEl.createDiv({ cls: "cloud-provider-settings" });
-    switch (provider) {
-      case "imghippo":
-        this.renderImgHippoSettings(providerContainer);
-        break;
-      case "r2":
-        this.renderR2Settings(providerContainer);
-        break;
-      case "s3":
-        this.renderS3Settings(providerContainer);
-        break;
-      case "webdav":
-        this.renderWebDAVSettings(providerContainer);
-        break;
-      case "custom":
-        this.renderCustomSettings(providerContainer);
-        break;
-    }
-  }
-  renderR2Settings(containerEl) {
-    new import_obsidian3.Setting(containerEl).setName("Cloudflare R2").setHeading();
-    const infoEl = containerEl.createEl("div", { cls: "setting-item-description cmds-eagle-info-block" });
-    infoEl.createEl("p", { text: "Cloudflare R2 requires a Worker for uploads. Setup:" });
-    const r2List = infoEl.createEl("ol");
-    r2List.createEl("li", { text: "Create an R2 bucket in Cloudflare dashboard" });
-    r2List.createEl("li", { text: "Deploy the Eagle Cloud Worker (see plugin docs)" });
-    r2List.createEl("li", { text: "Copy Worker URL and API Key below" });
-    new import_obsidian3.Setting(containerEl).setName("Worker URL").setDesc("Cloudflare Worker URL (must end with .workers.dev)").addText((text) => text.setPlaceholder("https://eagle-uploader.xxx.workers.dev").setValue(this.plugin.settings.cloudProviders.r2.workerUrl).onChange(async (value) => {
-      let url = value.trim();
-      if (url && !url.startsWith("http")) {
-        url = "https://" + url;
-      }
-      url = url.replace(/\/$/, "");
-      this.plugin.settings.cloudProviders.r2.workerUrl = url;
-      this.plugin.settings.cloudProviders.r2.enabled = !!(url && this.plugin.settings.cloudProviders.r2.apiKey);
-      await this.plugin.saveSettings();
-    }));
-    new import_obsidian3.Setting(containerEl).setName("API Key").setDesc("API_KEY from Cloudflare Worker Variables").addText((text) => text.setPlaceholder("your-api-key-here").setValue(this.plugin.settings.cloudProviders.r2.apiKey).onChange(async (value) => {
-      this.plugin.settings.cloudProviders.r2.apiKey = value.trim();
-      this.plugin.settings.cloudProviders.r2.enabled = !!(this.plugin.settings.cloudProviders.r2.workerUrl && value.trim());
-      await this.plugin.saveSettings();
-    }));
-    new import_obsidian3.Setting(containerEl).setName("Public URL").setDesc("R2 bucket public URL (starts with pub-)").addText((text) => text.setPlaceholder("https://pub-xxx.r2.dev").setValue(this.plugin.settings.cloudProviders.r2.publicUrl).onChange(async (value) => {
-      this.plugin.settings.cloudProviders.r2.publicUrl = value.trim().replace(/\/$/, "");
-      await this.plugin.saveSettings();
-    }));
-  }
-  renderImgHippoSettings(containerEl) {
-    new import_obsidian3.Setting(containerEl).setName("ImgHippo (free image hosting)").setHeading();
-    const infoEl = containerEl.createEl("div", { cls: "setting-item-description cmds-eagle-info-block" });
-    infoEl.createEl("p", { text: "ImgHippo is a free image hosting service. To get your API key:" });
-    const ihList = infoEl.createEl("ol");
-    const ihLi1 = ihList.createEl("li");
-    ihLi1.appendText("Visit ");
-    ihLi1.createEl("a", { text: "imghippo.com", href: "https://www.imghippo.com/" });
-    ihLi1.appendText(" and sign up/login");
-    const ihLi2 = ihList.createEl("li");
-    ihLi2.appendText("Go to ");
-    ihLi2.createEl("a", { text: "Settings page", href: "https://www.imghippo.com/settings" });
-    ihList.createEl("li", { text: "Copy your API key and paste it below" });
-    new import_obsidian3.Setting(containerEl).setName("API Key").setDesc("Your ImgHippo API key from the settings page").addText((text) => text.setPlaceholder("Your ImgHippo API key").setValue(this.plugin.settings.cloudProviders.imghippo.apiKey).onChange(async (value) => {
-      this.plugin.settings.cloudProviders.imghippo.apiKey = value.trim();
-      this.plugin.settings.cloudProviders.imghippo.enabled = !!value.trim();
-      await this.plugin.saveSettings();
-    }));
-    new import_obsidian3.Setting(containerEl).setName("Test Connection").setDesc("Verify API key is valid").addButton((button) => button.setButtonText("Test").onClick(async () => {
-      const config = this.plugin.settings.cloudProviders.imghippo;
-      if (!config.apiKey) {
-        new import_obsidian3.Notice("\u2717 Please enter an API key first");
-        return;
-      }
-      new import_obsidian3.Notice("\u2713 ImgHippo API key configured");
-    }));
-  }
-  renderS3Settings(containerEl) {
-    new import_obsidian3.Setting(containerEl).setName("Amazon S3").setHeading();
-    new import_obsidian3.Setting(containerEl).setName("Endpoint").setDesc("S3-compatible endpoint URL").addText((text) => text.setPlaceholder("https://s3.amazonaws.com").setValue(this.plugin.settings.cloudProviders.s3.endpoint).onChange(async (value) => {
-      this.plugin.settings.cloudProviders.s3.endpoint = value.trim();
-      await this.plugin.saveSettings();
-    }));
-    new import_obsidian3.Setting(containerEl).setName("Region").addText((text) => text.setPlaceholder("us-east-1").setValue(this.plugin.settings.cloudProviders.s3.region).onChange(async (value) => {
-      this.plugin.settings.cloudProviders.s3.region = value.trim();
-      await this.plugin.saveSettings();
-    }));
-    new import_obsidian3.Setting(containerEl).setName("Bucket").addText((text) => text.setPlaceholder("my-bucket").setValue(this.plugin.settings.cloudProviders.s3.bucket).onChange(async (value) => {
-      this.plugin.settings.cloudProviders.s3.bucket = value.trim();
-      await this.plugin.saveSettings();
-    }));
-    new import_obsidian3.Setting(containerEl).setName("Access Key ID").addText((text) => text.setValue(this.plugin.settings.cloudProviders.s3.accessKeyId).onChange(async (value) => {
-      this.plugin.settings.cloudProviders.s3.accessKeyId = value.trim();
-      await this.plugin.saveSettings();
-    }));
-    new import_obsidian3.Setting(containerEl).setName("Secret Access Key").addText((text) => text.setValue(this.plugin.settings.cloudProviders.s3.secretAccessKey).onChange(async (value) => {
-      this.plugin.settings.cloudProviders.s3.secretAccessKey = value.trim();
-      this.plugin.settings.cloudProviders.s3.enabled = !!(this.plugin.settings.cloudProviders.s3.endpoint && this.plugin.settings.cloudProviders.s3.accessKeyId && value.trim());
-      await this.plugin.saveSettings();
-    }));
-    new import_obsidian3.Setting(containerEl).setName("Public URL (optional)").setDesc("Custom public URL for accessing uploaded files").addText((text) => text.setPlaceholder("https://cdn.example.com").setValue(this.plugin.settings.cloudProviders.s3.publicUrl).onChange(async (value) => {
-      this.plugin.settings.cloudProviders.s3.publicUrl = value.trim();
-      await this.plugin.saveSettings();
-    }));
-  }
-  renderWebDAVSettings(containerEl) {
-    new import_obsidian3.Setting(containerEl).setName("WebDAV").setHeading();
-    containerEl.createEl("p", {
-      text: "Works with Synology NAS, Nextcloud, ownCloud, or any WebDAV server.",
-      cls: "setting-item-description"
-    });
-    new import_obsidian3.Setting(containerEl).setName("Server URL").addText((text) => text.setPlaceholder("https://nas.example.com/webdav").setValue(this.plugin.settings.cloudProviders.webdav.serverUrl).onChange(async (value) => {
-      this.plugin.settings.cloudProviders.webdav.serverUrl = value.trim();
-      await this.plugin.saveSettings();
-    }));
-    new import_obsidian3.Setting(containerEl).setName("Username").addText((text) => text.setValue(this.plugin.settings.cloudProviders.webdav.username).onChange(async (value) => {
-      this.plugin.settings.cloudProviders.webdav.username = value.trim();
-      await this.plugin.saveSettings();
-    }));
-    new import_obsidian3.Setting(containerEl).setName("Password").addText((text) => text.setValue(this.plugin.settings.cloudProviders.webdav.password).onChange(async (value) => {
-      this.plugin.settings.cloudProviders.webdav.password = value;
-      this.plugin.settings.cloudProviders.webdav.enabled = !!(this.plugin.settings.cloudProviders.webdav.serverUrl && this.plugin.settings.cloudProviders.webdav.username && value);
-      await this.plugin.saveSettings();
-    }));
-    new import_obsidian3.Setting(containerEl).setName("Upload Path").setDesc("Directory path for uploads").addText((text) => text.setPlaceholder("/eagle-uploads").setValue(this.plugin.settings.cloudProviders.webdav.uploadPath).onChange(async (value) => {
-      this.plugin.settings.cloudProviders.webdav.uploadPath = value.trim() || "/eagle-uploads";
-      await this.plugin.saveSettings();
-    }));
-    new import_obsidian3.Setting(containerEl).setName("Public URL").setDesc("Public URL prefix for accessing uploaded files").addText((text) => text.setPlaceholder("https://public.example.com").setValue(this.plugin.settings.cloudProviders.webdav.publicUrl).onChange(async (value) => {
-      this.plugin.settings.cloudProviders.webdav.publicUrl = value.trim();
-      await this.plugin.saveSettings();
-    }));
-  }
-  renderCustomSettings(containerEl) {
-    new import_obsidian3.Setting(containerEl).setName("Custom server").setHeading();
-    containerEl.createEl("p", {
-      text: 'Configure a custom upload endpoint. Server should accept multipart/form-data with "file" field.',
-      cls: "setting-item-description"
-    });
-    new import_obsidian3.Setting(containerEl).setName("Upload URL").addText((text) => text.setPlaceholder("https://your-server.com/upload").setValue(this.plugin.settings.cloudProviders.custom.uploadUrl).onChange(async (value) => {
-      this.plugin.settings.cloudProviders.custom.uploadUrl = value.trim();
-      this.plugin.settings.cloudProviders.custom.enabled = !!value.trim();
-      await this.plugin.saveSettings();
-    }));
-    new import_obsidian3.Setting(containerEl).setName("Public URL").setDesc("Base URL for accessing uploaded files").addText((text) => text.setPlaceholder("https://cdn.your-server.com").setValue(this.plugin.settings.cloudProviders.custom.publicUrl).onChange(async (value) => {
-      this.plugin.settings.cloudProviders.custom.publicUrl = value.trim();
-      await this.plugin.saveSettings();
-    }));
-  }
-  renderSearchFiltersSettings(containerEl) {
-    const filterContainer = containerEl.createDiv({ cls: "cmdspace-eagle-settings-filters" });
-    const scopeSection = filterContainer.createDiv({ cls: "cmdspace-eagle-settings-filter-section" });
-    scopeSection.createEl("div", { text: "Default search scope", cls: "cmdspace-eagle-settings-filter-title" });
-    const scopeButtons = scopeSection.createDiv({ cls: "cmdspace-eagle-settings-filter-buttons" });
-    const scopes = [
-      { key: "name", label: "Name" },
-      { key: "tags", label: "Tags" },
-      { key: "annotation", label: "Notes" },
-      { key: "folders", label: "Folders" }
-    ];
-    scopes.forEach(({ key, label }) => {
-      const btn = scopeButtons.createEl("button", {
-        text: label,
-        cls: `cmdspace-eagle-settings-filter-btn ${this.plugin.settings.searchScope.includes(key) ? "is-active" : ""}`
-      });
-      btn.addEventListener("click", () => {
-        void (async () => {
-          if (this.plugin.settings.searchScope.includes(key)) {
-            if (this.plugin.settings.searchScope.length > 1) {
-              this.plugin.settings.searchScope = this.plugin.settings.searchScope.filter((s) => s !== key);
-              btn.removeClass("is-active");
-            }
-          } else {
-            this.plugin.settings.searchScope.push(key);
-            btn.addClass("is-active");
-          }
-          await this.plugin.saveSettings();
-        })();
-      });
-    });
-    const typeSection = filterContainer.createDiv({ cls: "cmdspace-eagle-settings-filter-section" });
-    typeSection.createEl("div", { text: "Default file types", cls: "cmdspace-eagle-settings-filter-title" });
-    const typeButtons = typeSection.createDiv({ cls: "cmdspace-eagle-settings-filter-buttons" });
-    const hasAllImages = () => SUPPORTED_IMAGE_EXTENSIONS.every(
-      (ext) => this.plugin.settings.searchFileTypes.includes(ext)
-    );
-    const hasAllVideos = () => SUPPORTED_VIDEO_EXTENSIONS.every(
-      (ext) => this.plugin.settings.searchFileTypes.includes(ext)
-    );
-    const hasAllDocs = () => SUPPORTED_DOCUMENT_EXTENSIONS.every(
-      (ext) => this.plugin.settings.searchFileTypes.includes(ext)
-    );
-    const imgBtn = typeButtons.createEl("button", {
-      text: "Images",
-      cls: `cmdspace-eagle-settings-filter-btn ${hasAllImages() ? "is-active" : ""}`
-    });
-    imgBtn.addEventListener("click", () => {
-      void (async () => {
-        if (hasAllImages()) {
-          this.plugin.settings.searchFileTypes = this.plugin.settings.searchFileTypes.filter(
-            (ext) => !SUPPORTED_IMAGE_EXTENSIONS.includes(ext)
-          );
-          imgBtn.removeClass("is-active");
-        } else {
-          SUPPORTED_IMAGE_EXTENSIONS.forEach((ext) => {
-            if (!this.plugin.settings.searchFileTypes.includes(ext)) {
-              this.plugin.settings.searchFileTypes.push(ext);
-            }
-          });
-          imgBtn.addClass("is-active");
-        }
-        if (this.plugin.settings.searchFileTypes.length === 0) {
-          this.plugin.settings.searchFileTypes = [...SUPPORTED_IMAGE_EXTENSIONS];
-          imgBtn.addClass("is-active");
-        }
-        await this.plugin.saveSettings();
-      })();
-    });
-    const vidBtn = typeButtons.createEl("button", {
-      text: "Videos",
-      cls: `cmdspace-eagle-settings-filter-btn ${hasAllVideos() ? "is-active" : ""}`
-    });
-    vidBtn.addEventListener("click", () => {
-      void (async () => {
-        if (hasAllVideos()) {
-          this.plugin.settings.searchFileTypes = this.plugin.settings.searchFileTypes.filter(
-            (ext) => !SUPPORTED_VIDEO_EXTENSIONS.includes(ext)
-          );
-          vidBtn.removeClass("is-active");
-        } else {
-          SUPPORTED_VIDEO_EXTENSIONS.forEach((ext) => {
-            if (!this.plugin.settings.searchFileTypes.includes(ext)) {
-              this.plugin.settings.searchFileTypes.push(ext);
-            }
-          });
-          vidBtn.addClass("is-active");
-        }
-        if (this.plugin.settings.searchFileTypes.length === 0) {
-          this.plugin.settings.searchFileTypes = [...SUPPORTED_IMAGE_EXTENSIONS];
-          imgBtn.addClass("is-active");
-        }
-        await this.plugin.saveSettings();
-      })();
-    });
-    const docBtn = typeButtons.createEl("button", {
-      text: "Documents",
-      cls: `cmdspace-eagle-settings-filter-btn ${hasAllDocs() ? "is-active" : ""}`
-    });
-    docBtn.addEventListener("click", () => {
-      void (async () => {
-        if (hasAllDocs()) {
-          this.plugin.settings.searchFileTypes = this.plugin.settings.searchFileTypes.filter(
-            (ext) => !SUPPORTED_DOCUMENT_EXTENSIONS.includes(ext)
-          );
-          docBtn.removeClass("is-active");
-        } else {
-          SUPPORTED_DOCUMENT_EXTENSIONS.forEach((ext) => {
-            if (!this.plugin.settings.searchFileTypes.includes(ext)) {
-              this.plugin.settings.searchFileTypes.push(ext);
-            }
-          });
-          docBtn.addClass("is-active");
-        }
-        if (this.plugin.settings.searchFileTypes.length === 0) {
-          this.plugin.settings.searchFileTypes = [...SUPPORTED_IMAGE_EXTENSIONS];
-          imgBtn.addClass("is-active");
-        }
-        await this.plugin.saveSettings();
-      })();
-    });
-  }
-  renderCrossPlatformSettings(containerEl) {
-    const infoEl = containerEl.createEl("div", { cls: "setting-item-description cmds-eagle-info-block" });
-    infoEl.createEl("p", { text: "Enable this to use the same vault on multiple computers (macOS/Windows)." });
-    infoEl.createEl("p", { text: "File paths will be automatically converted based on the current computer.", cls: "cmds-eagle-muted" });
-    new import_obsidian3.Setting(containerEl).setName("Enable cross-platform path conversion").setDesc("Convert file:// paths between registered computers").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableCrossPlatform).onChange(async (value) => {
-      this.plugin.settings.enableCrossPlatform = value;
-      await this.plugin.saveSettings();
-      this.display();
-    }));
-    if (!this.plugin.settings.enableCrossPlatform) {
-      return;
-    }
-    new import_obsidian3.Setting(containerEl).setName("Auto-convert paths on file open").setDesc("Automatically convert cross-platform paths when opening a note").addToggle((toggle) => toggle.setValue(this.plugin.settings.autoConvertCrossPlatformPaths).onChange(async (value) => {
-      this.plugin.settings.autoConvertCrossPlatformPaths = value;
-      await this.plugin.saveSettings();
-    }));
-    const currentPlatform = process.platform;
-    const currentUsername = this.detectCurrentUsername();
-    new import_obsidian3.Setting(containerEl).setName("Add current computer").setDesc(`Detected: ${currentPlatform === "darwin" ? "macOS" : "Windows"} / ${currentUsername}`).addButton((button) => button.setButtonText("Add").onClick(async () => {
-      const existingIndex = this.plugin.settings.computers.findIndex(
-        (c) => c.platform === currentPlatform && c.username === currentUsername
-      );
-      if (existingIndex >= 0) {
-        new import_obsidian3.Notice("This computer is already registered");
-        return;
-      }
-      const newProfile = {
-        id: `${currentPlatform}-${currentUsername}-${Date.now()}`,
-        name: currentPlatform === "darwin" ? `Mac (${currentUsername})` : `Windows (${currentUsername})`,
-        platform: currentPlatform,
-        username: currentUsername,
-        subPath: "",
-        eagleLibraryPath: "",
-        isCurrentComputer: true
-      };
-      this.plugin.settings.computers.push(newProfile);
-      await this.plugin.saveSettings();
-      this.display();
-      new import_obsidian3.Notice("Current computer added");
-    }));
-    if (this.plugin.settings.computers.length > 0) {
-      const listContainer = containerEl.createDiv({ cls: "cmdspace-eagle-computer-list" });
-      listContainer.createEl("div", {
-        text: "Registered Computers",
-        cls: "cmdspace-eagle-computer-list-title"
-      });
-      for (const computer of this.plugin.settings.computers) {
-        const isCurrentComputer = computer.platform === currentPlatform && computer.username === currentUsername;
-        const computerEl = listContainer.createDiv({ cls: "cmdspace-eagle-computer-item" });
-        if (isCurrentComputer) {
-          computerEl.addClass("is-current");
-        }
-        const headerRow = computerEl.createDiv({ attr: { style: "display: flex; justify-content: space-between; align-items: center; width: 100%;" } });
-        const infoDiv = headerRow.createDiv({ attr: { style: "flex: 1;" } });
-        const platformIcon = computer.platform === "darwin" ? "\u{1F34E}" : "\u{1FA9F}";
-        infoDiv.createEl("div", {
-          text: `${platformIcon} ${computer.name}`,
-          attr: { style: "font-weight: 500;" }
-        });
-        infoDiv.createEl("div", {
-          text: `${computer.platform === "darwin" ? "macOS" : "Windows"} \u2022 ${computer.username}${isCurrentComputer ? " (current)" : ""}`,
-          attr: { style: "font-size: 12px; color: var(--text-muted);" }
-        });
-        const deleteBtn = headerRow.createEl("button", { text: "\xD7", cls: "cmdspace-eagle-computer-delete" });
-        const subPathContainer = computerEl.createDiv({ attr: { style: "margin-top: 8px; width: 100%;" } });
-        subPathContainer.createEl("label", {
-          text: "Sub-path (folders between /Users/name/ and sync folder)",
-          attr: { style: "font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px;" }
-        });
-        const subPathInput = subPathContainer.createEl("input", {
-          type: "text",
-          value: computer.subPath || "",
-          placeholder: "e.g., OneDrive or Dropbox/Work",
-          attr: { style: "width: 100%; padding: 4px 8px; border-radius: 4px; border: 1px solid var(--background-modifier-border);" }
-        });
-        subPathInput.addEventListener("change", () => {
-          void (async () => {
-            const idx = this.plugin.settings.computers.findIndex((c) => c.id === computer.id);
-            if (idx >= 0) {
-              this.plugin.settings.computers[idx].subPath = subPathInput.value.trim();
-              await this.plugin.saveSettings();
-            }
-          })();
-        });
-        deleteBtn.addEventListener("click", () => {
-          void (async () => {
-            this.plugin.settings.computers = this.plugin.settings.computers.filter((c) => c.id !== computer.id);
-            await this.plugin.saveSettings();
-            this.display();
-            new import_obsidian3.Notice("Computer removed");
-          })();
-        });
-      }
-    }
-  }
-  detectCurrentUsername() {
-    const adapter = this.app.vault.adapter;
-    const vaultPath = adapter.basePath || "";
-    const platform = String(process.platform);
-    if (platform === "darwin") {
-      const match = vaultPath.match(/^\/Users\/([^/]+)/);
-      if (match)
-        return match[1];
-    } else if (platform === "win32") {
-      const match = vaultPath.match(/^[A-Za-z]:[/\\]Users[/\\]([^/\\]+)/i);
-      if (match)
-        return match[1];
-    }
-    return "unknown";
-  }
-  renderMirrorRootFolderSettings(containerEl, isAskMode = false) {
-    const toggleDesc = isAskMode ? 'When using the "Mirror" button in the folder picker, nest the mirrored folder hierarchy under a designated Eagle root folder instead of the library root.' : "Nest the mirrored folder hierarchy under a designated Eagle root folder instead of the library root.";
-    new import_obsidian3.Setting(containerEl).setName("Place mirrored folders under a root folder").setDesc(toggleDesc).addToggle((toggle) => toggle.setValue(this.plugin.settings.enableMirrorRootFolder).onChange(async (value) => {
-      this.plugin.settings.enableMirrorRootFolder = value;
-      await this.plugin.saveSettings();
-      this.display();
-    }));
-    if (this.plugin.settings.enableMirrorRootFolder) {
-      const isConfigured = !!this.plugin.settings.mirrorRootFolder && !!this.plugin.settings.mirrorRootFolderName;
-      const descText = isConfigured ? this.plugin.settings.mirrorRootFolderName : "No folder selected (Required)";
-      const rootSetting = new import_obsidian3.Setting(containerEl).setName("Mirrored root folder").setDesc(descText);
-      if (!isConfigured) {
-        rootSetting.descEl.addClass("cmdspace-eagle-setting-required");
-      }
-      rootSetting.addButton((button) => button.setButtonText("Select Folder").onClick(async () => {
-        const api = new EagleApiService(this.plugin.settings);
-        const connected = await api.isConnected();
-        if (!connected) {
-          new import_obsidian3.Notice("Eagle is not running. Please start Eagle and try again.");
-          return;
-        }
-        const folders = await api.listFolders();
-        if (!folders || folders.length === 0) {
-          new import_obsidian3.Notice("No folders found in your Eagle library.");
-          return;
-        }
-        const { flattenEagleFolders: flattenEagleFolders2, EagleFolderModal: EagleFolderModal2 } = await Promise.resolve().then(() => (init_modals(), modals_exports));
-        const flattened = flattenEagleFolders2(folders);
-        const modal = new EagleFolderModal2(this.app, flattened, async (folderId) => {
-          const selected = flattened.find((f) => f.id === folderId);
-          if (selected) {
-            this.plugin.settings.mirrorRootFolder = selected.id;
-            this.plugin.settings.mirrorRootFolderName = selected.path;
-            await this.plugin.saveSettings();
-            this.display();
-          }
-        });
-        modal.open();
-      })).addButton((button) => button.setButtonText("Clear").onClick(async () => {
-        this.plugin.settings.mirrorRootFolder = "";
-        this.plugin.settings.mirrorRootFolderName = "";
-        await this.plugin.saveSettings();
-        this.display();
-      }));
-    }
-  }
-};
 
 // src/cloud-providers.ts
-var import_obsidian4 = require("obsidian");
+var import_obsidian3 = require("obsidian");
 init_fs_utils();
+async function isPublicUrlGone(url) {
+  try {
+    const response = await (0, import_obsidian3.requestUrl)({
+      url,
+      method: "HEAD",
+      headers: { "X-Requested-With": "XMLHttpRequest" },
+      throw: false
+    });
+    return response.status === 404 || response.status === 410;
+  } catch (e) {
+    return false;
+  }
+}
 function getMimeType2(ext) {
   const MIME_TYPES2 = {
     "jpg": "image/jpeg",
@@ -3088,24 +2472,43 @@ var WebDAVProvider = class {
   constructor(config) {
     this.config = config;
   }
-  async upload(filePath, filename, mimeType) {
+  // Upload directory as '' or '/dir[/sub]', without a trailing slash
+  getUploadDir() {
+    let path = this.config.uploadPath || "";
+    if (path && !path.startsWith("/"))
+      path = "/" + path;
+    if (path && path.endsWith("/"))
+      path = path.slice(0, -1);
+    return path;
+  }
+  async findExistingUpload(stableName) {
+    const url = this.getPublicUrl(`${this.getUploadDir()}/${stableName}`);
+    try {
+      const response = await (0, import_obsidian3.requestUrl)({
+        url,
+        method: "HEAD",
+        headers: { "X-Requested-With": "XMLHttpRequest" },
+        throw: false
+      });
+      return response.status >= 200 && response.status < 300 ? url : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  async upload(filePath, filename, mimeType, options) {
     if (!this.config.serverUrl || !this.config.username) {
       return { success: false, error: "WebDAV not configured" };
     }
     try {
       const fileBuffer = await fsp.readFile(filePath);
-      let path = this.config.uploadPath || "";
-      if (path && !path.startsWith("/"))
-        path = "/" + path;
-      if (path && path.endsWith("/"))
-        path = path.slice(0, -1);
-      const key = `${path}/${Date.now()}-${filename}`;
+      const path = this.getUploadDir();
+      const key = (options == null ? void 0 : options.stableName) ? `${path}/${options.stableName}` : `${path}/${Date.now()}-${filename}`;
       let server = this.config.serverUrl;
       if (server.endsWith("/"))
         server = server.slice(0, -1);
       const uploadUrl = `${server}${key}`;
       const auth = btoa(`${this.config.username}:${this.config.password}`);
-      let response = await (0, import_obsidian4.requestUrl)({
+      const put = () => (0, import_obsidian3.requestUrl)({
         url: uploadUrl,
         method: "PUT",
         headers: {
@@ -3115,29 +2518,25 @@ var WebDAVProvider = class {
         body: new Uint8Array(fileBuffer).buffer,
         throw: false
       });
-      if (response.status === 409 && path) {
-        await (0, import_obsidian4.requestUrl)({
-          url: `${server}${path}`,
-          method: "MKCOL",
-          headers: {
-            "Authorization": `Basic ${auth}`
-          },
-          throw: false
-        });
-        response = await (0, import_obsidian4.requestUrl)({
-          url: uploadUrl,
-          method: "PUT",
-          headers: {
-            "Authorization": `Basic ${auth}`,
-            "Content-Type": mimeType
-          },
-          body: new Uint8Array(fileBuffer).buffer,
-          throw: false
-        });
+      let response = await put();
+      if ((response.status === 409 || response.status === 404) && path) {
+        let dir = "";
+        for (const segment of path.split("/").filter((s) => s.length > 0)) {
+          dir += `/${segment}`;
+          await (0, import_obsidian3.requestUrl)({
+            url: `${server}${dir}`,
+            method: "MKCOL",
+            headers: {
+              "Authorization": `Basic ${auth}`
+            },
+            throw: false
+          });
+        }
+        response = await put();
       }
       if (response.status !== 200 && response.status !== 201 && response.status !== 204) {
-        if (response.status === 409) {
-          return { success: false, error: `WebDAV upload failed (409 Conflict). Ensure the upload path '${this.config.uploadPath}' exists on your server.` };
+        if (response.status === 409 || response.status === 404) {
+          return { success: false, error: `WebDAV upload failed (${response.status}). Check the server URL and ensure the upload path '${this.config.uploadPath}' exists on your server.` };
         }
         return { success: false, error: `WebDAV upload failed (${response.status})` };
       }
@@ -3160,7 +2559,7 @@ var WebDAVProvider = class {
     }
     try {
       const auth = btoa(`${this.config.username}:${this.config.password}`);
-      const response = await (0, import_obsidian4.requestUrl)({
+      const response = await (0, import_obsidian3.requestUrl)({
         url: this.config.serverUrl,
         method: "PROPFIND",
         headers: {
@@ -3174,13 +2573,132 @@ var WebDAVProvider = class {
       return false;
     }
   }
-  getPublicUrl(key) {
-    if (this.config.publicUrl) {
-      return `${this.config.publicUrl}${key}`;
+  /**
+   * Checks the server login and, when the Public URL is a Nextcloud public share,
+   * that the share serves files without a login. Read-only: nothing is uploaded.
+   */
+  async checkConnection() {
+    const serverUrl = this.config.serverUrl;
+    if (!serverUrl || !this.config.username) {
+      return { ok: false, message: "Enter the Server URL and username first." };
     }
-    return `${this.config.serverUrl}${key}`;
+    if (!/^https?:\/\//.test(serverUrl) || serverUrl.split("://").length > 2) {
+      return { ok: false, message: "Server URL looks malformed. It should be a single address starting with http:// or https://." };
+    }
+    try {
+      const auth = btoa(`${this.config.username}:${this.config.password}`);
+      const response = await (0, import_obsidian3.requestUrl)({
+        url: serverUrl,
+        method: "PROPFIND",
+        headers: {
+          "Authorization": `Basic ${auth}`,
+          "Depth": "0"
+        },
+        throw: false
+      });
+      if (response.status === 401) {
+        return { ok: false, message: "Login rejected (401). Check the username and password." };
+      }
+      if (response.status === 404) {
+        return { ok: false, message: "Server URL not found (404). Check the address and that the folder exists." };
+      }
+      if (response.status !== 207 && response.status !== 200) {
+        return { ok: false, message: `Server responded with ${response.status}. Check that the Server URL is a WebDAV address.` };
+      }
+    } catch (error) {
+      return { ok: false, message: `Could not reach the server: ${error instanceof Error ? error.message : "unknown error"}` };
+    }
+    if (!this.config.publicUrl) {
+      return { ok: true, message: "Connected. No Public URL is set, so image links will use the Server URL." };
+    }
+    const publicUrl = resolveWebDAVPublicUrl(this.config.publicUrl, !this.config.disableShareLinkConversion);
+    if (!publicUrl.includes("/public.php/dav/files/")) {
+      return { ok: true, message: "Connected." };
+    }
+    try {
+      const response = await (0, import_obsidian3.requestUrl)({
+        url: publicUrl,
+        method: "PROPFIND",
+        headers: {
+          "Depth": "0",
+          "X-Requested-With": "XMLHttpRequest"
+        },
+        throw: false
+      });
+      if (response.status === 207 || response.status === 200) {
+        return { ok: true, message: "Connected, and the public share is reachable without a login." };
+      }
+      if (response.status === 401) {
+        return { ok: false, message: "Connected, but the public share asks for a password, so embedded images will not display." };
+      }
+      return { ok: false, message: `Connected, but the public share was not found (${response.status}). Check the share link.` };
+    } catch (error) {
+      return { ok: false, message: `Connected, but the public share could not be reached: ${error instanceof Error ? error.message : "unknown error"}` };
+    }
+  }
+  /**
+   * If `sourceUrl` is a file that already lives on this server (under the Public URL or the
+   * Server URL), returns its public URL so it can be embedded without uploading another copy.
+   * Returns null when the file is elsewhere or the public URL does not serve it.
+   */
+  async findExistingPublicUrl(sourceUrl) {
+    const publicBase = this.normalizeBase(resolveWebDAVPublicUrl(
+      this.config.publicUrl || this.config.serverUrl,
+      !this.config.disableShareLinkConversion
+    ));
+    const serverBase = this.normalizeBase(this.config.serverUrl);
+    if (!publicBase)
+      return null;
+    let source;
+    try {
+      const parsed = new URL(sourceUrl);
+      if (!/\/[^/]+\.[A-Za-z0-9]+$/.test(parsed.pathname))
+        return null;
+      source = `${parsed.origin}${parsed.pathname}`;
+    } catch (e) {
+      return null;
+    }
+    const base = [publicBase, serverBase].find((b) => b && source.startsWith(`${b}/`));
+    if (!base)
+      return null;
+    const candidate = `${publicBase}${source.slice(base.length)}`;
+    try {
+      const response = await (0, import_obsidian3.requestUrl)({
+        url: candidate,
+        method: "HEAD",
+        headers: { "X-Requested-With": "XMLHttpRequest" },
+        throw: false
+      });
+      return response.status >= 200 && response.status < 300 ? candidate : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  // Origin + path without trailing slashes, with the host lower-cased by URL parsing
+  normalizeBase(url) {
+    try {
+      const parsed = new URL(url.trim());
+      return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`;
+    } catch (e) {
+      return null;
+    }
+  }
+  getPublicUrl(key) {
+    const base = resolveWebDAVPublicUrl(
+      this.config.publicUrl || this.config.serverUrl,
+      !this.config.disableShareLinkConversion
+    );
+    return `${base}${key}`;
   }
 };
+function resolveWebDAVPublicUrl(url, convertShareLinks = true) {
+  const trimmed = url.trim().replace(/\/+$/, "");
+  const share = convertShareLinks && trimmed.match(/^(https?:\/\/.+?)(?:\/index\.php)?\/s\/([A-Za-z0-9]+)$/);
+  if (share) {
+    return `${share[1]}/public.php/dav/files/${share[2]}`;
+  }
+  return trimmed;
+}
 var ImgHippoProvider = class {
   constructor(config) {
     this.config = config;
@@ -3217,7 +2735,7 @@ Content-Type: ${mimeType}\r
       body.set(head, 0);
       body.set(fileBuffer, head.length);
       body.set(tail, head.length + fileBuffer.length);
-      const response = await (0, import_obsidian4.requestUrl)({
+      const response = await (0, import_obsidian3.requestUrl)({
         url: this.API_URL,
         method: "POST",
         contentType: `multipart/form-data; boundary=${boundary}`,
@@ -3331,10 +2849,756 @@ function createCloudProvider(config) {
       return null;
   }
 }
+function isCloudProviderConfigured(config) {
+  switch (config.type) {
+    case "r2":
+      return !!(config.workerUrl && config.apiKey);
+    case "s3":
+      return !!(config.endpoint && config.accessKeyId && config.secretAccessKey);
+    case "webdav":
+      return !!(config.serverUrl && config.username && config.password);
+    case "imghippo":
+      return !!config.apiKey;
+    case "custom":
+      return !!config.uploadUrl;
+    default:
+      return false;
+  }
+}
 function getExtFromFilename(filename) {
   const parts = filename.split(".");
   return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : "";
 }
+
+// src/settings.ts
+init_types();
+var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
+  constructor(app, plugin) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
+  display() {
+    const { containerEl } = this;
+    containerEl.empty();
+    new import_obsidian4.Setting(containerEl).setName("Connection").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("Eagle API Base URL").setDesc("The base URL for Eagle's local API (default: http://localhost:41595)").addText((text) => text.setPlaceholder("http://localhost:41595").setValue(this.plugin.settings.eagleApiBaseUrl).onChange(async (value) => {
+      this.plugin.settings.eagleApiBaseUrl = value || "http://localhost:41595";
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian4.Setting(containerEl).setName("Connection Timeout").setDesc("Timeout in milliseconds for API requests").addText((text) => text.setPlaceholder("5000").setValue(this.plugin.settings.connectionTimeout.toString()).onChange(async (value) => {
+      const num = parseInt(value, 10);
+      if (!isNaN(num) && num > 0) {
+        this.plugin.settings.connectionTimeout = num;
+        await this.plugin.saveSettings();
+      }
+    }));
+    new import_obsidian4.Setting(containerEl).setName("Test Connection").setDesc("Check if Eagle is running and accessible").addButton((button) => button.setButtonText("Test").onClick(async () => {
+      const api = new EagleApiService(this.plugin.settings);
+      const info = await api.getApplicationInfo();
+      if (info) {
+        new import_obsidian4.Notice(`\u2713 Connected to Eagle ${info.version} (${info.platform})`);
+      } else {
+        new import_obsidian4.Notice("\u2717 Failed to connect to Eagle. Make sure Eagle is running.");
+      }
+    }));
+    this.renderExtraLinksSettings(containerEl);
+    new import_obsidian4.Setting(containerEl).setName("Image paste/drop behavior").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("Default image behavior").setDesc("What to do when pasting or dropping images").addDropdown((dropdown) => dropdown.addOption("ask", "Ask every time").addOption("eagle", "Always save to Eagle").addOption("local", "Always save to vault").addOption("cloud", "Always upload to cloud only").setValue(this.plugin.settings.imagePasteBehavior).onChange(async (value) => {
+      this.plugin.settings.imagePasteBehavior = value;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian4.Setting(containerEl).setName("Image source URL capture").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("Capture image source URL on paste").setDesc("When an image copied from a web browser is pasted into Obsidian, automatically extract its origin URL and pass it to Eagle.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableImageSourceUrl).onChange(async (value) => {
+      this.plugin.settings.enableImageSourceUrl = value;
+      await this.plugin.saveSettings();
+      this.display();
+    }));
+    if (this.plugin.settings.enableImageSourceUrl) {
+      new import_obsidian4.Setting(containerEl).setName("Source URL priority (Eagle website field)").setDesc("Choose which URL is pushed to Eagle's primary website / origin link field.").addDropdown((dropdown) => dropdown.addOption("page-first", "Webpage URL (fallback to image URL)").addOption("image-first", "Direct image URL (fallback to webpage URL)").addOption("page-only", "Webpage URL only").addOption("image-only", "Direct image URL only").setValue(this.plugin.settings.imageSourceUrlPriority).onChange(async (value) => {
+        this.plugin.settings.imageSourceUrlPriority = value;
+        await this.plugin.saveSettings();
+      }));
+      new import_obsidian4.Setting(containerEl).setName("Add image source to Extra Links").setDesc("Push the captured image source URLs into Eagle's Extra Links panel alongside any Obsidian backlinks. Requires Extra Links plugin for Eagle." + (this.plugin.settings.enableExtraLinks ? "" : " Eagle Extra Links is currently turned off, so nothing is added.")).addDropdown((dropdown) => dropdown.addOption("none", "None (do not add to Extra Links)").addOption("page", "Page URL only").addOption("image", "Image src URL only").addOption("both", "Both Page URL and Image src").setValue(this.plugin.settings.extraLinksImageSource).onChange(async (value) => {
+        this.plugin.settings.extraLinksImageSource = value;
+        await this.plugin.saveSettings();
+      }));
+      new import_obsidian4.Setting(containerEl).setName("Include source in metadata card").setDesc("When embedding an image with metadata card enabled, include a clickable markdown link to the captured source URL.").addDropdown((dropdown) => dropdown.addOption("none", "None (do not include source)").addOption("page", "Page URL only").addOption("image", "Direct image URL only").addOption("both", "Both Page URL and Direct image URL").setValue(this.plugin.settings.includeSourceInMetadataCard).onChange(async (value) => {
+        this.plugin.settings.includeSourceInMetadataCard = value;
+        await this.plugin.saveSettings();
+      }));
+      new import_obsidian4.Setting(containerEl).setName("Include local file source in metadata card").setDesc("When embedding an image dragged or pasted from File Explorer or Finder, include a clickable file:// link to the original local file.").addToggle((toggle) => toggle.setValue(this.plugin.settings.includeLocalSourceInMetadataCard).onChange(async (value) => {
+        this.plugin.settings.includeLocalSourceInMetadataCard = value;
+        await this.plugin.saveSettings();
+      }));
+    }
+    new import_obsidian4.Setting(containerEl).setName("Eagle link paste").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("Eagle link paste behavior").setDesc("What to do when pasting an Eagle item link into a note").addDropdown((dropdown) => dropdown.addOption("ask", "Always ask").addOption("embed", "Embed image").addOption("inline", "Inline link").setValue(this.plugin.settings.eagleLinkPasteMode).onChange(async (value) => {
+      this.plugin.settings.eagleLinkPasteMode = value;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian4.Setting(containerEl).setName("Eagle embed URL mode").setDesc("How notes link to images stored in Eagle. Cloud copy uploads a copy to the active cloud provider so the image displays on your other devices; without a configured provider it falls back to the local file path.").addDropdown((dropdown) => dropdown.addOption("cloud", "Cloud copy (active cloud provider)").addOption("custom-url", "Custom URL prefix (HTTP / WebDAV)").addOption("file", "Local file path (file://)").setValue(this.plugin.settings.eagleEmbedUrlMode).onChange(async (value) => {
+      this.plugin.settings.eagleEmbedUrlMode = value;
+      await this.plugin.saveSettings();
+      this.display();
+    }));
+    if (this.plugin.settings.eagleEmbedUrlMode === "custom-url") {
+      new import_obsidian4.Setting(containerEl).setName("Custom URL prefix").setDesc("Base URL for serving Eagle library files over HTTP/WebDAV (e.g. https://localhost:8080)").addText((text) => text.setPlaceholder("https://localhost:8080").setValue(this.plugin.settings.eagleCustomUrlPrefix).onChange(async (value) => {
+        this.plugin.settings.eagleCustomUrlPrefix = value.trim() || "https://localhost:8080";
+        await this.plugin.saveSettings();
+      }));
+    }
+    new import_obsidian4.Setting(containerEl).setName("Eagle folder").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("When adding an item to Eagle").setDesc("Choose how newly added images and attachments are routed to folders in your Eagle library.").addDropdown((dropdown) => dropdown.addOption("ask", "Ask").addOption("target", "Add to Target Folder").addOption("mirror", "Mirror Obsidian Folder Hierarchy").addOption("map", "Use Folder Map").setValue(this.plugin.settings.addFolderMode || (this.plugin.settings.enableDefaultFolder ? "target" : "target")).onChange(async (value) => {
+      this.plugin.settings.addFolderMode = value;
+      await this.plugin.saveSettings();
+      this.display();
+    }));
+    if (this.plugin.settings.addFolderMode === "target") {
+      new import_obsidian4.Setting(containerEl).setName("Target folder").setDesc(this.plugin.settings.defaultFolderName || "No folder selected (Root library)").addButton((button) => button.setButtonText("Select Folder").onClick(async () => {
+        const api = new EagleApiService(this.plugin.settings);
+        const folders = await api.listFolders();
+        if (!folders || folders.length === 0) {
+          new import_obsidian4.Notice("No folders found or Eagle is not connected.");
+          return;
+        }
+        const { flattenEagleFolders: flattenEagleFolders2, EagleFolderModal: EagleFolderModal2 } = await Promise.resolve().then(() => (init_modals(), modals_exports));
+        const flattened = flattenEagleFolders2(folders);
+        const modal = new EagleFolderModal2(this.app, flattened, async (folderId) => {
+          const selected = flattened.find((f) => f.id === folderId);
+          if (selected) {
+            this.plugin.settings.defaultFolder = selected.id;
+            this.plugin.settings.defaultFolderName = selected.path;
+            await this.plugin.saveSettings();
+            this.display();
+          }
+        });
+        modal.open();
+      })).addButton((button) => button.setButtonText("Clear").onClick(async () => {
+        this.plugin.settings.defaultFolder = "";
+        this.plugin.settings.defaultFolderName = "";
+        await this.plugin.saveSettings();
+        this.display();
+      }));
+    } else if (this.plugin.settings.addFolderMode === "ask") {
+      const recentCount = (this.plugin.settings.recentEagleFolders || []).length;
+      const desc = recentCount > 0 ? `Prompts you with a searchable folder picker before each upload, featuring ${recentCount} recently used folder(s).` : "Prompts you with a searchable folder picker before each upload, featuring your recently used folders.";
+      const askSetting = new import_obsidian4.Setting(containerEl).setName("Folder prompt").setDesc(desc);
+      if (recentCount > 0) {
+        askSetting.addButton((button) => button.setButtonText("Clear Recent History").onClick(async () => {
+          this.plugin.settings.recentEagleFolders = [];
+          await this.plugin.saveSettings();
+          new import_obsidian4.Notice("Recent Eagle folders cleared.");
+          this.display();
+        }));
+      }
+      this.renderMirrorRootFolderSettings(containerEl, true);
+    } else if (this.plugin.settings.addFolderMode === "mirror") {
+      new import_obsidian4.Setting(containerEl).setName("Folder hierarchy mirroring").setDesc("Automatically creates and mirrors the active note\u2019s folder hierarchy inside Eagle relative to the vault and library roots. If the note is at the vault root, attachments are placed in the root library.");
+      this.renderMirrorRootFolderSettings(containerEl, false);
+    } else if (this.plugin.settings.addFolderMode === "map") {
+      new import_obsidian4.Setting(containerEl).setName("Folder mappings").setDesc("Map Obsidian vault folders to corresponding Eagle folders. Subfolders automatically inherit their parent folder mapping unless specifically mapped.").addButton((button) => button.setButtonText("Add Folder Mapping").setCta().onClick(async () => {
+        const api = new EagleApiService(this.plugin.settings);
+        const connected = await api.isConnected();
+        if (!connected) {
+          new import_obsidian4.Notice("Eagle is not running. Please start Eagle and try again.");
+          return;
+        }
+        const { AddFolderMappingModal: AddFolderMappingModal2 } = await Promise.resolve().then(() => (init_modals(), modals_exports));
+        const modal = new AddFolderMappingModal2(this.app, api, async (newMapping) => {
+          this.plugin.settings.folderMappings = this.plugin.settings.folderMappings || [];
+          const existingIndex = this.plugin.settings.folderMappings.findIndex(
+            (m) => m.obsidianFolder.toLowerCase() === newMapping.obsidianFolder.toLowerCase()
+          );
+          if (existingIndex >= 0) {
+            this.plugin.settings.folderMappings[existingIndex] = newMapping;
+          } else {
+            this.plugin.settings.folderMappings.push(newMapping);
+          }
+          await this.plugin.saveSettings();
+          this.display();
+        });
+        modal.open();
+      }));
+      const mappings = this.plugin.settings.folderMappings || [];
+      if (mappings.length > 0) {
+        const listEl = containerEl.createDiv({ cls: "cmdspace-eagle-mapping-list" });
+        for (const mapping of mappings) {
+          const rowEl = listEl.createDiv({ cls: "cmdspace-eagle-mapping-row" });
+          const pathsEl = rowEl.createDiv({ cls: "cmdspace-eagle-mapping-paths" });
+          pathsEl.createSpan({ cls: "cmdspace-eagle-mapping-vault", text: mapping.obsidianFolder || "/" });
+          pathsEl.createSpan({ cls: "cmdspace-eagle-mapping-arrow", text: " \u2794 " });
+          pathsEl.createSpan({ cls: "cmdspace-eagle-mapping-eagle", text: mapping.eagleFolderName || mapping.eagleFolderId });
+          const btn = rowEl.createEl("button", { text: "Delete", cls: "mod-warning" });
+          btn.onclick = async () => {
+            this.plugin.settings.folderMappings = (this.plugin.settings.folderMappings || []).filter((m) => m.id !== mapping.id);
+            await this.plugin.saveSettings();
+            this.display();
+          };
+        }
+      } else {
+        const emptyEl = containerEl.createDiv({ cls: "cmdspace-eagle-mapping-empty" });
+        emptyEl.createEl("p", { text: 'No folder mappings configured yet. Click "Add Folder Mapping" to create one.', cls: "cmds-eagle-muted" });
+      }
+    }
+    new import_obsidian4.Setting(containerEl).setName("Eagle tags").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("Add default tags to new Eagle attachments").setDesc("Automatically append specific tags to images you paste or drop into Eagle.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableDefaultTags).onChange(async (value) => {
+      this.plugin.settings.enableDefaultTags = value;
+      await this.plugin.saveSettings();
+      this.display();
+    }));
+    if (this.plugin.settings.enableDefaultTags) {
+      new import_obsidian4.Setting(containerEl).setName("Default Tags").setDesc("Comma-separated list of tags to add (e.g. obsidian, reference)").addText((text) => text.setPlaceholder("obsidian, reference").setValue(this.plugin.settings.defaultTags).onChange(async (value) => {
+        this.plugin.settings.defaultTags = value;
+        await this.plugin.saveSettings();
+      }));
+    }
+    new import_obsidian4.Setting(containerEl).setName("Obsidian Backlinks").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("Add Obsidian backlink to Eagle attachments").setDesc("Automatically generate an Advanced URI backlink to the current note when adding or pasting Eagle items.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableBacklinks).onChange(async (value) => {
+      this.plugin.settings.enableBacklinks = value;
+      await this.plugin.saveSettings();
+      this.display();
+    }));
+    if (this.plugin.settings.enableBacklinks) {
+      new import_obsidian4.Setting(containerEl).setName("UID field in frontmatter").setDesc(`Frontmatter property used to identify the note for Advanced URI linking (matches Advanced URI's "UID field"). Defaults to "id".`).addText((text) => text.setPlaceholder("id").setValue(this.plugin.settings.frontmatterIdField).onChange(async (value) => {
+        this.plugin.settings.frontmatterIdField = value.trim() || "id";
+        await this.plugin.saveSettings();
+      }));
+      new import_obsidian4.Setting(containerEl).setName("Backlink Mode").setDesc("Choose how backlinks are registered with Eagle").addDropdown((dropdown) => dropdown.addOption("extra-links", "Eagle Extra Links Plugin (REST API)").addOption("legacy", "Eagle Native Fields (Website / Note)").setValue(this.plugin.settings.backlinkMode).onChange(async (value) => {
+        this.plugin.settings.backlinkMode = value;
+        await this.plugin.saveSettings();
+        this.display();
+      }));
+      if (this.plugin.settings.backlinkMode === "extra-links") {
+        if (!this.plugin.settings.enableExtraLinks) {
+          const pausedEl = containerEl.createEl("p", {
+            text: "Eagle Extra Links is turned off, so no backlinks are being saved. Turn it on above, or switch the backlink mode to Eagle Native Fields.",
+            cls: "setting-item-description cmdspace-eagle-setting-required"
+          });
+          pausedEl.style.marginTop = "0";
+        }
+      } else {
+        new import_obsidian4.Setting(containerEl).setName("Backlink Destination").setDesc("Where should the backlink be saved in Eagle?").addDropdown((dropdown) => dropdown.addOption("url", "URL/Link Field").addOption("note", "Note/Annotation Field").addOption("both", "Both").setValue(this.plugin.settings.backlinkDestination).onChange(async (value) => {
+          this.plugin.settings.backlinkDestination = value;
+          await this.plugin.saveSettings();
+        }));
+      }
+    }
+    new import_obsidian4.Setting(containerEl).setName("Excalidraw integration").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("Embed images in Excalidraw via cloud").setDesc("When you paste or drop an image onto an Excalidraw canvas, upload it to your cloud provider and embed the URL instead of saving a vault attachment. Eagle assets are resolved to the original; screenshots are uploaded as-is. Requires the Excalidraw plugin and a configured cloud provider.").addToggle((toggle) => toggle.setValue(this.plugin.settings.excalidrawIntegration).onChange(async (value) => {
+      this.plugin.settings.excalidrawIntegration = value;
+      await this.plugin.saveSettings();
+      if (value)
+        this.plugin.scanAndAttachExcalidrawContainers();
+    }));
+    new import_obsidian4.Setting(containerEl).setName("Also add pasted screenshots to Eagle").setDesc("When pasting a clipboard image (not already in Eagle) onto a canvas, also import it into your Eagle library (into the default folder, if set).").addToggle((toggle) => toggle.setValue(this.plugin.settings.excalidrawImportToEagle).onChange(async (value) => {
+      this.plugin.settings.excalidrawImportToEagle = value;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian4.Setting(containerEl).setName("Search & embed").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("Include metadata card").setDesc("Add metadata (type, size, tags, Eagle link) below the image when embedding. Images uploaded straight to the cloud get type, size, dimensions and source links.").addToggle((toggle) => toggle.setValue(this.plugin.settings.insertThumbnail).onChange(async (value) => {
+      this.plugin.settings.insertThumbnail = value;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian4.Setting(containerEl).setName("Eagle item link format").setDesc('Choose the link format for opening items in Eagle (used in metadata cards, link cards, and inline links). Default is HTTP localhost URL (e.g. http://localhost:41595/item?id=UUID); "eagle://" protocol remains available.').addDropdown((dropdown) => dropdown.addOption("http", "HTTP URL (http://localhost:41595/item?id=UUID)").addOption("eagle", "Eagle Protocol (eagle://item/UUID)").setValue(this.plugin.settings.eagleItemLinkFormat).onChange(async (value) => {
+      this.plugin.settings.eagleItemLinkFormat = value;
+      await this.plugin.saveSettings();
+    }));
+    this.renderSearchFiltersSettings(containerEl);
+    new import_obsidian4.Setting(containerEl).setName("Cloud storage provider").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("Active Cloud Provider").setDesc("Select which cloud storage to use for image uploads").addDropdown((dropdown) => dropdown.addOption("r2", "Cloudflare R2").addOption("imghippo", "ImgHippo (Free)").addOption("s3", "Amazon S3").addOption("webdav", "WebDAV (Synology/NAS)").addOption("custom", "Custom Server").setValue(this.plugin.settings.activeCloudProvider).onChange(async (value) => {
+      this.plugin.settings.activeCloudProvider = value;
+      await this.plugin.saveSettings();
+      this.display();
+    }));
+    this.renderCloudProviderSettings(containerEl);
+    new import_obsidian4.Setting(containerEl).setName("Cross-platform sync").setHeading();
+    this.renderCrossPlatformSettings(containerEl);
+    containerEl.createEl("hr", { attr: { style: "margin: 24px 0; border: none; border-top: 1px solid var(--background-modifier-border);" } });
+    const footerEl = containerEl.createEl("div", { attr: { style: "text-align: center; color: var(--text-muted); font-size: 12px;" } });
+    footerEl.createEl("div", { text: `Eagle Bridge v${this.plugin.manifest.version}`, attr: { style: "margin-bottom: 8px;" } });
+    const linksEl = footerEl.createEl("div");
+    linksEl.createSpan({ text: "Corey Struzan \xB7 " });
+    const ghLink = linksEl.createEl("a", { text: "GitHub", href: "https://github.com/coreyx/obsidian-eagle-bridge" });
+    ghLink.setAttr("target", "_blank");
+    const creditEl = footerEl.createEl("div", { attr: { style: "margin-top: 4px;" } });
+    creditEl.createSpan({ text: "Based on " });
+    const upstreamLink = creditEl.createEl("a", { text: "CMDS Eagle", href: "https://github.com/johnfkoo951/cmds-eagle" });
+    upstreamLink.setAttr("target", "_blank");
+    creditEl.createSpan({ text: " by Yohan Koo" });
+  }
+  renderCloudProviderSettings(containerEl) {
+    const provider = this.plugin.settings.activeCloudProvider;
+    const providerContainer = containerEl.createDiv({ cls: "cloud-provider-settings" });
+    switch (provider) {
+      case "imghippo":
+        this.renderImgHippoSettings(providerContainer);
+        break;
+      case "r2":
+        this.renderR2Settings(providerContainer);
+        break;
+      case "s3":
+        this.renderS3Settings(providerContainer);
+        break;
+      case "webdav":
+        this.renderWebDAVSettings(providerContainer);
+        break;
+      case "custom":
+        this.renderCustomSettings(providerContainer);
+        break;
+    }
+  }
+  renderR2Settings(containerEl) {
+    new import_obsidian4.Setting(containerEl).setName("Cloudflare R2").setHeading();
+    const infoEl = containerEl.createEl("div", { cls: "setting-item-description cmds-eagle-info-block" });
+    infoEl.createEl("p", { text: "Cloudflare R2 requires a Worker for uploads. Setup:" });
+    const r2List = infoEl.createEl("ol");
+    r2List.createEl("li", { text: "Create an R2 bucket in Cloudflare dashboard" });
+    r2List.createEl("li", { text: "Deploy the Eagle Cloud Worker (see plugin docs)" });
+    r2List.createEl("li", { text: "Copy Worker URL and API Key below" });
+    new import_obsidian4.Setting(containerEl).setName("Worker URL").setDesc("Cloudflare Worker URL (must end with .workers.dev)").addText((text) => text.setPlaceholder("https://eagle-uploader.xxx.workers.dev").setValue(this.plugin.settings.cloudProviders.r2.workerUrl).onChange(async (value) => {
+      let url = value.trim();
+      if (url && !url.startsWith("http")) {
+        url = "https://" + url;
+      }
+      url = url.replace(/\/$/, "");
+      this.plugin.settings.cloudProviders.r2.workerUrl = url;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian4.Setting(containerEl).setName("API Key").setDesc("API_KEY from Cloudflare Worker Variables").addText((text) => text.setPlaceholder("your-api-key-here").setValue(this.plugin.settings.cloudProviders.r2.apiKey).onChange(async (value) => {
+      this.plugin.settings.cloudProviders.r2.apiKey = value.trim();
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian4.Setting(containerEl).setName("Public URL").setDesc("R2 bucket public URL (starts with pub-)").addText((text) => text.setPlaceholder("https://pub-xxx.r2.dev").setValue(this.plugin.settings.cloudProviders.r2.publicUrl).onChange(async (value) => {
+      this.plugin.settings.cloudProviders.r2.publicUrl = value.trim().replace(/\/$/, "");
+      await this.plugin.saveSettings();
+    }));
+  }
+  renderImgHippoSettings(containerEl) {
+    new import_obsidian4.Setting(containerEl).setName("ImgHippo (free image hosting)").setHeading();
+    const infoEl = containerEl.createEl("div", { cls: "setting-item-description cmds-eagle-info-block" });
+    infoEl.createEl("p", { text: "ImgHippo is a free image hosting service. To get your API key:" });
+    const ihList = infoEl.createEl("ol");
+    const ihLi1 = ihList.createEl("li");
+    ihLi1.appendText("Visit ");
+    ihLi1.createEl("a", { text: "imghippo.com", href: "https://www.imghippo.com/" });
+    ihLi1.appendText(" and sign up/login");
+    const ihLi2 = ihList.createEl("li");
+    ihLi2.appendText("Go to ");
+    ihLi2.createEl("a", { text: "Settings page", href: "https://www.imghippo.com/settings" });
+    ihList.createEl("li", { text: "Copy your API key and paste it below" });
+    new import_obsidian4.Setting(containerEl).setName("API Key").setDesc("Your ImgHippo API key from the settings page").addText((text) => text.setPlaceholder("Your ImgHippo API key").setValue(this.plugin.settings.cloudProviders.imghippo.apiKey).onChange(async (value) => {
+      this.plugin.settings.cloudProviders.imghippo.apiKey = value.trim();
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian4.Setting(containerEl).setName("Test Connection").setDesc("Verify API key is valid").addButton((button) => button.setButtonText("Test").onClick(async () => {
+      const config = this.plugin.settings.cloudProviders.imghippo;
+      if (!config.apiKey) {
+        new import_obsidian4.Notice("\u2717 Please enter an API key first");
+        return;
+      }
+      new import_obsidian4.Notice("\u2713 ImgHippo API key configured");
+    }));
+  }
+  renderS3Settings(containerEl) {
+    new import_obsidian4.Setting(containerEl).setName("Amazon S3").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("Endpoint").setDesc("S3-compatible endpoint URL").addText((text) => text.setPlaceholder("https://s3.amazonaws.com").setValue(this.plugin.settings.cloudProviders.s3.endpoint).onChange(async (value) => {
+      this.plugin.settings.cloudProviders.s3.endpoint = value.trim();
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian4.Setting(containerEl).setName("Region").addText((text) => text.setPlaceholder("us-east-1").setValue(this.plugin.settings.cloudProviders.s3.region).onChange(async (value) => {
+      this.plugin.settings.cloudProviders.s3.region = value.trim();
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian4.Setting(containerEl).setName("Bucket").addText((text) => text.setPlaceholder("my-bucket").setValue(this.plugin.settings.cloudProviders.s3.bucket).onChange(async (value) => {
+      this.plugin.settings.cloudProviders.s3.bucket = value.trim();
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian4.Setting(containerEl).setName("Access Key ID").addText((text) => text.setValue(this.plugin.settings.cloudProviders.s3.accessKeyId).onChange(async (value) => {
+      this.plugin.settings.cloudProviders.s3.accessKeyId = value.trim();
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian4.Setting(containerEl).setName("Secret Access Key").addText((text) => text.setValue(this.plugin.settings.cloudProviders.s3.secretAccessKey).onChange(async (value) => {
+      this.plugin.settings.cloudProviders.s3.secretAccessKey = value.trim();
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian4.Setting(containerEl).setName("Public URL (optional)").setDesc("Custom public URL for accessing uploaded files").addText((text) => text.setPlaceholder("https://cdn.example.com").setValue(this.plugin.settings.cloudProviders.s3.publicUrl).onChange(async (value) => {
+      this.plugin.settings.cloudProviders.s3.publicUrl = value.trim();
+      await this.plugin.saveSettings();
+    }));
+  }
+  renderWebDAVSettings(containerEl) {
+    new import_obsidian4.Setting(containerEl).setName("WebDAV").setHeading();
+    containerEl.createEl("p", {
+      text: "Works with Synology NAS, Nextcloud, ownCloud, or any WebDAV server.",
+      cls: "setting-item-description"
+    });
+    new import_obsidian4.Setting(containerEl).setName("Server URL").addText((text) => text.setPlaceholder("https://nas.example.com/webdav").setValue(this.plugin.settings.cloudProviders.webdav.serverUrl).onChange(async (value) => {
+      this.plugin.settings.cloudProviders.webdav.serverUrl = value.trim();
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian4.Setting(containerEl).setName("Username").addText((text) => text.setValue(this.plugin.settings.cloudProviders.webdav.username).onChange(async (value) => {
+      this.plugin.settings.cloudProviders.webdav.username = value.trim();
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian4.Setting(containerEl).setName("Password").addText((text) => {
+      text.inputEl.type = "password";
+      text.setValue(this.plugin.settings.cloudProviders.webdav.password).onChange(async (value) => {
+        this.plugin.settings.cloudProviders.webdav.password = value;
+        await this.plugin.saveSettings();
+      });
+    });
+    new import_obsidian4.Setting(containerEl).setName("Upload Path").setDesc("Directory path for uploads").addText((text) => text.setPlaceholder("/eagle-uploads").setValue(this.plugin.settings.cloudProviders.webdav.uploadPath).onChange(async (value) => {
+      this.plugin.settings.cloudProviders.webdav.uploadPath = value.trim() || "/eagle-uploads";
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian4.Setting(containerEl).setName("Public URL").setDesc("Public URL prefix for accessing uploaded files. A Nextcloud public share link (https://host/s/TOKEN) is converted automatically.").addText((text) => text.setPlaceholder("https://public.example.com").setValue(this.plugin.settings.cloudProviders.webdav.publicUrl).onChange(async (value) => {
+      this.plugin.settings.cloudProviders.webdav.publicUrl = value.trim();
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian4.Setting(containerEl).setName("Disable Nextcloud share link conversion").setDesc("Use the Public URL exactly as entered, even when it looks like a Nextcloud share link (https://host/s/TOKEN).").addToggle((toggle) => toggle.setValue(!!this.plugin.settings.cloudProviders.webdav.disableShareLinkConversion).onChange(async (value) => {
+      this.plugin.settings.cloudProviders.webdav.disableShareLinkConversion = value;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian4.Setting(containerEl).setName("Test Connection").setDesc("Check the server login and, for a Nextcloud share, that the Public URL works without a login. Nothing is uploaded.").addButton((button) => button.setButtonText("Test").onClick(async () => {
+      button.setDisabled(true);
+      try {
+        const provider = new WebDAVProvider(this.plugin.settings.cloudProviders.webdav);
+        const result = await provider.checkConnection();
+        new import_obsidian4.Notice(`${result.ok ? "\u2713" : "\u2717"} ${result.message}`, 8e3);
+      } finally {
+        button.setDisabled(false);
+      }
+    }));
+  }
+  renderCustomSettings(containerEl) {
+    new import_obsidian4.Setting(containerEl).setName("Custom server").setHeading();
+    containerEl.createEl("p", {
+      text: 'Configure a custom upload endpoint. Server should accept multipart/form-data with "file" field.',
+      cls: "setting-item-description"
+    });
+    new import_obsidian4.Setting(containerEl).setName("Upload URL").addText((text) => text.setPlaceholder("https://your-server.com/upload").setValue(this.plugin.settings.cloudProviders.custom.uploadUrl).onChange(async (value) => {
+      this.plugin.settings.cloudProviders.custom.uploadUrl = value.trim();
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian4.Setting(containerEl).setName("Public URL").setDesc("Base URL for accessing uploaded files").addText((text) => text.setPlaceholder("https://cdn.your-server.com").setValue(this.plugin.settings.cloudProviders.custom.publicUrl).onChange(async (value) => {
+      this.plugin.settings.cloudProviders.custom.publicUrl = value.trim();
+      await this.plugin.saveSettings();
+    }));
+  }
+  renderSearchFiltersSettings(containerEl) {
+    const filterContainer = containerEl.createDiv({ cls: "cmdspace-eagle-settings-filters" });
+    const scopeSection = filterContainer.createDiv({ cls: "cmdspace-eagle-settings-filter-section" });
+    scopeSection.createEl("div", { text: "Default search scope", cls: "cmdspace-eagle-settings-filter-title" });
+    const scopeButtons = scopeSection.createDiv({ cls: "cmdspace-eagle-settings-filter-buttons" });
+    const scopes = [
+      { key: "name", label: "Name" },
+      { key: "tags", label: "Tags" },
+      { key: "annotation", label: "Notes" },
+      { key: "folders", label: "Folders" }
+    ];
+    scopes.forEach(({ key, label }) => {
+      const btn = scopeButtons.createEl("button", {
+        text: label,
+        cls: `cmdspace-eagle-settings-filter-btn ${this.plugin.settings.searchScope.includes(key) ? "is-active" : ""}`
+      });
+      btn.addEventListener("click", () => {
+        void (async () => {
+          if (this.plugin.settings.searchScope.includes(key)) {
+            if (this.plugin.settings.searchScope.length > 1) {
+              this.plugin.settings.searchScope = this.plugin.settings.searchScope.filter((s) => s !== key);
+              btn.removeClass("is-active");
+            }
+          } else {
+            this.plugin.settings.searchScope.push(key);
+            btn.addClass("is-active");
+          }
+          await this.plugin.saveSettings();
+        })();
+      });
+    });
+    const typeSection = filterContainer.createDiv({ cls: "cmdspace-eagle-settings-filter-section" });
+    typeSection.createEl("div", { text: "Default file types", cls: "cmdspace-eagle-settings-filter-title" });
+    const typeButtons = typeSection.createDiv({ cls: "cmdspace-eagle-settings-filter-buttons" });
+    const hasAllImages = () => SUPPORTED_IMAGE_EXTENSIONS.every(
+      (ext) => this.plugin.settings.searchFileTypes.includes(ext)
+    );
+    const hasAllVideos = () => SUPPORTED_VIDEO_EXTENSIONS.every(
+      (ext) => this.plugin.settings.searchFileTypes.includes(ext)
+    );
+    const hasAllDocs = () => SUPPORTED_DOCUMENT_EXTENSIONS.every(
+      (ext) => this.plugin.settings.searchFileTypes.includes(ext)
+    );
+    const imgBtn = typeButtons.createEl("button", {
+      text: "Images",
+      cls: `cmdspace-eagle-settings-filter-btn ${hasAllImages() ? "is-active" : ""}`
+    });
+    imgBtn.addEventListener("click", () => {
+      void (async () => {
+        if (hasAllImages()) {
+          this.plugin.settings.searchFileTypes = this.plugin.settings.searchFileTypes.filter(
+            (ext) => !SUPPORTED_IMAGE_EXTENSIONS.includes(ext)
+          );
+          imgBtn.removeClass("is-active");
+        } else {
+          SUPPORTED_IMAGE_EXTENSIONS.forEach((ext) => {
+            if (!this.plugin.settings.searchFileTypes.includes(ext)) {
+              this.plugin.settings.searchFileTypes.push(ext);
+            }
+          });
+          imgBtn.addClass("is-active");
+        }
+        if (this.plugin.settings.searchFileTypes.length === 0) {
+          this.plugin.settings.searchFileTypes = [...SUPPORTED_IMAGE_EXTENSIONS];
+          imgBtn.addClass("is-active");
+        }
+        await this.plugin.saveSettings();
+      })();
+    });
+    const vidBtn = typeButtons.createEl("button", {
+      text: "Videos",
+      cls: `cmdspace-eagle-settings-filter-btn ${hasAllVideos() ? "is-active" : ""}`
+    });
+    vidBtn.addEventListener("click", () => {
+      void (async () => {
+        if (hasAllVideos()) {
+          this.plugin.settings.searchFileTypes = this.plugin.settings.searchFileTypes.filter(
+            (ext) => !SUPPORTED_VIDEO_EXTENSIONS.includes(ext)
+          );
+          vidBtn.removeClass("is-active");
+        } else {
+          SUPPORTED_VIDEO_EXTENSIONS.forEach((ext) => {
+            if (!this.plugin.settings.searchFileTypes.includes(ext)) {
+              this.plugin.settings.searchFileTypes.push(ext);
+            }
+          });
+          vidBtn.addClass("is-active");
+        }
+        if (this.plugin.settings.searchFileTypes.length === 0) {
+          this.plugin.settings.searchFileTypes = [...SUPPORTED_IMAGE_EXTENSIONS];
+          imgBtn.addClass("is-active");
+        }
+        await this.plugin.saveSettings();
+      })();
+    });
+    const docBtn = typeButtons.createEl("button", {
+      text: "Documents",
+      cls: `cmdspace-eagle-settings-filter-btn ${hasAllDocs() ? "is-active" : ""}`
+    });
+    docBtn.addEventListener("click", () => {
+      void (async () => {
+        if (hasAllDocs()) {
+          this.plugin.settings.searchFileTypes = this.plugin.settings.searchFileTypes.filter(
+            (ext) => !SUPPORTED_DOCUMENT_EXTENSIONS.includes(ext)
+          );
+          docBtn.removeClass("is-active");
+        } else {
+          SUPPORTED_DOCUMENT_EXTENSIONS.forEach((ext) => {
+            if (!this.plugin.settings.searchFileTypes.includes(ext)) {
+              this.plugin.settings.searchFileTypes.push(ext);
+            }
+          });
+          docBtn.addClass("is-active");
+        }
+        if (this.plugin.settings.searchFileTypes.length === 0) {
+          this.plugin.settings.searchFileTypes = [...SUPPORTED_IMAGE_EXTENSIONS];
+          imgBtn.addClass("is-active");
+        }
+        await this.plugin.saveSettings();
+      })();
+    });
+  }
+  renderCrossPlatformSettings(containerEl) {
+    const infoEl = containerEl.createEl("div", { cls: "setting-item-description cmds-eagle-info-block" });
+    infoEl.createEl("p", { text: "Enable this to use the same vault on multiple computers (macOS/Windows)." });
+    infoEl.createEl("p", { text: "File paths will be automatically converted based on the current computer.", cls: "cmds-eagle-muted" });
+    new import_obsidian4.Setting(containerEl).setName("Enable cross-platform path conversion").setDesc("Convert file:// paths between registered computers").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableCrossPlatform).onChange(async (value) => {
+      this.plugin.settings.enableCrossPlatform = value;
+      await this.plugin.saveSettings();
+      this.display();
+    }));
+    if (!this.plugin.settings.enableCrossPlatform) {
+      return;
+    }
+    new import_obsidian4.Setting(containerEl).setName("Auto-convert paths on file open").setDesc("Automatically convert cross-platform paths when opening a note").addToggle((toggle) => toggle.setValue(this.plugin.settings.autoConvertCrossPlatformPaths).onChange(async (value) => {
+      this.plugin.settings.autoConvertCrossPlatformPaths = value;
+      await this.plugin.saveSettings();
+    }));
+    const currentPlatform = process.platform;
+    const currentUsername = this.detectCurrentUsername();
+    new import_obsidian4.Setting(containerEl).setName("Add current computer").setDesc(`Detected: ${currentPlatform === "darwin" ? "macOS" : "Windows"} / ${currentUsername}`).addButton((button) => button.setButtonText("Add").onClick(async () => {
+      const existingIndex = this.plugin.settings.computers.findIndex(
+        (c) => c.platform === currentPlatform && c.username === currentUsername
+      );
+      if (existingIndex >= 0) {
+        new import_obsidian4.Notice("This computer is already registered");
+        return;
+      }
+      const newProfile = {
+        id: `${currentPlatform}-${currentUsername}-${Date.now()}`,
+        name: currentPlatform === "darwin" ? `Mac (${currentUsername})` : `Windows (${currentUsername})`,
+        platform: currentPlatform,
+        username: currentUsername,
+        subPath: "",
+        eagleLibraryPath: "",
+        isCurrentComputer: true
+      };
+      this.plugin.settings.computers.push(newProfile);
+      await this.plugin.saveSettings();
+      this.display();
+      new import_obsidian4.Notice("Current computer added");
+    }));
+    if (this.plugin.settings.computers.length > 0) {
+      const listContainer = containerEl.createDiv({ cls: "cmdspace-eagle-computer-list" });
+      listContainer.createEl("div", {
+        text: "Registered Computers",
+        cls: "cmdspace-eagle-computer-list-title"
+      });
+      for (const computer of this.plugin.settings.computers) {
+        const isCurrentComputer = computer.platform === currentPlatform && computer.username === currentUsername;
+        const computerEl = listContainer.createDiv({ cls: "cmdspace-eagle-computer-item" });
+        if (isCurrentComputer) {
+          computerEl.addClass("is-current");
+        }
+        const headerRow = computerEl.createDiv({ attr: { style: "display: flex; justify-content: space-between; align-items: center; width: 100%;" } });
+        const infoDiv = headerRow.createDiv({ attr: { style: "flex: 1;" } });
+        const platformIcon = computer.platform === "darwin" ? "\u{1F34E}" : "\u{1FA9F}";
+        infoDiv.createEl("div", {
+          text: `${platformIcon} ${computer.name}`,
+          attr: { style: "font-weight: 500;" }
+        });
+        infoDiv.createEl("div", {
+          text: `${computer.platform === "darwin" ? "macOS" : "Windows"} \u2022 ${computer.username}${isCurrentComputer ? " (current)" : ""}`,
+          attr: { style: "font-size: 12px; color: var(--text-muted);" }
+        });
+        const deleteBtn = headerRow.createEl("button", { text: "\xD7", cls: "cmdspace-eagle-computer-delete" });
+        const subPathContainer = computerEl.createDiv({ attr: { style: "margin-top: 8px; width: 100%;" } });
+        subPathContainer.createEl("label", {
+          text: "Sub-path (folders between /Users/name/ and sync folder)",
+          attr: { style: "font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px;" }
+        });
+        const subPathInput = subPathContainer.createEl("input", {
+          type: "text",
+          value: computer.subPath || "",
+          placeholder: "e.g., OneDrive or Dropbox/Work",
+          attr: { style: "width: 100%; padding: 4px 8px; border-radius: 4px; border: 1px solid var(--background-modifier-border);" }
+        });
+        subPathInput.addEventListener("change", () => {
+          void (async () => {
+            const idx = this.plugin.settings.computers.findIndex((c) => c.id === computer.id);
+            if (idx >= 0) {
+              this.plugin.settings.computers[idx].subPath = subPathInput.value.trim();
+              await this.plugin.saveSettings();
+            }
+          })();
+        });
+        deleteBtn.addEventListener("click", () => {
+          void (async () => {
+            this.plugin.settings.computers = this.plugin.settings.computers.filter((c) => c.id !== computer.id);
+            await this.plugin.saveSettings();
+            this.display();
+            new import_obsidian4.Notice("Computer removed");
+          })();
+        });
+      }
+    }
+  }
+  detectCurrentUsername() {
+    const adapter = this.app.vault.adapter;
+    const vaultPath = adapter.basePath || "";
+    const platform = String(process.platform);
+    if (platform === "darwin") {
+      const match = vaultPath.match(/^\/Users\/([^/]+)/);
+      if (match)
+        return match[1];
+    } else if (platform === "win32") {
+      const match = vaultPath.match(/^[A-Za-z]:[/\\]Users[/\\]([^/\\]+)/i);
+      if (match)
+        return match[1];
+    }
+    return "unknown";
+  }
+  renderExtraLinksSettings(containerEl) {
+    new import_obsidian4.Setting(containerEl).setName("Eagle Extra Links").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("Use Eagle Extra Links").setDesc("Save Obsidian backlinks, image source links and cloud copy links to the Extra Links plugin in Eagle. When off, Eagle Bridge never contacts it and those links are not saved.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableExtraLinks).onChange(async (value) => {
+      this.plugin.settings.enableExtraLinks = value;
+      this.plugin.extraLinksWarningShown = false;
+      await this.plugin.saveSettings();
+      this.display();
+    }));
+    if (!this.plugin.settings.enableExtraLinks)
+      return;
+    new import_obsidian4.Setting(containerEl).setName("Eagle Extra Links Base URL").setDesc("Address of the Extra Links plugin's server in Eagle (default: http://127.0.0.1:41598)").addText((text) => text.setPlaceholder("http://127.0.0.1:41598").setValue(this.plugin.settings.extraLinksBaseUrl).onChange(async (value) => {
+      this.plugin.settings.extraLinksBaseUrl = value.trim() || "http://127.0.0.1:41598";
+      this.plugin.extraLinksWarningShown = false;
+      await this.plugin.saveSettings();
+    }));
+    const statusSetting = new import_obsidian4.Setting(containerEl).setName("Test Connection").setDesc("Checking for the Extra Links plugin\u2026");
+    const check = async (notify) => {
+      const api = new EagleApiService(this.plugin.settings);
+      const health = await api.checkExtraLinks(this.plugin.settings.extraLinksBaseUrl);
+      statusSetting.setDesc(`${health.ok ? "\u2713" : "\u26A0"} ${health.message}`);
+      statusSetting.descEl.toggleClass("cmdspace-eagle-setting-required", !health.ok);
+      if (notify) {
+        new import_obsidian4.Notice(`${health.ok ? "\u2713" : "\u26A0"} ${health.message}`, 8e3);
+      }
+    };
+    statusSetting.addButton((button) => button.setButtonText("Test").onClick(async () => {
+      button.setDisabled(true);
+      try {
+        await check(true);
+      } finally {
+        button.setDisabled(false);
+      }
+    }));
+    void check(false);
+  }
+  renderMirrorRootFolderSettings(containerEl, isAskMode = false) {
+    const toggleDesc = isAskMode ? 'When using the "Mirror" button in the folder picker, nest the mirrored folder hierarchy under a designated Eagle root folder instead of the library root.' : "Nest the mirrored folder hierarchy under a designated Eagle root folder instead of the library root.";
+    new import_obsidian4.Setting(containerEl).setName("Place mirrored folders under a root folder").setDesc(toggleDesc).addToggle((toggle) => toggle.setValue(this.plugin.settings.enableMirrorRootFolder).onChange(async (value) => {
+      this.plugin.settings.enableMirrorRootFolder = value;
+      await this.plugin.saveSettings();
+      this.display();
+    }));
+    if (this.plugin.settings.enableMirrorRootFolder) {
+      const isConfigured = !!this.plugin.settings.mirrorRootFolder && !!this.plugin.settings.mirrorRootFolderName;
+      const descText = isConfigured ? this.plugin.settings.mirrorRootFolderName : "No folder selected (Required)";
+      const rootSetting = new import_obsidian4.Setting(containerEl).setName("Mirrored root folder").setDesc(descText);
+      if (!isConfigured) {
+        rootSetting.descEl.addClass("cmdspace-eagle-setting-required");
+      }
+      rootSetting.addButton((button) => button.setButtonText("Select Folder").onClick(async () => {
+        const api = new EagleApiService(this.plugin.settings);
+        const connected = await api.isConnected();
+        if (!connected) {
+          new import_obsidian4.Notice("Eagle is not running. Please start Eagle and try again.");
+          return;
+        }
+        const folders = await api.listFolders();
+        if (!folders || folders.length === 0) {
+          new import_obsidian4.Notice("No folders found in your Eagle library.");
+          return;
+        }
+        const { flattenEagleFolders: flattenEagleFolders2, EagleFolderModal: EagleFolderModal2 } = await Promise.resolve().then(() => (init_modals(), modals_exports));
+        const flattened = flattenEagleFolders2(folders);
+        const modal = new EagleFolderModal2(this.app, flattened, async (folderId) => {
+          const selected = flattened.find((f) => f.id === folderId);
+          if (selected) {
+            this.plugin.settings.mirrorRootFolder = selected.id;
+            this.plugin.settings.mirrorRootFolderName = selected.path;
+            await this.plugin.saveSettings();
+            this.display();
+          }
+        });
+        modal.open();
+      })).addButton((button) => button.setButtonText("Clear").onClick(async () => {
+        this.plugin.settings.mirrorRootFolder = "";
+        this.plugin.settings.mirrorRootFolderName = "";
+        await this.plugin.saveSettings();
+        this.display();
+      }));
+    }
+  }
+};
 
 // src/clipboard-source.ts
 function safelyReadClipboard(fn) {
@@ -3807,6 +4071,8 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
   constructor() {
     super(...arguments);
     this.lastModifiedFile = null;
+    // Set once the "Extra Links not detected" warning has been shown; reset from settings
+    this.extraLinksWarningShown = false;
     this.attachedExcalidrawContainers = /* @__PURE__ */ new WeakSet();
   }
   async onload() {
@@ -3818,7 +4084,7 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
       id: "search-eagle",
       name: "Search Eagle library and embed",
       editorCallback: (editor, view) => {
-        new EagleSearchModal(this.app, this.api, this.settings).open();
+        new EagleSearchModal(this.app, this.api, this.settings, (item) => this.uploadEagleItemCloudCopy(item)).open();
       }
     });
     this.addCommand({
@@ -3919,7 +4185,7 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
       })
     );
     this.addRibbonIcon("image", "Eagle Bridge", () => {
-      new EagleSearchModal(this.app, this.api, this.settings).open();
+      new EagleSearchModal(this.app, this.api, this.settings, (item) => this.uploadEagleItemCloudCopy(item)).open();
     });
     this.registerExcalidrawIntegration();
   }
@@ -3943,6 +4209,9 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     }
   }
   async saveSettings() {
+    for (const config of Object.values(this.settings.cloudProviders)) {
+      config.enabled = isCloudProviderConfigured(config);
+    }
     await this.saveData(this.settings);
     if (this.api) {
       this.api.updateSettings(this.settings);
@@ -4043,7 +4312,7 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
         webUrl = clean;
       }
     }
-    if (item.url) {
+    if (item == null ? void 0 : item.url) {
       const clean = cleanUrl(item.url);
       if (/^https?:\/\//i.test(clean)) {
         if (!webUrl)
@@ -4060,12 +4329,14 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
       }
     }
     if (!pageUrl || !imageUrl) {
-      const extraSources = await this.api.getExtraLinkWebSources(item.id);
-      if (!pageUrl && extraSources.pageUrl) {
-        pageUrl = extraSources.pageUrl;
-      }
-      if (!imageUrl && extraSources.imageUrl) {
-        imageUrl = extraSources.imageUrl;
+      if (item) {
+        const extraSources = await this.api.getExtraLinkWebSources(item.id);
+        if (!pageUrl && extraSources.pageUrl) {
+          pageUrl = extraSources.pageUrl;
+        }
+        if (!imageUrl && extraSources.imageUrl) {
+          imageUrl = extraSources.imageUrl;
+        }
       }
       if (!webUrl) {
         webUrl = pageUrl || imageUrl;
@@ -4088,44 +4359,70 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     const sources = await this.resolveMetadataSources(item, fallbackSourceUrl);
     return sources.pageUrl || sources.imageUrl || sources.webUrl;
   }
-  buildMetadataCard(item, resolvedSources) {
+  buildMetadataCard(item, resolvedSources, cloudCopyUrl) {
     const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
     const tags = item.tags.filter((t) => !t.startsWith("r2:") && t !== "r2-cloud" && t !== "cloud-upload").map((t) => `#${this.normalizeTag(t)}`).join(" ");
     const dimensions = item.width && item.height ? `${item.width}\xD7${item.height}` : "N/A";
-    const isUploaded = hasR2Upload(item);
-    const cloudUrl = this.api.getCloudUrl(item);
+    const cloudUrl = cloudCopyUrl || this.api.getCloudUrl(item);
+    const isUploaded = hasR2Upload(item) || !!cloudCopyUrl;
     let linkSection = `[Open in Eagle](${linkUrl})`;
     if (cloudUrl) {
       linkSection += ` | [Cloud](${cloudUrl})`;
     }
+    linkSection += this.buildSourceLinks(resolvedSources, item.url);
+    return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)} | ${dimensions} | ${isUploaded ? "\u2601\uFE0F" : "\u{1F4C1}"} | ${tags || "No tags"}
+> ${linkSection}`;
+  }
+  // Metadata card for an image uploaded straight to the cloud provider (no Eagle item).
+  async buildCloudMetadataCard(file, publicUrl, sourceInfo, localFilePath) {
+    const ext = getExtFromFilename(file.name) || file.type.split("/")[1] || "file";
+    const size = await this.getImageDimensions(file);
+    const dimensions = size ? `${size.width}\xD7${size.height}` : "N/A";
+    const sources = await this.resolveMetadataSources(null, sourceInfo, localFilePath);
+    const linkSection = `[Cloud](${publicUrl})` + this.buildSourceLinks(sources);
+    return `> **${ext.toUpperCase()}** | ${this.formatFileSize(file.size)} | ${dimensions} | \u2601\uFE0F
+> ${linkSection}`;
+  }
+  async getImageDimensions(file) {
+    try {
+      const bitmap = await createImageBitmap(file);
+      const size = { width: bitmap.width, height: bitmap.height };
+      bitmap.close();
+      return size;
+    } catch (e) {
+      return null;
+    }
+  }
+  // Source links (" | [Source: …] | [Direct: …] | [Source: File]") appended to a card's link row.
+  buildSourceLinks(resolvedSources, itemUrl) {
     const sources = typeof resolvedSources === "string" ? { webUrl: resolvedSources, pageUrl: resolvedSources } : resolvedSources || {};
     const mode = typeof this.settings.includeSourceInMetadataCard === "boolean" ? this.settings.includeSourceInMetadataCard ? "page" : "none" : this.settings.includeSourceInMetadataCard || "page";
     const effectivePageUrl = sources.pageUrl || (!sources.imageUrl ? sources.webUrl : null);
     const effectiveImageUrl = sources.imageUrl || (sources.webUrl && /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(sources.webUrl) ? sources.webUrl : null);
-    const localFileUrl = sources.localFileUrl ? cleanUrl(sources.localFileUrl) : item.url && /^file:\/\//i.test(cleanUrl(item.url)) ? cleanUrl(item.url) : null;
+    const localFileUrl = sources.localFileUrl ? cleanUrl(sources.localFileUrl) : itemUrl && /^file:\/\//i.test(cleanUrl(itemUrl)) ? cleanUrl(itemUrl) : null;
+    let links = "";
     if (mode === "page" || mode === "both") {
       if (effectivePageUrl) {
         const domain = extractDomain(effectivePageUrl);
-        linkSection += ` | [Source: ${domain || "Web"}](${effectivePageUrl})`;
+        links += ` | [Source: ${domain || "Web"}](${effectivePageUrl})`;
       } else if (mode === "page" && sources.webUrl) {
         const domain = extractDomain(sources.webUrl);
-        linkSection += ` | [Source: ${domain || "Web"}](${sources.webUrl})`;
+        links += ` | [Source: ${domain || "Web"}](${sources.webUrl})`;
       }
     }
     if (mode === "image" || mode === "both") {
       if (effectiveImageUrl && (mode === "image" || effectiveImageUrl !== effectivePageUrl)) {
         const domain = extractDomain(effectiveImageUrl);
-        linkSection += ` | [Direct: ${domain || "Image"}](${effectiveImageUrl})`;
+        links += ` | [Direct: ${domain || "Image"}](${effectiveImageUrl})`;
       } else if (mode === "image" && sources.webUrl) {
         const domain = extractDomain(sources.webUrl);
-        linkSection += ` | [Direct: ${domain || "Image"}](${sources.webUrl})`;
+        links += ` | [Direct: ${domain || "Image"}](${sources.webUrl})`;
       }
     }
     if (this.settings.includeLocalSourceInMetadataCard && localFileUrl) {
-      linkSection += ` | [Source: File](${localFileUrl})`;
+      links += ` | [Source: File](${localFileUrl})`;
     }
-    return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)} | ${dimensions} | ${isUploaded ? "\u2601\uFE0F" : "\u{1F4C1}"} | ${tags || "No tags"}
-> ${linkSection}`;
+    return links;
   }
   buildLinkCard(item, resolvedSources) {
     const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
@@ -4144,32 +4441,7 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     if (cloudUrl) {
       linkSection += ` | [Cloud URL](${cloudUrl})`;
     }
-    const sources = typeof resolvedSources === "string" ? { webUrl: resolvedSources, pageUrl: resolvedSources } : resolvedSources || {};
-    const mode = typeof this.settings.includeSourceInMetadataCard === "boolean" ? this.settings.includeSourceInMetadataCard ? "page" : "none" : this.settings.includeSourceInMetadataCard || "page";
-    const effectivePageUrl = sources.pageUrl || (!sources.imageUrl ? sources.webUrl : null);
-    const effectiveImageUrl = sources.imageUrl || (sources.webUrl && /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(sources.webUrl) ? sources.webUrl : null);
-    const localFileUrl = sources.localFileUrl ? cleanUrl(sources.localFileUrl) : item.url && /^file:\/\//i.test(cleanUrl(item.url)) ? cleanUrl(item.url) : null;
-    if (mode === "page" || mode === "both") {
-      if (effectivePageUrl) {
-        const domain = extractDomain(effectivePageUrl);
-        linkSection += ` | [Source: ${domain || "Web"}](${effectivePageUrl})`;
-      } else if (mode === "page" && sources.webUrl) {
-        const domain = extractDomain(sources.webUrl);
-        linkSection += ` | [Source: ${domain || "Web"}](${sources.webUrl})`;
-      }
-    }
-    if (mode === "image" || mode === "both") {
-      if (effectiveImageUrl && (mode === "image" || effectiveImageUrl !== effectivePageUrl)) {
-        const domain = extractDomain(effectiveImageUrl);
-        linkSection += ` | [Direct: ${domain || "Image"}](${effectiveImageUrl})`;
-      } else if (mode === "image" && sources.webUrl) {
-        const domain = extractDomain(sources.webUrl);
-        linkSection += ` | [Direct: ${domain || "Image"}](${sources.webUrl})`;
-      }
-    }
-    if (this.settings.includeLocalSourceInMetadataCard && localFileUrl) {
-      linkSection += ` | [Source: File](${localFileUrl})`;
-    }
+    linkSection += this.buildSourceLinks(resolvedSources, item.url);
     return `> [!cmdspace-eagle] ${item.name}
 > 
 ${imageSection}> | Property | Value |
@@ -4702,12 +4974,11 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     }
     if (this.settings.imagePasteBehavior === "cloud") {
       for (const item of fileItems) {
-        await this.uploadToCloudWithProgress(item.file, editor);
+        await this.uploadToCloudWithProgress(item.file, editor, sourceInfo, item.localPath);
       }
       return;
     }
-    const cloudProviderName = this.getActiveCloudProviderName();
-    const modal = new ImagePasteChoiceModal(this.app, cloudProviderName);
+    const modal = new ImagePasteChoiceModal(this.app, this.getPasteChoiceDescriptions());
     modal.open();
     const response = await modal.getResponse();
     if (response.rememberChoice && response.choice !== "cancel") {
@@ -4724,7 +4995,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       }
     } else if (response.choice === "cloud") {
       for (const item of fileItems) {
-        await this.uploadToCloudWithProgress(item.file, editor);
+        await this.uploadToCloudWithProgress(item.file, editor, sourceInfo, item.localPath);
       }
     }
   }
@@ -4908,12 +5179,11 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     }
     if (this.settings.imagePasteBehavior === "cloud") {
       for (const item of fileItems) {
-        await this.uploadToCloudWithProgress(item.file, editor);
+        await this.uploadToCloudWithProgress(item.file, editor, sourceInfo, item.localPath);
       }
       return;
     }
-    const cloudProviderName = this.getActiveCloudProviderName();
-    const modal = new ImagePasteChoiceModal(this.app, cloudProviderName);
+    const modal = new ImagePasteChoiceModal(this.app, this.getPasteChoiceDescriptions());
     modal.open();
     const response = await modal.getResponse();
     if (response.rememberChoice && response.choice !== "cancel") {
@@ -4930,7 +5200,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       }
     } else if (response.choice === "cloud") {
       for (const item of fileItems) {
-        await this.uploadToCloudWithProgress(item.file, editor);
+        await this.uploadToCloudWithProgress(item.file, editor, sourceInfo, item.localPath);
       }
     }
   }
@@ -4985,12 +5255,12 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     editor.replaceSelection(placeholderText);
     try {
       const effectiveLocalPath = localFilePath || this.extractLocalFilePath(file, sourceInfo);
-      const { url: imageUrl, item } = await this.uploadImageToEagle(file, sourceInfo);
+      const { url: imageUrl, item, cloudUrl } = await this.uploadImageToEagle(file, sourceInfo);
       const displayName = item ? `${item.name}.${item.ext}` : file.name;
       let markdownImage = `![${displayName}](${imageUrl})`;
       if (item && this.settings.insertThumbnail) {
         const sources = await this.resolveMetadataSources(item, sourceInfo, effectiveLocalPath);
-        markdownImage += "\n\n" + this.buildMetadataCard(item, sources);
+        markdownImage += "\n\n" + this.buildMetadataCard(item, sources, cloudUrl);
       }
       this.replaceTextInDocument(editor, placeholderText, markdownImage);
       new import_obsidian5.Notice(`Uploaded to Eagle: ${displayName}`);
@@ -5007,7 +5277,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       new import_obsidian5.Notice(`Failed to upload: ${file.name}`);
     }
   }
-  async uploadToCloudWithProgress(file, editor) {
+  async uploadToCloudWithProgress(file, editor, sourceInfo, localFilePath) {
     const provider = this.getActiveCloudProvider();
     if (!provider) {
       new import_obsidian5.Notice("No cloud provider configured");
@@ -5023,7 +5293,10 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       const mimeType = getMimeType2(ext);
       const result = await provider.upload(tempPath, file.name, mimeType);
       if (result.success && result.publicUrl) {
-        const markdownImage = `![${file.name}](${result.publicUrl})`;
+        let markdownImage = `![${file.name}](${result.publicUrl})`;
+        if (this.settings.insertThumbnail) {
+          markdownImage += "\n\n" + await this.buildCloudMetadataCard(file, result.publicUrl, sourceInfo, localFilePath);
+        }
         this.replaceTextInDocument(editor, placeholderText, markdownImage);
         new import_obsidian5.Notice(`Uploaded to ${providerName}: ${file.name}`);
       } else {
@@ -5040,7 +5313,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
   getActiveCloudProvider() {
     const providerType = this.settings.activeCloudProvider;
     const config = this.settings.cloudProviders[providerType];
-    if (!config || !config.enabled) {
+    if (!config || !isCloudProviderConfigured(config)) {
       if (this.settings.r2WorkerUrl && this.settings.r2ApiKey) {
         return createCloudProvider({
           type: "r2",
@@ -5055,10 +5328,142 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     }
     return createCloudProvider(config);
   }
+  // "Cloud copy" embed mode: uploads a copy of the file to the active cloud provider and
+  // returns its public URL, or null when the caller should fall back to a local link.
+  async uploadCloudCopy(filePath, filename, ext, stableName) {
+    const provider = this.getActiveCloudProvider();
+    if (!provider)
+      return null;
+    let errorMessage = "upload failed";
+    try {
+      const result = await provider.upload(filePath, filename, getMimeType2(ext), { stableName });
+      if (result.success && result.publicUrl) {
+        return result.publicUrl;
+      }
+      errorMessage = result.error || errorMessage;
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : errorMessage;
+    }
+    new import_obsidian5.Notice(`Cloud copy failed: ${errorMessage}. Linking to the local file instead.`);
+    return null;
+  }
+  // When the pasted or dropped image was copied from the cloud provider itself, returns the
+  // public URL of that existing file so no second copy is uploaded.
+  async findExistingCloudUrl(sourceInfo) {
+    const provider = this.getActiveCloudProvider();
+    if (!(provider == null ? void 0 : provider.findExistingPublicUrl) || !sourceInfo)
+      return null;
+    const candidates = [
+      sourceInfo.imageUrl,
+      sourceInfo.pageUrl && isDirectImageUrl(sourceInfo.pageUrl) ? sourceInfo.pageUrl : null
+    ];
+    for (const url of candidates) {
+      if (!url)
+        continue;
+      const existing = await provider.findExistingPublicUrl(cleanUrl(url));
+      if (existing)
+        return existing;
+    }
+    return null;
+  }
+  // Cloud copy of an item already in Eagle. Always uploads the original, not the thumbnail.
+  async uploadEagleItemCloudCopy(item) {
+    return this.ensureEagleCloudCopy(item, () => this.api.getOriginalFilePath(item));
+  }
+  /**
+   * Returns the public URL of an Eagle item's cloud copy, uploading one only when none exists.
+   * A copy is found through, in order: the "Cloud Copy" Extra Link recorded on the item, an
+   * existing URL the caller already knows, or a file on the server under the item's stable
+   * name (`<item id>.<ext>`). The URL is then recorded on the item as a "Cloud Copy" Extra Link.
+   *
+   * Extra Links writes for one item must not overlap, so the record is awaited here unless
+   * `after` (the caller's own pending Extra Links writes) is given, in which case it is
+   * queued behind them in the background.
+   */
+  async ensureEagleCloudCopy(item, getFilePath, options = {}) {
+    if (item.tags) {
+      const r2Url = this.api.getCloudUrl(item);
+      if (r2Url)
+        return r2Url;
+    }
+    const provider = this.getActiveCloudProvider();
+    if (!provider)
+      return null;
+    const recorded = await this.api.getExtraLinkCloudCopy(item.id);
+    if (recorded && !await isPublicUrlGone(recorded)) {
+      return recorded;
+    }
+    const stableName = `${item.id}.${item.ext}`;
+    let url = options.existingUrl || (provider.findExistingUpload ? await provider.findExistingUpload(stableName) : null);
+    if (!url) {
+      const filePath = await getFilePath();
+      if (!filePath)
+        return null;
+      url = await this.uploadCloudCopy(filePath, `${item.name}.${item.ext}`, item.ext, stableName);
+    }
+    if (!url)
+      return null;
+    const cloudUrl = url;
+    if (options.after) {
+      void options.after.catch(() => void 0).then(() => this.recordCloudCopy(item.id, cloudUrl));
+    } else {
+      await this.recordCloudCopy(item.id, cloudUrl);
+    }
+    return cloudUrl;
+  }
+  async recordCloudCopy(itemId, url) {
+    await this.sendExtraLink(itemId, {
+      title: `${CLOUD_COPY_LINK_TITLE}: ${this.getActiveCloudProviderName()}`,
+      url
+    });
+  }
+  /**
+   * Single entry point for writing a link to the Eagle Extra Links plugin. Does nothing when
+   * Extra Links is turned off in settings. Returns whether the link was saved.
+   */
+  async sendExtraLink(itemId, link) {
+    if (!this.settings.enableExtraLinks)
+      return false;
+    try {
+      const res = await this.api.addExtraLinks(this.settings.extraLinksBaseUrl, itemId, link);
+      if (res.success)
+        return true;
+      console.warn("[Eagle Bridge] Failed to add extra link:", res.error);
+    } catch (err) {
+      console.warn("[Eagle Bridge] Error adding extra link:", err);
+    }
+    await this.warnIfExtraLinksUnavailable();
+    return false;
+  }
+  // Warns once per session when Extra Links is turned on here but the Eagle plugin is not reachable.
+  async warnIfExtraLinksUnavailable() {
+    if (this.extraLinksWarningShown)
+      return;
+    const health = await this.api.checkExtraLinks(this.settings.extraLinksBaseUrl);
+    if (!health.ok && !this.extraLinksWarningShown) {
+      this.extraLinksWarningShown = true;
+      new import_obsidian5.Notice(`\u26A0 ${health.message}`, 1e4);
+    }
+  }
+  // One-line descriptions for the paste/drop destination dialog.
+  getPasteChoiceDescriptions() {
+    const hasProvider = !!this.getActiveCloudProvider();
+    const providerName = this.getActiveCloudProviderName();
+    let eagleLink = "Note links to the file on this computer.";
+    if (this.settings.eagleEmbedUrlMode === "cloud") {
+      eagleLink = hasProvider ? `Note links to a copy on ${providerName}.` : "Note links to the file on this computer (no cloud provider is configured).";
+    } else if (this.settings.eagleEmbedUrlMode === "custom-url") {
+      eagleLink = `Note links to ${this.settings.eagleCustomUrlPrefix}.`;
+    }
+    return {
+      eagleDescription: `Saved to Eagle. ${eagleLink}`,
+      cloudDescription: hasProvider ? `Uploaded to ${providerName}. Not added to Eagle.` : "No cloud provider is configured yet."
+    };
+  }
   getActiveCloudProviderName() {
     const providerType = this.settings.activeCloudProvider;
     const config = this.settings.cloudProviders[providerType];
-    if ((config == null ? void 0 : config.enabled) && (config == null ? void 0 : config.name)) {
+    if (config && isCloudProviderConfigured(config) && config.name) {
       return config.name;
     }
     if (this.settings.r2WorkerUrl) {
@@ -5165,12 +5570,19 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       await this.delay(1e3);
       const thumbnailPath = await this.api.getThumbnailPath(result.itemId);
       const item = await this.api.getItemInfo(result.itemId);
-      void this.applyObsidianBacklink(result.itemId);
-      let imageUrl;
-      if (this.settings.eagleEmbedUrlMode === "custom-url") {
+      const backlinkDone = this.applyObsidianBacklink(result.itemId);
+      void backlinkDone.catch(() => void 0);
+      const ext = item ? item.ext : file.extension;
+      const name = item ? item.name : filenameWithoutExt;
+      let imageUrl = null;
+      if (this.settings.eagleEmbedUrlMode === "cloud") {
+        imageUrl = await this.ensureEagleCloudCopy(
+          { id: result.itemId, name, ext, tags: item == null ? void 0 : item.tags },
+          async () => absolutePath,
+          { after: backlinkDone }
+        );
+      } else if (this.settings.eagleEmbedUrlMode === "custom-url") {
         const libraryName = await this.api.getLibraryName() || "Main";
-        const ext = item ? item.ext : file.extension;
-        const name = item ? item.name : filenameWithoutExt;
         imageUrl = buildEagleCustomEmbedUrl(
           this.settings.eagleCustomUrlPrefix,
           libraryName,
@@ -5179,10 +5591,9 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
           ext,
           false
         );
-      } else if (thumbnailPath) {
-        imageUrl = this.pathToFileUrl(thumbnailPath);
-      } else {
-        imageUrl = `eagle://item/${result.itemId}`;
+      }
+      if (!imageUrl) {
+        imageUrl = thumbnailPath ? this.pathToFileUrl(thumbnailPath) : `eagle://item/${result.itemId}`;
       }
       const markdownImage = `![${file.basename}](${imageUrl})`;
       this.replaceTextInDocument(editor, placeholderText, markdownImage);
@@ -5295,6 +5706,11 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       new import_obsidian5.Notice("Could not fetch item info from Eagle");
       return;
     }
+    await this.pasteEagleItem(item, editor);
+  }
+  // Inserts an existing Eagle item per "Eagle link paste behavior". Shared by pasted item
+  // links and pasted library file paths so both behave the same.
+  async pasteEagleItem(item, editor) {
     let action = "embed";
     let useThumbnail = false;
     if (this.settings.eagleLinkPasteMode === "ask") {
@@ -5327,6 +5743,18 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
   async insertEagleEmbed(editor, item, useThumbnail) {
     const filename = `${item.name}.${item.ext}`;
     const sources = await this.resolveMetadataSources(item);
+    if (this.settings.eagleEmbedUrlMode === "cloud") {
+      const cloudUrl = await this.uploadEagleItemCloudCopy(item);
+      if (cloudUrl) {
+        let markdown = `![${filename}](${cloudUrl})`;
+        if (this.settings.insertThumbnail) {
+          markdown += "\n\n" + this.buildMetadataCard(item, sources, cloudUrl);
+        }
+        editor.replaceSelection(markdown);
+        new import_obsidian5.Notice(`Embedded: ${filename}`);
+        return;
+      }
+    }
     if (this.settings.eagleEmbedUrlMode === "custom-url") {
       const libraryName = await this.api.getLibraryName() || "Main";
       const embedUrl = buildEagleCustomEmbedUrl(
@@ -5384,16 +5812,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     if (idMatch) {
       const item = await this.api.getItemInfo(idMatch[1]);
       if (item) {
-        const folderPath = normalizedPath.substring(0, normalizedPath.lastIndexOf("/"));
-        const originalPath = `${folderPath}/${item.name}.${item.ext}`;
-        const filename2 = `${item.name}.${item.ext}`;
-        let markdown = `![${filename2}](${this.pathToFileUrl(originalPath)})`;
-        if (this.settings.insertThumbnail) {
-          const sources = await this.resolveMetadataSources(item);
-          markdown += "\n\n" + this.buildMetadataCard(item, sources);
-        }
-        editor.replaceSelection(markdown);
-        new import_obsidian5.Notice(`Embedded: ${filename2}`);
+        await this.pasteEagleItem(item, editor);
         return;
       }
     }
@@ -5911,15 +6330,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     const id = await this.getOrCreateActiveNoteId(activeFile);
     const advancedUri = `obsidian://adv-uri?vault=${vaultName}&uid=${id}&filepath=${filePath}`;
     if (this.settings.backlinkMode === "extra-links") {
-      const res = await this.api.addExtraLinks(
-        this.settings.extraLinksBaseUrl,
-        itemId,
-        { title: basename, url: advancedUri }
-      );
-      if (!res.success) {
-        new import_obsidian5.Notice("Eagle Extra Links plugin is unreachable. Please ensure the Extra Links plugin is installed in Eagle and its IPC server is toggled on.");
-        console.warn("[Eagle Bridge] Failed to add extra link:", res.error);
-      }
+      await this.sendExtraLink(itemId, { title: basename, url: advancedUri });
     } else {
       const updates = {};
       const dest = this.settings.backlinkDestination;
@@ -5995,12 +6406,12 @@ ${updates.annotation}`;
         item.url = cleanUrl(item.url);
       }
     } else {
-      const ext = getExtFromFilename(file.name);
+      const ext2 = getExtFromFilename(file.name);
       item = {
         id: itemId,
         name: finalName,
         size: file.size,
-        ext,
+        ext: ext2,
         tags: finalTags || [],
         folders: folderResolution.folderId ? [folderResolution.folderId] : [],
         isDeleted: false,
@@ -6013,17 +6424,26 @@ ${updates.annotation}`;
         palettes: []
       };
     }
-    void (async () => {
+    const extraLinksDone = (async () => {
       await this.applyObsidianBacklink(itemId, !!primaryUrl);
       if (sourceInfo && this.settings.enableImageSourceUrl && this.settings.extraLinksImageSource !== "none") {
         await this.pushImageSourcesToExtraLinks(itemId, sourceInfo);
       }
     })();
-    let embedUrl;
-    if (this.settings.eagleEmbedUrlMode === "custom-url") {
+    void extraLinksDone.catch(() => void 0);
+    const ext = item ? item.ext : getExtFromFilename(file.name);
+    const nameWithoutExt = item ? item.name : filenameWithoutExt;
+    let embedUrl = null;
+    let cloudUrl = null;
+    if (this.settings.eagleEmbedUrlMode === "cloud") {
+      cloudUrl = await this.ensureEagleCloudCopy(
+        { id: itemId, name: nameWithoutExt, ext, tags: item == null ? void 0 : item.tags },
+        async () => tempPath,
+        { existingUrl: await this.findExistingCloudUrl(sourceInfo), after: extraLinksDone }
+      );
+      embedUrl = cloudUrl;
+    } else if (this.settings.eagleEmbedUrlMode === "custom-url") {
       const libraryName = await this.api.getLibraryName() || "Main";
-      const ext = item ? item.ext : getExtFromFilename(file.name);
-      const nameWithoutExt = item ? item.name : filenameWithoutExt;
       embedUrl = buildEagleCustomEmbedUrl(
         this.settings.eagleCustomUrlPrefix,
         libraryName,
@@ -6032,13 +6452,15 @@ ${updates.annotation}`;
         ext,
         false
       );
-    } else {
+    }
+    if (!embedUrl) {
       const localPath = thumbnailPath || tempPath;
       embedUrl = this.pathToFileUrl(localPath);
     }
     return {
       url: embedUrl,
-      item
+      item,
+      cloudUrl
     };
   }
   async pushImageSourcesToExtraLinks(itemId, sourceInfo) {
@@ -6065,18 +6487,7 @@ ${updates.annotation}`;
       }
     }
     for (const link of linksToPush) {
-      try {
-        const res = await this.api.addExtraLinks(
-          this.settings.extraLinksBaseUrl,
-          itemId,
-          link
-        );
-        if (!res.success) {
-          console.warn("[Eagle Bridge] Failed to push image source to Extra Links:", res.error);
-        }
-      } catch (err) {
-        console.warn("[Eagle Bridge] Error pushing image source to Extra Links:", err);
-      }
+      await this.sendExtraLink(itemId, link);
     }
   }
   async saveToTempLocation(file) {

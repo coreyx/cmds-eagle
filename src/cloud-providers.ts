@@ -10,10 +10,38 @@ import {
 	AnyCloudProviderConfig,
 } from './types';
 
+export interface CloudUploadOptions {
+	/**
+	 * Store the file under exactly this name (no timestamp prefix), replacing any file already
+	 * there, so the same source always maps to the same URL. Ignored by providers that
+	 * choose their own file names.
+	 */
+	stableName?: string;
+}
+
 export interface CloudProvider {
-	upload(filePath: string, filename: string, mimeType: string): Promise<CloudUploadResult>;
+	upload(filePath: string, filename: string, mimeType: string, options?: CloudUploadOptions): Promise<CloudUploadResult>;
 	testConnection(): Promise<boolean>;
 	getPublicUrl(key: string): string;
+	/** Public URL for `sourceUrl` if that file already lives with this provider, else null. */
+	findExistingPublicUrl?(sourceUrl: string): Promise<string | null>;
+	/** Public URL of a file previously uploaded with this `stableName`, else null. */
+	findExistingUpload?(stableName: string): Promise<string | null>;
+}
+
+/** True only when the server positively says the file is gone; unreachable servers don't count. */
+export async function isPublicUrlGone(url: string): Promise<boolean> {
+	try {
+		const response = await requestUrl({
+			url,
+			method: 'HEAD',
+			headers: { 'X-Requested-With': 'XMLHttpRequest' },
+			throw: false,
+		});
+		return response.status === 404 || response.status === 410;
+	} catch {
+		return false;
+	}
 }
 
 function getMimeType(ext: string): string {
@@ -252,20 +280,44 @@ export class S3Provider implements CloudProvider {
 export class WebDAVProvider implements CloudProvider {
 	constructor(private config: WebDAVProviderConfig) {}
 
-	async upload(filePath: string, filename: string, mimeType: string): Promise<CloudUploadResult> {
+	// Upload directory as '' or '/dir[/sub]', without a trailing slash
+	private getUploadDir(): string {
+		let path = this.config.uploadPath || '';
+		if (path && !path.startsWith('/')) path = '/' + path;
+		if (path && path.endsWith('/')) path = path.slice(0, -1);
+		return path;
+	}
+
+	async findExistingUpload(stableName: string): Promise<string | null> {
+		const url = this.getPublicUrl(`${this.getUploadDir()}/${stableName}`);
+		try {
+			// Nextcloud rejects non-GET requests to public shares without this header
+			const response = await requestUrl({
+				url,
+				method: 'HEAD',
+				headers: { 'X-Requested-With': 'XMLHttpRequest' },
+				throw: false,
+			});
+			return response.status >= 200 && response.status < 300 ? url : null;
+		} catch {
+			return null;
+		}
+	}
+
+	async upload(filePath: string, filename: string, mimeType: string, options?: CloudUploadOptions): Promise<CloudUploadResult> {
 		if (!this.config.serverUrl || !this.config.username) {
 			return { success: false, error: 'WebDAV not configured' };
 		}
 
 		try {
 			const fileBuffer = await fsp.readFile(filePath);
-			
-			let path = this.config.uploadPath || '';
-			if (path && !path.startsWith('/')) path = '/' + path;
-			if (path && path.endsWith('/')) path = path.slice(0, -1);
-			
-			const key = `${path}/${Date.now()}-${filename}`;
-			
+
+			const path = this.getUploadDir();
+
+			const key = options?.stableName
+				? `${path}/${options.stableName}`
+				: `${path}/${Date.now()}-${filename}`;
+
 			let server = this.config.serverUrl;
 			if (server.endsWith('/')) server = server.slice(0, -1);
 			
@@ -273,7 +325,7 @@ export class WebDAVProvider implements CloudProvider {
 
 			const auth = btoa(`${this.config.username}:${this.config.password}`);
 
-			let response = await requestUrl({
+			const put = () => requestUrl({
 				url: uploadUrl,
 				method: 'PUT',
 				headers: {
@@ -284,34 +336,31 @@ export class WebDAVProvider implements CloudProvider {
 				throw: false,
 			});
 
-			// If the server returns 409 Conflict, the target directory likely doesn't exist.
-			// Try creating the directory using MKCOL and then retry the PUT.
-			if (response.status === 409 && path) {
-				await requestUrl({
-					url: `${server}${path}`,
-					method: 'MKCOL',
-					headers: {
-						'Authorization': `Basic ${auth}`,
-					},
-					throw: false,
-				});
-				
-				// Retry the original PUT request
-				response = await requestUrl({
-					url: uploadUrl,
-					method: 'PUT',
-					headers: {
-						'Authorization': `Basic ${auth}`,
-						'Content-Type': mimeType,
-					},
-					body: new Uint8Array(fileBuffer).buffer as ArrayBuffer,
-					throw: false,
-				});
+			let response = await put();
+
+			// A missing target directory surfaces as 409 Conflict on most servers and as
+			// 404 Not Found on Nextcloud (sabre/dav). Create each level of the upload path
+			// with MKCOL (already-existing levels are ignored), then retry the PUT.
+			if ((response.status === 409 || response.status === 404) && path) {
+				let dir = '';
+				for (const segment of path.split('/').filter(s => s.length > 0)) {
+					dir += `/${segment}`;
+					await requestUrl({
+						url: `${server}${dir}`,
+						method: 'MKCOL',
+						headers: {
+							'Authorization': `Basic ${auth}`,
+						},
+						throw: false,
+					});
+				}
+
+				response = await put();
 			}
 
 			if (response.status !== 200 && response.status !== 201 && response.status !== 204) {
-				if (response.status === 409) {
-					return { success: false, error: `WebDAV upload failed (409 Conflict). Ensure the upload path '${this.config.uploadPath}' exists on your server.` };
+				if (response.status === 409 || response.status === 404) {
+					return { success: false, error: `WebDAV upload failed (${response.status}). Check the server URL and ensure the upload path '${this.config.uploadPath}' exists on your server.` };
 				}
 				return { success: false, error: `WebDAV upload failed (${response.status})` };
 			}
@@ -351,12 +400,149 @@ export class WebDAVProvider implements CloudProvider {
 		}
 	}
 
-	getPublicUrl(key: string): string {
-		if (this.config.publicUrl) {
-			return `${this.config.publicUrl}${key}`;
+	/**
+	 * Checks the server login and, when the Public URL is a Nextcloud public share,
+	 * that the share serves files without a login. Read-only: nothing is uploaded.
+	 */
+	async checkConnection(): Promise<{ ok: boolean; message: string }> {
+		const serverUrl = this.config.serverUrl;
+		if (!serverUrl || !this.config.username) {
+			return { ok: false, message: 'Enter the Server URL and username first.' };
 		}
-		return `${this.config.serverUrl}${key}`;
+		if (!/^https?:\/\//.test(serverUrl) || serverUrl.split('://').length > 2) {
+			return { ok: false, message: 'Server URL looks malformed. It should be a single address starting with http:// or https://.' };
+		}
+
+		try {
+			const auth = btoa(`${this.config.username}:${this.config.password}`);
+			const response = await requestUrl({
+				url: serverUrl,
+				method: 'PROPFIND',
+				headers: {
+					'Authorization': `Basic ${auth}`,
+					'Depth': '0',
+				},
+				throw: false,
+			});
+			if (response.status === 401) {
+				return { ok: false, message: 'Login rejected (401). Check the username and password.' };
+			}
+			if (response.status === 404) {
+				return { ok: false, message: 'Server URL not found (404). Check the address and that the folder exists.' };
+			}
+			if (response.status !== 207 && response.status !== 200) {
+				return { ok: false, message: `Server responded with ${response.status}. Check that the Server URL is a WebDAV address.` };
+			}
+		} catch (error) {
+			return { ok: false, message: `Could not reach the server: ${error instanceof Error ? error.message : 'unknown error'}` };
+		}
+
+		if (!this.config.publicUrl) {
+			return { ok: true, message: 'Connected. No Public URL is set, so image links will use the Server URL.' };
+		}
+
+		const publicUrl = resolveWebDAVPublicUrl(this.config.publicUrl, !this.config.disableShareLinkConversion);
+		if (!publicUrl.includes('/public.php/dav/files/')) {
+			return { ok: true, message: 'Connected.' };
+		}
+
+		try {
+			// Nextcloud rejects non-GET requests to public shares without this header
+			const response = await requestUrl({
+				url: publicUrl,
+				method: 'PROPFIND',
+				headers: {
+					'Depth': '0',
+					'X-Requested-With': 'XMLHttpRequest',
+				},
+				throw: false,
+			});
+			if (response.status === 207 || response.status === 200) {
+				return { ok: true, message: 'Connected, and the public share is reachable without a login.' };
+			}
+			if (response.status === 401) {
+				return { ok: false, message: 'Connected, but the public share asks for a password, so embedded images will not display.' };
+			}
+			return { ok: false, message: `Connected, but the public share was not found (${response.status}). Check the share link.` };
+		} catch (error) {
+			return { ok: false, message: `Connected, but the public share could not be reached: ${error instanceof Error ? error.message : 'unknown error'}` };
+		}
 	}
+
+	/**
+	 * If `sourceUrl` is a file that already lives on this server (under the Public URL or the
+	 * Server URL), returns its public URL so it can be embedded without uploading another copy.
+	 * Returns null when the file is elsewhere or the public URL does not serve it.
+	 */
+	async findExistingPublicUrl(sourceUrl: string): Promise<string | null> {
+		const publicBase = this.normalizeBase(resolveWebDAVPublicUrl(
+			this.config.publicUrl || this.config.serverUrl,
+			!this.config.disableShareLinkConversion
+		));
+		const serverBase = this.normalizeBase(this.config.serverUrl);
+		if (!publicBase) return null;
+
+		let source: string;
+		try {
+			const parsed = new URL(sourceUrl);
+			// Ignore query and fragment; only a path ending in a file name can be a stored file
+			if (!/\/[^/]+\.[A-Za-z0-9]+$/.test(parsed.pathname)) return null;
+			source = `${parsed.origin}${parsed.pathname}`;
+		} catch {
+			return null;
+		}
+
+		const base = [publicBase, serverBase].find(b => b && source.startsWith(`${b}/`));
+		if (!base) return null;
+		const candidate = `${publicBase}${source.slice(base.length)}`;
+
+		try {
+			// Nextcloud rejects non-GET requests to public shares without this header
+			const response = await requestUrl({
+				url: candidate,
+				method: 'HEAD',
+				headers: { 'X-Requested-With': 'XMLHttpRequest' },
+				throw: false,
+			});
+			return response.status >= 200 && response.status < 300 ? candidate : null;
+		} catch {
+			return null;
+		}
+	}
+
+	// Origin + path without trailing slashes, with the host lower-cased by URL parsing
+	private normalizeBase(url: string): string | null {
+		try {
+			const parsed = new URL(url.trim());
+			return `${parsed.origin}${parsed.pathname.replace(/\/+$/, '')}`;
+		} catch {
+			return null;
+		}
+	}
+
+	getPublicUrl(key: string): string {
+		// `key` starts with '/', and the resolved base has no trailing slash
+		const base = resolveWebDAVPublicUrl(
+			this.config.publicUrl || this.config.serverUrl,
+			!this.config.disableShareLinkConversion
+		);
+		return `${base}${key}`;
+	}
+}
+
+/**
+ * Nextcloud hands out public share links as `https://host/s/TOKEN` (or `/index.php/s/TOKEN`),
+ * which open a web page. The files in the share are served from `/public.php/dav/files/TOKEN`,
+ * so convert a pasted share link to that form unless `convertShareLinks` is off.
+ * Other URLs only lose their trailing slashes.
+ */
+export function resolveWebDAVPublicUrl(url: string, convertShareLinks = true): string {
+	const trimmed = url.trim().replace(/\/+$/, '');
+	const share = convertShareLinks && trimmed.match(/^(https?:\/\/.+?)(?:\/index\.php)?\/s\/([A-Za-z0-9]+)$/);
+	if (share) {
+		return `${share[1]}/public.php/dav/files/${share[2]}`;
+	}
+	return trimmed;
 }
 
 export class ImgHippoProvider implements CloudProvider {
@@ -547,6 +733,23 @@ export function createCloudProvider(config: AnyCloudProviderConfig): CloudProvid
 			return new CustomProvider(config);
 		default:
 			return null;
+	}
+}
+
+export function isCloudProviderConfigured(config: AnyCloudProviderConfig): boolean {
+	switch (config.type) {
+		case 'r2':
+			return !!(config.workerUrl && config.apiKey);
+		case 's3':
+			return !!(config.endpoint && config.accessKeyId && config.secretAccessKey);
+		case 'webdav':
+			return !!(config.serverUrl && config.username && config.password);
+		case 'imghippo':
+			return !!config.apiKey;
+		case 'custom':
+			return !!config.uploadUrl;
+		default:
+			return false;
 	}
 }
 

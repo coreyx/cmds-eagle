@@ -509,42 +509,87 @@ export class EagleApiService {
 		return { success: false, error: 'Request failed after retries' };
 	}
 
+	// Asks the Eagle Extra Links plugin's server whether it is running. Read-only.
+	async checkExtraLinks(baseUrl: string): Promise<{ ok: boolean; message: string }> {
+		const cleanBaseUrl = baseUrl.replace(/\/+$/, '');
+		try {
+			const response = await requestUrl({
+				url: `${cleanBaseUrl}/health`,
+				method: 'GET',
+				throw: false,
+			});
+			if (response.status === 403) {
+				return { ok: false, message: 'Eagle Extra Links refused the connection (403). Add this computer to its allowed clients in the plugin\'s settings.' };
+			}
+			if (response.status === 200) {
+				const json = response.json as { status?: string; version?: string; library?: string };
+				if (json?.status === 'ok') {
+					const version = json.version ? ` v${json.version}` : '';
+					const library = json.library ? ` Library: ${json.library}` : '';
+					return { ok: true, message: `Eagle Extra Links${version} detected.${library}` };
+				}
+			}
+			return { ok: false, message: `Eagle Extra Links was not detected at ${cleanBaseUrl} (HTTP ${response.status}).` };
+		} catch {
+			return { ok: false, message: `Eagle Extra Links was not detected at ${cleanBaseUrl}. Make sure Eagle is running, the Extra Links plugin is installed, and its server is turned on.` };
+		}
+	}
+
 	async getExtraLinkWebSource(itemId: string): Promise<string | null> {
 		const sources = await this.getExtraLinkWebSources(itemId);
 		return sources.pageUrl || sources.imageUrl || null;
 	}
 
 	async getExtraLinkWebSources(itemId: string): Promise<{ pageUrl: string | null; imageUrl: string | null }> {
+		let pageUrl: string | null = null;
+		let imageUrl: string | null = null;
+
+		for (const link of await this.readExtraLinks(itemId)) {
+			// The item's own cloud copy is not where the image came from
+			if (link.title.startsWith(CLOUD_COPY_LINK_TITLE)) continue;
+			if (link.title.startsWith('Direct Image') || /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(link.url)) {
+				if (!imageUrl) imageUrl = link.url;
+			} else {
+				if (!pageUrl) pageUrl = link.url;
+			}
+		}
+		return { pageUrl, imageUrl };
+	}
+
+	// URL of the cloud copy recorded on the item as a "Cloud Copy" Extra Link, if any.
+	async getExtraLinkCloudCopy(itemId: string): Promise<string | null> {
+		const links = await this.readExtraLinks(itemId);
+		return links.find(link => link.title.startsWith(CLOUD_COPY_LINK_TITLE))?.url ?? null;
+	}
+
+	// http(s) links from the item's extra-links.json on disk; empty when there is none.
+	private async readExtraLinks(itemId: string): Promise<Array<{ title: string; url: string }>> {
 		try {
 			const libraryPath = await this.getLibraryPath();
-			if (!libraryPath) return { pageUrl: null, imageUrl: null };
+			if (!libraryPath) return [];
 			const extraPath = `${libraryPath}/images/${itemId}.info/extra-links.json`;
 			const buffer = await fsp.readFile(extraPath);
 			const data = JSON.parse(buffer.toString('utf8'));
-			let pageUrl: string | null = null;
-			let imageUrl: string | null = null;
+			if (!Array.isArray(data?.links)) return [];
 
-			if (Array.isArray(data?.links)) {
-				for (const link of data.links) {
-					if (link && typeof link.url === 'string') {
-						const clean = link.url.replace(/\0/g, '').trim();
-						if (/^https?:\/\//i.test(clean)) {
-							const title = typeof link.title === 'string' ? link.title : '';
-							if (title.startsWith('Direct Image') || /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(clean)) {
-								if (!imageUrl) imageUrl = clean;
-							} else {
-								if (!pageUrl) pageUrl = clean;
-							}
-						}
+			const links: Array<{ title: string; url: string }> = [];
+			for (const link of data.links) {
+				if (link && typeof link.url === 'string') {
+					const clean = link.url.replace(/\0/g, '').trim();
+					if (/^https?:\/\//i.test(clean)) {
+						links.push({ title: typeof link.title === 'string' ? link.title : '', url: clean });
 					}
 				}
 			}
-			return { pageUrl, imageUrl };
+			return links;
 		} catch {
-			return { pageUrl: null, imageUrl: null };
+			return [];
 		}
 	}
 }
+
+// Title prefix of the Extra Link that records an item's cloud copy.
+export const CLOUD_COPY_LINK_TITLE = 'Cloud Copy';
 
 export function buildEagleItemUrl(
 	itemId: string,

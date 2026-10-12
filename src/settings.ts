@@ -1,6 +1,7 @@
 import { App, PluginSettingTab, Setting, Notice } from 'obsidian';
 import CMDSPACELinkEagle from './main';
 import { EagleApiService } from './api';
+import { WebDAVProvider } from './cloud-providers';
 import { 
 	CloudProviderType, 
 	ImagePasteBehavior,
@@ -75,6 +76,8 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 					}
 				}));
 
+		this.renderExtraLinksSettings(containerEl);
+
 		new Setting(containerEl).setName('Image paste/drop behavior').setHeading();
 
 		new Setting(containerEl)
@@ -82,9 +85,9 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 			.setDesc('What to do when pasting or dropping images')
 			.addDropdown(dropdown => dropdown
 				.addOption('ask', 'Ask every time')
-				.addOption('eagle', 'Always upload to Eagle (local)')
-				.addOption('local', 'Always save to vault (local)')
-				.addOption('cloud', 'Always upload to cloud')
+				.addOption('eagle', 'Always save to Eagle')
+				.addOption('local', 'Always save to vault')
+				.addOption('cloud', 'Always upload to cloud only')
 				.setValue(this.plugin.settings.imagePasteBehavior)
 				.onChange(async (value: ImagePasteBehavior) => {
 					this.plugin.settings.imagePasteBehavior = value;
@@ -121,7 +124,8 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 
 			new Setting(containerEl)
 				.setName('Add image source to Extra Links')
-				.setDesc('Push the captured image source URLs into Eagle\'s Extra Links panel alongside any Obsidian backlinks. Requires Extra Links plugin for Eagle.')
+				.setDesc('Push the captured image source URLs into Eagle\'s Extra Links panel alongside any Obsidian backlinks. Requires Extra Links plugin for Eagle.'
+					+ (this.plugin.settings.enableExtraLinks ? '' : ' Eagle Extra Links is currently turned off, so nothing is added.'))
 				.addDropdown(dropdown => dropdown
 					.addOption('none', 'None (do not add to Extra Links)')
 					.addOption('page', 'Page URL only')
@@ -175,10 +179,11 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Eagle embed URL mode')
-			.setDesc('How to reference the Eagle image when embedding')
+			.setDesc('How notes link to images stored in Eagle. Cloud copy uploads a copy to the active cloud provider so the image displays on your other devices; without a configured provider it falls back to the local file path.')
 			.addDropdown(dropdown => dropdown
-				.addOption('file', 'Local file path (file://)')
+				.addOption('cloud', 'Cloud copy (active cloud provider)')
 				.addOption('custom-url', 'Custom URL prefix (HTTP / WebDAV)')
+				.addOption('file', 'Local file path (file://)')
 				.setValue(this.plugin.settings.eagleEmbedUrlMode)
 				.onChange(async (value: EagleEmbedUrlMode) => {
 					this.plugin.settings.eagleEmbedUrlMode = value;
@@ -398,16 +403,13 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 					}));
 
 			if (this.plugin.settings.backlinkMode === 'extra-links') {
-				new Setting(containerEl)
-					.setName('Eagle Extra Links Base URL')
-					.setDesc('REST endpoint URL for the eagle-extra-links plugin in Eagle')
-					.addText(text => text
-						.setPlaceholder('http://127.0.0.1:41598')
-						.setValue(this.plugin.settings.extraLinksBaseUrl)
-						.onChange(async (value) => {
-							this.plugin.settings.extraLinksBaseUrl = value.trim() || 'http://127.0.0.1:41598';
-							await this.plugin.saveSettings();
-						}));
+				if (!this.plugin.settings.enableExtraLinks) {
+					const pausedEl = containerEl.createEl('p', {
+						text: 'Eagle Extra Links is turned off, so no backlinks are being saved. Turn it on above, or switch the backlink mode to Eagle Native Fields.',
+						cls: 'setting-item-description cmdspace-eagle-setting-required',
+					});
+					pausedEl.style.marginTop = '0';
+				}
 			} else {
 				new Setting(containerEl)
 					.setName('Backlink Destination')
@@ -453,7 +455,7 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Include metadata card')
-			.setDesc('Add metadata (type, size, tags, Eagle link) below the image when embedding')
+			.setDesc('Add metadata (type, size, tags, Eagle link) below the image when embedding. Images uploaded straight to the cloud get type, size, dimensions and source links.')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.insertThumbnail)
 				.onChange(async (value) => {
@@ -561,7 +563,6 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 					}
 					url = url.replace(/\/$/, '');
 					this.plugin.settings.cloudProviders.r2.workerUrl = url;
-					this.plugin.settings.cloudProviders.r2.enabled = !!(url && this.plugin.settings.cloudProviders.r2.apiKey);
 					await this.plugin.saveSettings();
 				}));
 
@@ -573,7 +574,6 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.cloudProviders.r2.apiKey)
 				.onChange(async (value) => {
 					this.plugin.settings.cloudProviders.r2.apiKey = value.trim();
-					this.plugin.settings.cloudProviders.r2.enabled = !!(this.plugin.settings.cloudProviders.r2.workerUrl && value.trim());
 					await this.plugin.saveSettings();
 				}));
 
@@ -612,7 +612,6 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.cloudProviders.imghippo.apiKey)
 				.onChange(async (value) => {
 					this.plugin.settings.cloudProviders.imghippo.apiKey = value.trim();
-					this.plugin.settings.cloudProviders.imghippo.enabled = !!value.trim();
 					await this.plugin.saveSettings();
 				}));
 
@@ -680,11 +679,6 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.cloudProviders.s3.secretAccessKey)
 				.onChange(async (value) => {
 					this.plugin.settings.cloudProviders.s3.secretAccessKey = value.trim();
-					this.plugin.settings.cloudProviders.s3.enabled = !!(
-						this.plugin.settings.cloudProviders.s3.endpoint &&
-						this.plugin.settings.cloudProviders.s3.accessKeyId &&
-						value.trim()
-					);
 					await this.plugin.saveSettings();
 				}));
 
@@ -728,17 +722,15 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Password')
-			.addText(text => text
-				.setValue(this.plugin.settings.cloudProviders.webdav.password)
-				.onChange(async (value) => {
-					this.plugin.settings.cloudProviders.webdav.password = value;
-					this.plugin.settings.cloudProviders.webdav.enabled = !!(
-						this.plugin.settings.cloudProviders.webdav.serverUrl &&
-						this.plugin.settings.cloudProviders.webdav.username &&
-						value
-					);
-					await this.plugin.saveSettings();
-				}));
+			.addText(text => {
+				text.inputEl.type = 'password';
+				text
+					.setValue(this.plugin.settings.cloudProviders.webdav.password)
+					.onChange(async (value) => {
+						this.plugin.settings.cloudProviders.webdav.password = value;
+						await this.plugin.saveSettings();
+					});
+			});
 
 		new Setting(containerEl)
 			.setName('Upload Path')
@@ -753,13 +745,39 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Public URL')
-			.setDesc('Public URL prefix for accessing uploaded files')
+			.setDesc('Public URL prefix for accessing uploaded files. A Nextcloud public share link (https://host/s/TOKEN) is converted automatically.')
 			.addText(text => text
 				.setPlaceholder('https://public.example.com')
 				.setValue(this.plugin.settings.cloudProviders.webdav.publicUrl)
 				.onChange(async (value) => {
 					this.plugin.settings.cloudProviders.webdav.publicUrl = value.trim();
 					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Disable Nextcloud share link conversion')
+			.setDesc('Use the Public URL exactly as entered, even when it looks like a Nextcloud share link (https://host/s/TOKEN).')
+			.addToggle(toggle => toggle
+				.setValue(!!this.plugin.settings.cloudProviders.webdav.disableShareLinkConversion)
+				.onChange(async (value) => {
+					this.plugin.settings.cloudProviders.webdav.disableShareLinkConversion = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Test Connection')
+			.setDesc('Check the server login and, for a Nextcloud share, that the Public URL works without a login. Nothing is uploaded.')
+			.addButton(button => button
+				.setButtonText('Test')
+				.onClick(async () => {
+					button.setDisabled(true);
+					try {
+						const provider = new WebDAVProvider(this.plugin.settings.cloudProviders.webdav);
+						const result = await provider.checkConnection();
+						new Notice(`${result.ok ? '✓' : '✗'} ${result.message}`, 8000);
+					} finally {
+						button.setDisabled(false);
+					}
 				}));
 	}
 
@@ -777,7 +795,6 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.cloudProviders.custom.uploadUrl)
 				.onChange(async (value) => {
 					this.plugin.settings.cloudProviders.custom.uploadUrl = value.trim();
-					this.plugin.settings.cloudProviders.custom.enabled = !!value.trim();
 					await this.plugin.saveSettings();
 				}));
 
@@ -1055,6 +1072,64 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 		}
 
 		return 'unknown';
+	}
+
+	private renderExtraLinksSettings(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName('Eagle Extra Links').setHeading();
+
+		new Setting(containerEl)
+			.setName('Use Eagle Extra Links')
+			.setDesc('Save Obsidian backlinks, image source links and cloud copy links to the Extra Links plugin in Eagle. When off, Eagle Bridge never contacts it and those links are not saved.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.enableExtraLinks)
+				.onChange(async (value) => {
+					this.plugin.settings.enableExtraLinks = value;
+					this.plugin.extraLinksWarningShown = false;
+					await this.plugin.saveSettings();
+					this.display();
+				}));
+
+		if (!this.plugin.settings.enableExtraLinks) return;
+
+		new Setting(containerEl)
+			.setName('Eagle Extra Links Base URL')
+			.setDesc('Address of the Extra Links plugin\'s server in Eagle (default: http://127.0.0.1:41598)')
+			.addText(text => text
+				.setPlaceholder('http://127.0.0.1:41598')
+				.setValue(this.plugin.settings.extraLinksBaseUrl)
+				.onChange(async (value) => {
+					this.plugin.settings.extraLinksBaseUrl = value.trim() || 'http://127.0.0.1:41598';
+					this.plugin.extraLinksWarningShown = false;
+					await this.plugin.saveSettings();
+				}));
+
+		const statusSetting = new Setting(containerEl)
+			.setName('Test Connection')
+			.setDesc('Checking for the Extra Links plugin…');
+
+		// Shown inline every time the settings open, so a missing plugin is visible without a click
+		const check = async (notify: boolean): Promise<void> => {
+			const api = new EagleApiService(this.plugin.settings);
+			const health = await api.checkExtraLinks(this.plugin.settings.extraLinksBaseUrl);
+			statusSetting.setDesc(`${health.ok ? '✓' : '⚠'} ${health.message}`);
+			statusSetting.descEl.toggleClass('cmdspace-eagle-setting-required', !health.ok);
+			if (notify) {
+				new Notice(`${health.ok ? '✓' : '⚠'} ${health.message}`, 8000);
+			}
+		};
+
+		statusSetting.addButton(button => button
+			.setButtonText('Test')
+			.onClick(async () => {
+				button.setDisabled(true);
+				try {
+					await check(true);
+				} finally {
+					button.setDisabled(false);
+				}
+			}));
+
+		void check(false);
 	}
 
 	private renderMirrorRootFolderSettings(containerEl: HTMLElement, isAskMode: boolean = false): void {

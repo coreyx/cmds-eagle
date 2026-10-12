@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Cloud Copy Embed Mode**: Added a "Cloud copy" option to "Eagle embed URL mode", now the default for new installs. Images added to Eagle are also uploaded to the active cloud provider and the note embeds that URL, so they display on other devices. It applies to paste and drop, search and embed, pasted Eagle links and paths, and converting vault images to Eagle. Without a configured provider, or if the upload fails, the note links to the local file.
+- **Reuse of Existing Cloud Files**: In Cloud copy mode, an image pasted or dropped from the WebDAV server itself (under its Server URL or Public URL) is embedded from its existing location instead of being uploaded again, after checking that the public URL serves it.
+- **One Cloud Copy per Eagle Item**: Embedding the same Eagle item again reuses its cloud copy instead of uploading another one. Each copy is recorded on the item as a "Cloud Copy" link in Eagle's Extra Links, and on WebDAV copies are stored under a stable name (`<Eagle item ID>.<ext>`) that is looked up before uploading. A recorded copy the server reports as deleted is uploaded again.
+- **Eagle Extra Links Setting**: Added a "Use Eagle Extra Links" toggle that turns all use of the Extra Links plugin on or off, with its Base URL, a status line that checks for the plugin whenever the settings open, and a "Test" button. When it is on but the plugin cannot be reached, a warning is shown once per session.
+- **Metadata Card for Cloud Uploads**: Pasting or dropping an image and choosing **Cloud** now appends a metadata card (type, size, dimensions, cloud link) below the image when "Include metadata card" is enabled, with the same source links (`Source`, `Direct`, `Source: File`) as cards for Eagle uploads.
+- **WebDAV Test Connection**: Added a "Test" button to the WebDAV settings that checks the server login and, for a Nextcloud public share, that the Public URL works without a login. Nothing is uploaded.
+- **Nextcloud Share Links as Public URL**: A Nextcloud public share link (`https://host/s/TOKEN` or `/index.php/s/TOKEN`) entered as the WebDAV Public URL is converted to the share's file address (`/public.php/dav/files/TOKEN`) when image links are built. A "Disable Nextcloud share link conversion" toggle in the WebDAV settings turns this off.
+- **Docs**: Added a "WebDAV with Nextcloud" section to the `README.md` covering public share setup for embedded images.
+
+### Changed
+- **Paste/Drop Destination Dialog**: The "Where to save image?" dialog now lists **Eagle**, **Vault** and **Cloud only** with a one-line description of what each does, including how the note will link to an Eagle image under the current embed mode.
+- **Pasted Eagle File Paths**: Pasting a file path from inside the Eagle library (what Eagle copies for an image) is now handled exactly like pasting an Eagle item link: it follows "Eagle link paste behavior", honours every embed mode including Custom URL prefix, and adds the Obsidian backlink.
+- **Extra Links Base URL**: Moved from the Obsidian Backlinks section to the new Eagle Extra Links section.
+- **Extra Links Warnings**: A failed backlink no longer shows a notice on every paste; the "not detected" warning appears once per session.
+- **WebDAV Password Field**: The WebDAV password is now masked in settings.
+
+### Fixed
+- **"No cloud provider configured" With Valid Settings**: Fixed cloud uploads being refused when a provider's credentials were entered in a different order than the settings expected (for example the WebDAV password before the server URL). Whether a provider is configured is now derived from its fields instead of a stored flag.
+- **WebDAV Uploads to Nextcloud Failing With 404**: The upload folder is now created when the server answers 404 as well as 409 for a missing folder, and each level of a nested upload path is created in turn.
+- **WebDAV Public URL Double Slash**: Fixed image links containing `//` when the Public URL or Server URL ended with a slash.
+
 ## [1.8.0] - 2026-10-11
 
 ### Changed

@@ -29,11 +29,12 @@ import {
 	isEagleLocalhostUrl,
 	extractEagleItemId,
 	buildEagleCustomEmbedUrl,
+	CLOUD_COPY_LINK_TITLE,
 	resolveImageFileName,
 } from './api';
 import { EagleSearchModal, ImagePasteChoiceModal, EagleLinkChoiceModal, EagleFolderPickerModal } from './modals';
 import { CMDSPACEEagleSettingTab } from './settings';
-import { createCloudProvider, getMimeType, getExtFromFilename, CloudProvider } from './cloud-providers';
+import { createCloudProvider, isCloudProviderConfigured, isPublicUrlGone, getMimeType, getExtFromFilename, CloudProvider } from './cloud-providers';
 import { ClipboardSourceService, extractDomain, cleanUrl, isValidHttpUrl, isDirectImageUrl } from './clipboard-source';
 
 // Minimal shape of the Excalidraw plugin's view that we drive.
@@ -48,6 +49,8 @@ export default class CMDSPACELinkEagle extends Plugin {
 	api: EagleApiService;
 	clipboardSourceService: ClipboardSourceService;
 	private lastModifiedFile: string | null = null;
+	// Set once the "Extra Links not detected" warning has been shown; reset from settings
+	extraLinksWarningShown = false;
 	private attachedExcalidrawContainers = new WeakSet<HTMLElement>();
 
 	async onload(): Promise<void> {
@@ -61,7 +64,7 @@ export default class CMDSPACELinkEagle extends Plugin {
 			id: 'search-eagle',
 			name: 'Search Eagle library and embed',
 			editorCallback: (editor: Editor, view: MarkdownView) => {
-				new EagleSearchModal(this.app, this.api, this.settings).open();
+				new EagleSearchModal(this.app, this.api, this.settings, (item) => this.uploadEagleItemCloudCopy(item)).open();
 			},
 		});
 
@@ -175,7 +178,7 @@ export default class CMDSPACELinkEagle extends Plugin {
 		);
 
 		this.addRibbonIcon('image', 'Eagle Bridge', () => {
-			new EagleSearchModal(this.app, this.api, this.settings).open();
+			new EagleSearchModal(this.app, this.api, this.settings, (item) => this.uploadEagleItemCloudCopy(item)).open();
 		});
 
 		this.registerExcalidrawIntegration();
@@ -209,6 +212,10 @@ export default class CMDSPACELinkEagle extends Plugin {
 	}
 
 	async saveSettings(): Promise<void> {
+		// Keep each provider's stored `enabled` flag in sync with its credentials
+		for (const config of Object.values(this.settings.cloudProviders)) {
+			config.enabled = isCloudProviderConfigured(config);
+		}
 		await this.saveData(this.settings);
 		if (this.api) {
 			this.api.updateSettings(this.settings);
@@ -305,7 +312,7 @@ export default class CMDSPACELinkEagle extends Plugin {
 	}
 
 	private async resolveMetadataSources(
-		item: EagleItem,
+		item: EagleItem | null,
 		sourceInfoOrUrl?: ImageSourceInfo | string | null,
 		localFilePath?: string | null
 	): Promise<{ pageUrl: string | null; imageUrl: string | null; webUrl: string | null; localFileUrl: string | null }> {
@@ -338,7 +345,7 @@ export default class CMDSPACELinkEagle extends Plugin {
 		}
 
 		// 2. Check item.url
-		if (item.url) {
+		if (item?.url) {
 			const clean = cleanUrl(item.url);
 			if (/^https?:\/\//i.test(clean)) {
 				if (!webUrl) webUrl = clean;
@@ -354,12 +361,14 @@ export default class CMDSPACELinkEagle extends Plugin {
 
 		// 3. Fallback: check Extra Links on disk if pageUrl or imageUrl missing
 		if (!pageUrl || !imageUrl) {
-			const extraSources = await this.api.getExtraLinkWebSources(item.id);
-			if (!pageUrl && extraSources.pageUrl) {
-				pageUrl = extraSources.pageUrl;
-			}
-			if (!imageUrl && extraSources.imageUrl) {
-				imageUrl = extraSources.imageUrl;
+			if (item) {
+				const extraSources = await this.api.getExtraLinkWebSources(item.id);
+				if (!pageUrl && extraSources.pageUrl) {
+					pageUrl = extraSources.pageUrl;
+				}
+				if (!imageUrl && extraSources.imageUrl) {
+					imageUrl = extraSources.imageUrl;
+				}
 			}
 			if (!webUrl) {
 				webUrl = pageUrl || imageUrl;
@@ -389,7 +398,8 @@ export default class CMDSPACELinkEagle extends Plugin {
 
 	private buildMetadataCard(
 		item: EagleItem,
-		resolvedSources?: { pageUrl?: string | null; imageUrl?: string | null; webUrl?: string | null; localFileUrl?: string | null } | string | null
+		resolvedSources?: { pageUrl?: string | null; imageUrl?: string | null; webUrl?: string | null; localFileUrl?: string | null } | string | null,
+		cloudCopyUrl?: string | null
 	): string {
 		const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
 		const tags = item.tags
@@ -397,14 +407,52 @@ export default class CMDSPACELinkEagle extends Plugin {
 			.map(t => `#${this.normalizeTag(t)}`)
 			.join(' ');
 		const dimensions = item.width && item.height ? `${item.width}×${item.height}` : 'N/A';
-		const isUploaded = hasR2Upload(item);
-		const cloudUrl = this.api.getCloudUrl(item);
+		const cloudUrl = cloudCopyUrl || this.api.getCloudUrl(item);
+		const isUploaded = hasR2Upload(item) || !!cloudCopyUrl;
 
 		let linkSection = `[Open in Eagle](${linkUrl})`;
 		if (cloudUrl) {
 			linkSection += ` | [Cloud](${cloudUrl})`;
 		}
+		linkSection += this.buildSourceLinks(resolvedSources, item.url);
 
+		return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)} | ${dimensions} | ${isUploaded ? '☁️' : '📁'} | ${tags || 'No tags'}
+> ${linkSection}`;
+	}
+
+	// Metadata card for an image uploaded straight to the cloud provider (no Eagle item).
+	private async buildCloudMetadataCard(
+		file: File,
+		publicUrl: string,
+		sourceInfo?: ImageSourceInfo | null,
+		localFilePath?: string | null
+	): Promise<string> {
+		const ext = getExtFromFilename(file.name) || file.type.split('/')[1] || 'file';
+		const size = await this.getImageDimensions(file);
+		const dimensions = size ? `${size.width}×${size.height}` : 'N/A';
+		const sources = await this.resolveMetadataSources(null, sourceInfo, localFilePath);
+		const linkSection = `[Cloud](${publicUrl})` + this.buildSourceLinks(sources);
+
+		return `> **${ext.toUpperCase()}** | ${this.formatFileSize(file.size)} | ${dimensions} | ☁️
+> ${linkSection}`;
+	}
+
+	private async getImageDimensions(file: File): Promise<{ width: number; height: number } | null> {
+		try {
+			const bitmap = await createImageBitmap(file);
+			const size = { width: bitmap.width, height: bitmap.height };
+			bitmap.close();
+			return size;
+		} catch {
+			return null;
+		}
+	}
+
+	// Source links (" | [Source: …] | [Direct: …] | [Source: File]") appended to a card's link row.
+	private buildSourceLinks(
+		resolvedSources?: { pageUrl?: string | null; imageUrl?: string | null; webUrl?: string | null; localFileUrl?: string | null } | string | null,
+		itemUrl?: string
+	): string {
 		const sources: { pageUrl?: string | null; imageUrl?: string | null; webUrl?: string | null; localFileUrl?: string | null } =
 			typeof resolvedSources === 'string'
 				? { webUrl: resolvedSources, pageUrl: resolvedSources }
@@ -419,34 +467,35 @@ export default class CMDSPACELinkEagle extends Plugin {
 
 		const localFileUrl = sources.localFileUrl
 			? cleanUrl(sources.localFileUrl)
-			: (item.url && /^file:\/\//i.test(cleanUrl(item.url)) ? cleanUrl(item.url) : null);
+			: (itemUrl && /^file:\/\//i.test(cleanUrl(itemUrl)) ? cleanUrl(itemUrl) : null);
+
+		let links = '';
 
 		if (mode === 'page' || mode === 'both') {
 			if (effectivePageUrl) {
 				const domain = extractDomain(effectivePageUrl);
-				linkSection += ` | [Source: ${domain || 'Web'}](${effectivePageUrl})`;
+				links += ` | [Source: ${domain || 'Web'}](${effectivePageUrl})`;
 			} else if (mode === 'page' && sources.webUrl) {
 				const domain = extractDomain(sources.webUrl);
-				linkSection += ` | [Source: ${domain || 'Web'}](${sources.webUrl})`;
+				links += ` | [Source: ${domain || 'Web'}](${sources.webUrl})`;
 			}
 		}
 
 		if (mode === 'image' || mode === 'both') {
 			if (effectiveImageUrl && (mode === 'image' || effectiveImageUrl !== effectivePageUrl)) {
 				const domain = extractDomain(effectiveImageUrl);
-				linkSection += ` | [Direct: ${domain || 'Image'}](${effectiveImageUrl})`;
+				links += ` | [Direct: ${domain || 'Image'}](${effectiveImageUrl})`;
 			} else if (mode === 'image' && sources.webUrl) {
 				const domain = extractDomain(sources.webUrl);
-				linkSection += ` | [Direct: ${domain || 'Image'}](${sources.webUrl})`;
+				links += ` | [Direct: ${domain || 'Image'}](${sources.webUrl})`;
 			}
 		}
 
 		if (this.settings.includeLocalSourceInMetadataCard && localFileUrl) {
-			linkSection += ` | [Source: File](${localFileUrl})`;
+			links += ` | [Source: File](${localFileUrl})`;
 		}
 
-		return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)} | ${dimensions} | ${isUploaded ? '☁️' : '📁'} | ${tags || 'No tags'}
-> ${linkSection}`;
+		return links;
 	}
 
 	private buildLinkCard(
@@ -473,46 +522,7 @@ export default class CMDSPACELinkEagle extends Plugin {
 		if (cloudUrl) {
 			linkSection += ` | [Cloud URL](${cloudUrl})`;
 		}
-
-		const sources: { pageUrl?: string | null; imageUrl?: string | null; webUrl?: string | null; localFileUrl?: string | null } =
-			typeof resolvedSources === 'string'
-				? { webUrl: resolvedSources, pageUrl: resolvedSources }
-				: (resolvedSources || {});
-
-		const mode = typeof this.settings.includeSourceInMetadataCard === 'boolean'
-			? (this.settings.includeSourceInMetadataCard ? 'page' : 'none')
-			: (this.settings.includeSourceInMetadataCard || 'page');
-
-		const effectivePageUrl = sources.pageUrl || (!sources.imageUrl ? sources.webUrl : null);
-		const effectiveImageUrl = sources.imageUrl || (sources.webUrl && /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(sources.webUrl) ? sources.webUrl : null);
-
-		const localFileUrl = sources.localFileUrl
-			? cleanUrl(sources.localFileUrl)
-			: (item.url && /^file:\/\//i.test(cleanUrl(item.url)) ? cleanUrl(item.url) : null);
-
-		if (mode === 'page' || mode === 'both') {
-			if (effectivePageUrl) {
-				const domain = extractDomain(effectivePageUrl);
-				linkSection += ` | [Source: ${domain || 'Web'}](${effectivePageUrl})`;
-			} else if (mode === 'page' && sources.webUrl) {
-				const domain = extractDomain(sources.webUrl);
-				linkSection += ` | [Source: ${domain || 'Web'}](${sources.webUrl})`;
-			}
-		}
-
-		if (mode === 'image' || mode === 'both') {
-			if (effectiveImageUrl && (mode === 'image' || effectiveImageUrl !== effectivePageUrl)) {
-				const domain = extractDomain(effectiveImageUrl);
-				linkSection += ` | [Direct: ${domain || 'Image'}](${effectiveImageUrl})`;
-			} else if (mode === 'image' && sources.webUrl) {
-				const domain = extractDomain(sources.webUrl);
-				linkSection += ` | [Direct: ${domain || 'Image'}](${sources.webUrl})`;
-			}
-		}
-
-		if (this.settings.includeLocalSourceInMetadataCard && localFileUrl) {
-			linkSection += ` | [Source: File](${localFileUrl})`;
-		}
+		linkSection += this.buildSourceLinks(resolvedSources, item.url);
 
 		return `> [!cmdspace-eagle] ${item.name}
 > 
@@ -1138,13 +1148,12 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 
 		if (this.settings.imagePasteBehavior === 'cloud') {
 			for (const item of fileItems) {
-				await this.uploadToCloudWithProgress(item.file, editor);
+				await this.uploadToCloudWithProgress(item.file, editor, sourceInfo, item.localPath);
 			}
 			return;
 		}
 
-		const cloudProviderName = this.getActiveCloudProviderName();
-		const modal = new ImagePasteChoiceModal(this.app, cloudProviderName);
+		const modal = new ImagePasteChoiceModal(this.app, this.getPasteChoiceDescriptions());
 		modal.open();
 		const response = await modal.getResponse();
 
@@ -1163,7 +1172,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			}
 		} else if (response.choice === 'cloud') {
 			for (const item of fileItems) {
-				await this.uploadToCloudWithProgress(item.file, editor);
+				await this.uploadToCloudWithProgress(item.file, editor, sourceInfo, item.localPath);
 			}
 		}
 	}
@@ -1374,13 +1383,12 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 
 		if (this.settings.imagePasteBehavior === 'cloud') {
 			for (const item of fileItems) {
-				await this.uploadToCloudWithProgress(item.file, editor);
+				await this.uploadToCloudWithProgress(item.file, editor, sourceInfo, item.localPath);
 			}
 			return;
 		}
 
-		const cloudProviderName = this.getActiveCloudProviderName();
-		const modal = new ImagePasteChoiceModal(this.app, cloudProviderName);
+		const modal = new ImagePasteChoiceModal(this.app, this.getPasteChoiceDescriptions());
 		modal.open();
 		const response = await modal.getResponse();
 
@@ -1399,7 +1407,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			}
 		} else if (response.choice === 'cloud') {
 			for (const item of fileItems) {
-				await this.uploadToCloudWithProgress(item.file, editor);
+				await this.uploadToCloudWithProgress(item.file, editor, sourceInfo, item.localPath);
 			}
 		}
 	}
@@ -1469,13 +1477,13 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 
 		try {
 			const effectiveLocalPath = localFilePath || this.extractLocalFilePath(file, sourceInfo);
-			const { url: imageUrl, item } = await this.uploadImageToEagle(file, sourceInfo);
+			const { url: imageUrl, item, cloudUrl } = await this.uploadImageToEagle(file, sourceInfo);
 			const displayName = item ? `${item.name}.${item.ext}` : file.name;
 			let markdownImage = `![${displayName}](${imageUrl})`;
-			
+
 			if (item && this.settings.insertThumbnail) {
 				const sources = await this.resolveMetadataSources(item, sourceInfo, effectiveLocalPath);
-				markdownImage += '\n\n' + this.buildMetadataCard(item, sources);
+				markdownImage += '\n\n' + this.buildMetadataCard(item, sources, cloudUrl);
 			}
 
 			this.replaceTextInDocument(editor, placeholderText, markdownImage);
@@ -1494,7 +1502,12 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		}
 	}
 
-	private async uploadToCloudWithProgress(file: File, editor: Editor): Promise<void> {
+	private async uploadToCloudWithProgress(
+		file: File,
+		editor: Editor,
+		sourceInfo?: ImageSourceInfo | null,
+		localFilePath?: string | null
+	): Promise<void> {
 		const provider = this.getActiveCloudProvider();
 		if (!provider) {
 			new Notice('No cloud provider configured');
@@ -1515,7 +1528,12 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			const result = await provider.upload(tempPath, file.name, mimeType);
 			
 			if (result.success && result.publicUrl) {
-				const markdownImage = `![${file.name}](${result.publicUrl})`;
+				let markdownImage = `![${file.name}](${result.publicUrl})`;
+
+				if (this.settings.insertThumbnail) {
+					markdownImage += '\n\n' + await this.buildCloudMetadataCard(file, result.publicUrl, sourceInfo, localFilePath);
+				}
+
 				this.replaceTextInDocument(editor, placeholderText, markdownImage);
 				new Notice(`Uploaded to ${providerName}: ${file.name}`);
 			} else {
@@ -1534,7 +1552,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		const providerType = this.settings.activeCloudProvider;
 		const config = this.settings.cloudProviders[providerType];
 		
-		if (!config || !config.enabled) {
+		if (!config || !isCloudProviderConfigured(config)) {
 			if (this.settings.r2WorkerUrl && this.settings.r2ApiKey) {
 				return createCloudProvider({
 					type: 'r2',
@@ -1551,11 +1569,162 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		return createCloudProvider(config);
 	}
 
+	// "Cloud copy" embed mode: uploads a copy of the file to the active cloud provider and
+	// returns its public URL, or null when the caller should fall back to a local link.
+	private async uploadCloudCopy(filePath: string, filename: string, ext: string, stableName?: string): Promise<string | null> {
+		const provider = this.getActiveCloudProvider();
+		if (!provider) return null;
+
+		let errorMessage = 'upload failed';
+		try {
+			const result = await provider.upload(filePath, filename, getMimeType(ext), { stableName });
+			if (result.success && result.publicUrl) {
+				return result.publicUrl;
+			}
+			errorMessage = result.error || errorMessage;
+		} catch (error) {
+			errorMessage = error instanceof Error ? error.message : errorMessage;
+		}
+
+		new Notice(`Cloud copy failed: ${errorMessage}. Linking to the local file instead.`);
+		return null;
+	}
+
+	// When the pasted or dropped image was copied from the cloud provider itself, returns the
+	// public URL of that existing file so no second copy is uploaded.
+	private async findExistingCloudUrl(sourceInfo?: ImageSourceInfo | null): Promise<string | null> {
+		const provider = this.getActiveCloudProvider();
+		if (!provider?.findExistingPublicUrl || !sourceInfo) return null;
+
+		const candidates = [
+			sourceInfo.imageUrl,
+			sourceInfo.pageUrl && isDirectImageUrl(sourceInfo.pageUrl) ? sourceInfo.pageUrl : null,
+		];
+		for (const url of candidates) {
+			if (!url) continue;
+			const existing = await provider.findExistingPublicUrl(cleanUrl(url));
+			if (existing) return existing;
+		}
+		return null;
+	}
+
+	// Cloud copy of an item already in Eagle. Always uploads the original, not the thumbnail.
+	private async uploadEagleItemCloudCopy(item: EagleItem): Promise<string | null> {
+		return this.ensureEagleCloudCopy(item, () => this.api.getOriginalFilePath(item));
+	}
+
+	/**
+	 * Returns the public URL of an Eagle item's cloud copy, uploading one only when none exists.
+	 * A copy is found through, in order: the "Cloud Copy" Extra Link recorded on the item, an
+	 * existing URL the caller already knows, or a file on the server under the item's stable
+	 * name (`<item id>.<ext>`). The URL is then recorded on the item as a "Cloud Copy" Extra Link.
+	 *
+	 * Extra Links writes for one item must not overlap, so the record is awaited here unless
+	 * `after` (the caller's own pending Extra Links writes) is given, in which case it is
+	 * queued behind them in the background.
+	 */
+	private async ensureEagleCloudCopy(
+		item: { id: string; name: string; ext: string; tags?: string[] },
+		getFilePath: () => Promise<string | null>,
+		options: { existingUrl?: string | null; after?: Promise<unknown> } = {}
+	): Promise<string | null> {
+		if (item.tags) {
+			const r2Url = this.api.getCloudUrl(item as EagleItem);
+			if (r2Url) return r2Url;
+		}
+
+		const provider = this.getActiveCloudProvider();
+		if (!provider) return null;
+
+		const recorded = await this.api.getExtraLinkCloudCopy(item.id);
+		if (recorded && !(await isPublicUrlGone(recorded))) {
+			return recorded;
+		}
+
+		const stableName = `${item.id}.${item.ext}`;
+		let url = options.existingUrl
+			|| (provider.findExistingUpload ? await provider.findExistingUpload(stableName) : null);
+
+		if (!url) {
+			const filePath = await getFilePath();
+			if (!filePath) return null;
+			url = await this.uploadCloudCopy(filePath, `${item.name}.${item.ext}`, item.ext, stableName);
+		}
+		if (!url) return null;
+
+		const cloudUrl = url;
+		if (options.after) {
+			void options.after.catch(() => undefined).then(() => this.recordCloudCopy(item.id, cloudUrl));
+		} else {
+			await this.recordCloudCopy(item.id, cloudUrl);
+		}
+		return cloudUrl;
+	}
+
+	private async recordCloudCopy(itemId: string, url: string): Promise<void> {
+		await this.sendExtraLink(itemId, {
+			title: `${CLOUD_COPY_LINK_TITLE}: ${this.getActiveCloudProviderName()}`,
+			url,
+		});
+	}
+
+	/**
+	 * Single entry point for writing a link to the Eagle Extra Links plugin. Does nothing when
+	 * Extra Links is turned off in settings. Returns whether the link was saved.
+	 */
+	private async sendExtraLink(itemId: string, link: { title?: string; url: string }): Promise<boolean> {
+		if (!this.settings.enableExtraLinks) return false;
+
+		try {
+			const res = await this.api.addExtraLinks(this.settings.extraLinksBaseUrl, itemId, link);
+			if (res.success) return true;
+			console.warn('[Eagle Bridge] Failed to add extra link:', res.error);
+		} catch (err) {
+			console.warn('[Eagle Bridge] Error adding extra link:', err);
+		}
+
+		await this.warnIfExtraLinksUnavailable();
+		return false;
+	}
+
+	// Warns once per session when Extra Links is turned on here but the Eagle plugin is not reachable.
+	private async warnIfExtraLinksUnavailable(): Promise<void> {
+		if (this.extraLinksWarningShown) return;
+
+		const health = await this.api.checkExtraLinks(this.settings.extraLinksBaseUrl);
+		if (!health.ok && !this.extraLinksWarningShown) {
+			this.extraLinksWarningShown = true;
+			new Notice(`⚠ ${health.message}`, 10000);
+		}
+	}
+
+	// One-line descriptions for the paste/drop destination dialog.
+	private getPasteChoiceDescriptions(): { eagleDescription: string; cloudDescription: string } {
+		const hasProvider = !!this.getActiveCloudProvider();
+		const providerName = this.getActiveCloudProviderName();
+
+		let eagleLink = 'Note links to the file on this computer.';
+		if (this.settings.eagleEmbedUrlMode === 'cloud') {
+			eagleLink = hasProvider
+				? `Note links to a copy on ${providerName}.`
+				: 'Note links to the file on this computer (no cloud provider is configured).';
+		} else if (this.settings.eagleEmbedUrlMode === 'custom-url') {
+			eagleLink = `Note links to ${this.settings.eagleCustomUrlPrefix}.`;
+		}
+
+		return {
+			eagleDescription: `Saved to Eagle. ${eagleLink}`,
+			cloudDescription: hasProvider
+				? `Uploaded to ${providerName}. Not added to Eagle.`
+				: 'No cloud provider is configured yet.',
+		};
+	}
+
 	private getActiveCloudProviderName(): string {
 		const providerType = this.settings.activeCloudProvider;
 		const config = this.settings.cloudProviders[providerType];
 		
-		if (config?.enabled && config?.name) {
+		if (config && isCloudProviderConfigured(config) && config.name) {
 			return config.name;
 		}
 		
@@ -1687,13 +1856,21 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			const thumbnailPath = await this.api.getThumbnailPath(result.itemId);
 			const item = await this.api.getItemInfo(result.itemId);
 
-			void this.applyObsidianBacklink(result.itemId);
+			const backlinkDone = this.applyObsidianBacklink(result.itemId);
+			void backlinkDone.catch(() => undefined);
 
-			let imageUrl: string;
-			if (this.settings.eagleEmbedUrlMode === 'custom-url') {
+			const ext = item ? item.ext : file.extension;
+			const name = item ? item.name : filenameWithoutExt;
+
+			let imageUrl: string | null = null;
+			if (this.settings.eagleEmbedUrlMode === 'cloud') {
+				imageUrl = await this.ensureEagleCloudCopy(
+					{ id: result.itemId, name, ext, tags: item?.tags },
+					async () => absolutePath,
+					{ after: backlinkDone }
+				);
+			} else if (this.settings.eagleEmbedUrlMode === 'custom-url') {
 				const libraryName = (await this.api.getLibraryName()) || 'Main';
-				const ext = item ? item.ext : file.extension;
-				const name = item ? item.name : filenameWithoutExt;
 				imageUrl = buildEagleCustomEmbedUrl(
 					this.settings.eagleCustomUrlPrefix,
 					libraryName,
@@ -1702,10 +1879,11 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 					ext,
 					false
 				);
-			} else if (thumbnailPath) {
-				imageUrl = this.pathToFileUrl(thumbnailPath);
-			} else {
-				imageUrl = `eagle://item/${result.itemId}`;
+			}
+			if (!imageUrl) {
+				imageUrl = thumbnailPath
+					? this.pathToFileUrl(thumbnailPath)
+					: `eagle://item/${result.itemId}`;
 			}
 			
 			const markdownImage = `![${file.basename}](${imageUrl})`;
@@ -1847,6 +2025,12 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			return;
 		}
 
+		await this.pasteEagleItem(item, editor);
+	}
+
+	// Inserts an existing Eagle item per "Eagle link paste behavior". Shared by pasted item
+	// links and pasted library file paths so both behave the same.
+	private async pasteEagleItem(item: EagleItem, editor: Editor): Promise<void> {
 		let action: 'embed' | 'inline' = 'embed';
 		let useThumbnail = false;
 
@@ -1886,6 +2070,19 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 	private async insertEagleEmbed(editor: Editor, item: EagleItem, useThumbnail: boolean): Promise<void> {
 		const filename = `${item.name}.${item.ext}`;
 		const sources = await this.resolveMetadataSources(item);
+
+		if (this.settings.eagleEmbedUrlMode === 'cloud') {
+			const cloudUrl = await this.uploadEagleItemCloudCopy(item);
+			if (cloudUrl) {
+				let markdown = `![${filename}](${cloudUrl})`;
+				if (this.settings.insertThumbnail) {
+					markdown += '\n\n' + this.buildMetadataCard(item, sources, cloudUrl);
+				}
+				editor.replaceSelection(markdown);
+				new Notice(`Embedded: ${filename}`);
+				return;
+			}
+		}
 
 		if (this.settings.eagleEmbedUrlMode === 'custom-url') {
 			const libraryName = (await this.api.getLibraryName()) || 'Main';
@@ -1955,16 +2152,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		if (idMatch) {
 			const item = await this.api.getItemInfo(idMatch[1]);
 			if (item) {
-				const folderPath = normalizedPath.substring(0, normalizedPath.lastIndexOf('/'));
-				const originalPath = `${folderPath}/${item.name}.${item.ext}`;
-				const filename = `${item.name}.${item.ext}`;
-				let markdown = `![${filename}](${this.pathToFileUrl(originalPath)})`;
-				if (this.settings.insertThumbnail) {
-					const sources = await this.resolveMetadataSources(item);
-					markdown += '\n\n' + this.buildMetadataCard(item, sources);
-				}
-				editor.replaceSelection(markdown);
-				new Notice(`Embedded: ${filename}`);
+				await this.pasteEagleItem(item, editor);
 				return;
 			}
 		}
@@ -2585,15 +2773,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		const advancedUri = `obsidian://adv-uri?vault=${vaultName}&uid=${id}&filepath=${filePath}`;
 
 		if (this.settings.backlinkMode === 'extra-links') {
-			const res = await this.api.addExtraLinks(
-				this.settings.extraLinksBaseUrl,
-				itemId,
-				{ title: basename, url: advancedUri }
-			);
-			if (!res.success) {
-				new Notice('Eagle Extra Links plugin is unreachable. Please ensure the Extra Links plugin is installed in Eagle and its IPC server is toggled on.');
-				console.warn('[Eagle Bridge] Failed to add extra link:', res.error);
-			}
+			await this.sendExtraLink(itemId, { title: basename, url: advancedUri });
 		} else {
 			const updates: { url?: string; annotation?: string } = {};
 			const dest = this.settings.backlinkDestination;
@@ -2619,7 +2799,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		}
 	}
 
-	private async uploadImageToEagle(file: File, sourceInfo?: ImageSourceInfo | null): Promise<{ url: string, item: EagleItem | null }> {
+	private async uploadImageToEagle(file: File, sourceInfo?: ImageSourceInfo | null): Promise<{ url: string, item: EagleItem | null, cloudUrl: string | null }> {
 		const tempPath = await this.saveToTempLocation(file);
 		
 		const connected = await this.api.isConnected();
@@ -2700,18 +2880,28 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 			};
 		}
 
-		void (async () => {
+		const extraLinksDone = (async () => {
 			await this.applyObsidianBacklink(itemId, !!primaryUrl);
 			if (sourceInfo && this.settings.enableImageSourceUrl && this.settings.extraLinksImageSource !== 'none') {
 				await this.pushImageSourcesToExtraLinks(itemId, sourceInfo);
 			}
 		})();
+		void extraLinksDone.catch(() => undefined);
 
-		let embedUrl: string;
-		if (this.settings.eagleEmbedUrlMode === 'custom-url') {
+		const ext = item ? item.ext : getExtFromFilename(file.name);
+		const nameWithoutExt = item ? item.name : filenameWithoutExt;
+
+		let embedUrl: string | null = null;
+		let cloudUrl: string | null = null;
+		if (this.settings.eagleEmbedUrlMode === 'cloud') {
+			cloudUrl = await this.ensureEagleCloudCopy(
+				{ id: itemId, name: nameWithoutExt, ext, tags: item?.tags },
+				async () => tempPath,
+				{ existingUrl: await this.findExistingCloudUrl(sourceInfo), after: extraLinksDone }
+			);
+			embedUrl = cloudUrl;
+		} else if (this.settings.eagleEmbedUrlMode === 'custom-url') {
 			const libraryName = (await this.api.getLibraryName()) || 'Main';
-			const ext = item ? item.ext : getExtFromFilename(file.name);
-			const nameWithoutExt = item ? item.name : filenameWithoutExt;
 			embedUrl = buildEagleCustomEmbedUrl(
 				this.settings.eagleCustomUrlPrefix,
 				libraryName,
@@ -2720,14 +2910,16 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 				ext,
 				false
 			);
-		} else {
+		}
+		if (!embedUrl) {
 			const localPath = thumbnailPath || tempPath;
 			embedUrl = this.pathToFileUrl(localPath);
 		}
-		
+
 		return {
 			url: embedUrl,
-			item
+			item,
+			cloudUrl
 		};
 	}
 
@@ -2758,18 +2950,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		}
 
 		for (const link of linksToPush) {
-			try {
-				const res = await this.api.addExtraLinks(
-					this.settings.extraLinksBaseUrl,
-					itemId,
-					link
-				);
-				if (!res.success) {
-					console.warn('[Eagle Bridge] Failed to push image source to Extra Links:', res.error);
-				}
-			} catch (err) {
-				console.warn('[Eagle Bridge] Error pushing image source to Extra Links:', err);
-			}
+			await this.sendExtraLink(itemId, link);
 		}
 	}
 

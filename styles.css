@@ -10,6 +10,34 @@
 	font-size: 14px;
 }
 
+.cmdspace-paste-choice-modal .cmdspace-paste-options {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-bottom: 16px;
+}
+
+.cmdspace-paste-choice-modal .cmdspace-paste-option {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
+	height: auto;
+	padding: 10px 14px;
+	text-align: left;
+	white-space: normal;
+}
+
+.cmdspace-paste-choice-modal .cmdspace-paste-option-title {
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.cmdspace-paste-choice-modal .cmdspace-paste-option-desc {
+	font-size: 12px;
+	opacity: 0.8;
+}
+
 .cmdspace-eagle-suggestion {
 	display: flex;
 	align-items: center;

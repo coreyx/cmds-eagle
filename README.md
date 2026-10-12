@@ -57,7 +57,18 @@ Search your Eagle library and embed images directly into notes.
 
 ### Image Paste/Drop
 
-When pasting or dropping images, choose where to save them.
+When pasting or dropping images, choose where to save them:
+
+- **Eagle**: adds the image to your Eagle library. How the note links to it follows **Settings → Eagle embed URL mode**:
+  - **Cloud copy** (default): uploads a copy to the active cloud provider and embeds that URL, so the image displays on your other devices. If the image was copied from the cloud provider itself (for example while browsing your WebDAV folder in a browser), the existing file is linked instead of uploading a duplicate. Without a configured cloud provider, the note links to the local file.
+  - **Custom URL prefix**: links into the Eagle library through your own HTTP/WebDAV server.
+  - **Local file path**: links to the file on this computer.
+- **Vault**: saves the image as an attachment in the vault.
+- **Cloud only**: uploads the image to the active cloud provider without adding it to Eagle.
+
+The Eagle embed URL mode also applies when you embed an existing Eagle item from search or by pasting an Eagle link or library file path.
+
+Each Eagle item gets one cloud copy. It is recorded on the item as a **Cloud Copy** link in Eagle's Extra Links (when **Use Eagle Extra Links** is on), and on WebDAV it is stored as `<Eagle item ID>.<ext>`, so embedding the same item again reuses the copy instead of uploading a new one.
 
 ![Search Modal](assets/CMDS-eagle2.gif)
 ![Search Results](assets/CMDS-eagle3.png)
@@ -122,9 +133,41 @@ Configure your preferred cloud provider and search defaults.
 | **ImgHippo** (Free) | Sign up at [imghippo.com](https://imghippo.com), get API key from [settings](https://www.imghippo.com/settings) |
 | **Cloudflare R2** | Requires Worker deployment (see docs) |
 | **Amazon S3** | Standard S3 credentials |
-| **WebDAV** | Works with Synology, Nextcloud, etc. |
+| **WebDAV** | Works with Synology, Nextcloud, etc. See [WebDAV with Nextcloud](#webdav-with-nextcloud) |
 
 ![Cloud Settings](assets/CMDS-eagle7.png)
+
+### WebDAV with Nextcloud
+
+Obsidian loads embedded images without logging in, so the **Public URL** must serve files to anyone who has the link. Nextcloud's regular WebDAV address (`/remote.php/dav/files/...`) requires a login: uploads through it succeed, but the embedded images will not display. Point the Public URL at a public share link instead. This needs Nextcloud 29 or later, which added the [public share WebDAV endpoint](https://docs.nextcloud.com/server/stable/developer_manual/client_apis/WebDAV/basic.html).
+
+The plugin builds each image link as **Public URL + Upload Path + filename**, so the folder you share must be the *parent* of the upload folder:
+
+1. In Nextcloud, create a folder to hold your uploads, for example `Obsidian`.
+2. Share that folder with a **public link**: view only, no password. The link looks like `https://cloud.example.com/s/AbCdEf123`; the last part is the share token.
+3. In **Settings → Eagle Bridge**, set the active cloud provider to **WebDAV** and fill in:
+
+   | Setting | Value |
+   |---------|-------|
+   | Server URL | `https://cloud.example.com/remote.php/dav/files/USERNAME/Obsidian` |
+   | Username / Password | Your Nextcloud login (an app password is recommended) |
+   | Upload Path | `/eagle-uploads` |
+   | Public URL | `https://cloud.example.com/public.php/dav/files/AbCdEf123` |
+
+   There is no separate setting for the shared folder: it is the last part of the Server URL (`Obsidian` above), and the share token in the Public URL points at that same folder.
+
+   You can also paste the share link itself (`https://cloud.example.com/s/AbCdEf123`) as the Public URL; the plugin converts it to the form above when it builds image links. If your Public URL has that shape but is not a Nextcloud share, turn on **Disable Nextcloud share link conversion** to have it used exactly as entered.
+
+4. Click **Test** under **Test Connection**. It checks the server login and that the public share works without a login, without uploading anything.
+5. Paste an image and choose **Cloud**. The plugin creates the `eagle-uploads` folder on the first upload.
+6. Open the embedded image URL in a private browser window. If it loads there without a login, it will display in Obsidian.
+
+Things to know:
+
+- **Anyone with the share link can view every file in the shared folder**, not only the image embedded in a given note. Keep that folder for uploads you are comfortable sharing.
+- **A password-protected share will not work**, because Obsidian cannot supply the password when loading an image.
+- **Images only load where your server is reachable.** If its address only resolves on your home network, notes opened elsewhere show broken images unless you are on a VPN or use an externally reachable address.
+- **The same rule applies to any WebDAV server**: uploads can require a login, but the Public URL must not.
 
 ## Commands
 

@@ -40,7 +40,12 @@ export class EagleSearchModal extends FuzzySuggestModal<EagleItem> {
 	private filterContainer: HTMLElement | null = null;
 	private libraryNameEl: HTMLElement | null = null;
 
-	constructor(app: App, api: EagleApiService, settings: CMDSPACEEagleSettings) {
+	constructor(
+		app: App,
+		api: EagleApiService,
+		settings: CMDSPACEEagleSettings,
+		private uploadCloudCopy?: (item: EagleItem) => Promise<string | null>
+	) {
 		super(app);
 		this.api = api;
 		this.settings = settings;
@@ -278,6 +283,19 @@ export class EagleSearchModal extends FuzzySuggestModal<EagleItem> {
 		
 		if (this.settings.insertAsEmbed) {
 			const filename = `${item.name}.${item.ext}`;
+			if (this.settings.eagleEmbedUrlMode === 'cloud' && this.uploadCloudCopy) {
+				const cloudUrl = await this.uploadCloudCopy(item);
+				if (cloudUrl) {
+					let output = `![${filename}](${cloudUrl})`;
+					if (this.settings.insertThumbnail) {
+						output += '\n\n' + this.buildMetadataLine(item);
+					}
+					editor.replaceSelection(output);
+					new Notice(`Embedded: ${item.name}`);
+					return;
+				}
+			}
+
 			if (this.settings.eagleEmbedUrlMode === 'custom-url') {
 				const libraryName = (await this.api.getLibraryName()) || 'Main';
 				const embedUrl = buildEagleCustomEmbedUrl(
@@ -1546,11 +1564,11 @@ export interface ImagePasteChoiceResponse {
 export class ImagePasteChoiceModal extends Modal {
 	private response: Partial<ImagePasteChoiceResponse> = { rememberChoice: false };
 	private resolvePromise?: (value: ImagePasteChoiceResponse) => void;
-	private cloudProviderName: string;
+	private descriptions: { eagleDescription: string; cloudDescription: string };
 
-	constructor(app: App, cloudProviderName: string = 'Cloud') {
+	constructor(app: App, descriptions: { eagleDescription: string; cloudDescription: string }) {
 		super(app);
-		this.cloudProviderName = cloudProviderName;
+		this.descriptions = descriptions;
 	}
 
 	onOpen(): void {
@@ -1560,31 +1578,11 @@ export class ImagePasteChoiceModal extends Modal {
 
 		contentEl.createEl('h2', { text: 'Where to save image?' });
 
-		const buttonContainer = contentEl.createDiv({ cls: 'cmdspace-paste-buttons' });
+		const optionContainer = contentEl.createDiv({ cls: 'cmdspace-paste-options' });
 
-		const eagleBtn = buttonContainer.createEl('button', { 
-			text: 'Eagle (Local)',
-			cls: 'mod-cta'
-		});
-		eagleBtn.addEventListener('click', () => {
-			this.response.choice = 'eagle';
-			this.close();
-		});
-
-		const localBtn = buttonContainer.createEl('button', { text: 'Vault (Local)' });
-		localBtn.addEventListener('click', () => {
-			this.response.choice = 'local';
-			this.close();
-		});
-
-		const cloudBtn = buttonContainer.createEl('button', { 
-			text: `${this.cloudProviderName} (Cloud)`,
-			cls: 'mod-warning'
-		});
-		cloudBtn.addEventListener('click', () => {
-			this.response.choice = 'cloud';
-			this.close();
-		});
+		this.addOption(optionContainer, 'eagle', 'Eagle', this.descriptions.eagleDescription, true);
+		this.addOption(optionContainer, 'local', 'Vault', 'Saved as an attachment in this vault.');
+		this.addOption(optionContainer, 'cloud', 'Cloud only', this.descriptions.cloudDescription);
 
 		new Setting(contentEl)
 			.setName('Remember this choice')
@@ -1594,6 +1592,24 @@ export class ImagePasteChoiceModal extends Modal {
 					this.response.rememberChoice = value;
 				});
 			});
+	}
+
+	private addOption(
+		containerEl: HTMLElement,
+		choice: 'eagle' | 'local' | 'cloud',
+		title: string,
+		description: string,
+		primary = false
+	): void {
+		const optionBtn = containerEl.createEl('button', {
+			cls: primary ? 'cmdspace-paste-option mod-cta' : 'cmdspace-paste-option'
+		});
+		optionBtn.createDiv({ cls: 'cmdspace-paste-option-title', text: title });
+		optionBtn.createDiv({ cls: 'cmdspace-paste-option-desc', text: description });
+		optionBtn.addEventListener('click', () => {
+			this.response.choice = choice;
+			this.close();
+		});
 	}
 
 	onClose(): void {

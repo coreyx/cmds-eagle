@@ -90,7 +90,7 @@ export type BacklinkMode = 'extra-links' | 'legacy';
 
 export type EagleLinkPasteMode = 'ask' | 'embed' | 'inline';
 
-export type EagleEmbedUrlMode = 'file' | 'custom-url';
+export type EagleEmbedUrlMode = 'cloud' | 'custom-url' | 'file';
 
 export type EagleItemLinkFormat = 'http' | 'eagle';
 
@@ -223,6 +223,7 @@ export interface WebDAVProviderConfig extends CloudProviderConfig {
 	password: string;
 	uploadPath: string;
 	publicUrl: string;
+	disableShareLinkConversion: boolean;
 }
 
 export interface ImgHippoProviderConfig extends CloudProviderConfig {
@@ -271,6 +272,7 @@ export interface CMDSPACEEagleSettings {
 	enableBacklinks: boolean;
 	frontmatterIdField: string;
 	backlinkMode: BacklinkMode;
+	enableExtraLinks: boolean;
 	extraLinksBaseUrl: string;
 	backlinkDestination: 'url' | 'note' | 'both';
 	eagleLinkPasteMode: EagleLinkPasteMode;
@@ -331,10 +333,11 @@ export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
 	enableBacklinks: false,
 	frontmatterIdField: 'id',
 	backlinkMode: 'extra-links',
+	enableExtraLinks: true,
 	extraLinksBaseUrl: 'http://127.0.0.1:41598',
 	backlinkDestination: 'both',
 	eagleLinkPasteMode: 'ask',
-	eagleEmbedUrlMode: 'file',
+	eagleEmbedUrlMode: 'cloud',
 	eagleCustomUrlPrefix: 'https://localhost:8080',
 	eagleItemLinkFormat: 'http',
 	enableImageSourceUrl: true,
@@ -383,6 +386,7 @@ export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
 			password: '',
 			uploadPath: '/eagle-uploads',
 			publicUrl: '',
+			disableShareLinkConversion: false,
 		},
 		imghippo: {
 			type: 'imghippo',
