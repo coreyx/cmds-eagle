@@ -79,6 +79,7 @@ var init_types = __esm({
       enableImageSourceUrl: true,
       imageSourceUrlPriority: "page-first",
       extraLinksImageSource: "none",
+      includeTagsInMetadataCard: true,
       includeSourceInMetadataCard: "page",
       includeLocalSourceInMetadataCard: false,
       r2WorkerUrl: "",
@@ -93,6 +94,16 @@ var init_types = __esm({
       canvasIntegration: true,
       canvasImportToEagle: true,
       canvasNodeType: "text",
+      aiProvider: "none",
+      aiProviders: {
+        anthropic: { apiKey: "", model: "claude-haiku-5-5" },
+        openai: { apiKey: "", model: "" },
+        gemini: { apiKey: "", model: "" },
+        "openai-compatible": { apiKey: "", model: "", baseUrl: "" },
+        lmstudio: { apiKey: "", model: "", baseUrl: "http://localhost:1234/v1" }
+      },
+      aiMaxTags: 6,
+      aiMaxNewTags: 2,
       activeCloudProvider: "imghippo",
       searchScope: ["name", "tags"],
       searchFileTypes: [...SUPPORTED_IMAGE_EXTENSIONS],
@@ -160,6 +171,16 @@ var init_fs_utils = __esm({
 });
 
 // src/api.ts
+function toObsidianTag(tag, lowercase, prefix = "") {
+  const levels = tag.split(/[:/]/).map((level) => level.replace(/['’‘"“”`]/g, "").replace(/[^\p{L}\p{N}\p{M}\p{Extended_Pictographic}‍️_-]+/gu, "-").replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "")).filter((level) => level.length > 0);
+  if (levels.length === 0)
+    return "";
+  let normalized = levels.join("/");
+  if (lowercase) {
+    normalized = normalized.toLowerCase();
+  }
+  return prefix ? `${prefix}/${normalized}` : normalized;
+}
 function buildEagleItemUrl(itemId, format = "http", baseUrl = "http://localhost:41595") {
   if (format === "eagle") {
     return `eagle://item/${itemId}`;
@@ -1204,13 +1225,14 @@ var init_modals = __esm({
       }
       buildMetadataLine(item) {
         const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
-        const tags = item.tags.filter((t) => !t.startsWith("r2:") && t !== "r2-cloud" && t !== "cloud-upload").map((t) => `#${this.normalizeTag(t)}`).join(" ");
+        const tags = item.tags.filter((t) => !t.startsWith("r2:") && t !== "r2-cloud" && t !== "cloud-upload").map((t) => this.normalizeTag(t)).filter((t) => t.length > 0).map((t) => `#${t}`).join(" ");
         const dimensions = item.width && item.height ? `${item.width}\xD7${item.height}` : "";
-        return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)}${dimensions ? ` | ${dimensions}` : ""} | ${tags || "No tags"} | [Eagle](${linkUrl})`;
+        const tagSection = this.settings.includeTagsInMetadataCard ? ` | ${tags || "No tags"}` : "";
+        return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)}${dimensions ? ` | ${dimensions}` : ""}${tagSection} | [Eagle](${linkUrl})`;
       }
       buildLinkCard(item) {
         const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
-        const tags = item.tags.map((t) => `#${this.normalizeTag(t)}`).join(" ");
+        const tags = item.tags.map((t) => this.normalizeTag(t)).filter((t) => t.length > 0).map((t) => `#${t}`).join(" ");
         const dimensions = item.width && item.height ? `${item.width}\xD7${item.height}` : "N/A";
         return `> [!cmdspace-eagle] ${item.name}
 > 
@@ -1219,22 +1241,16 @@ var init_modals = __esm({
 > | **Type** | ${item.ext.toUpperCase()} |
 > | **Size** | ${this.formatFileSize(item.size)} |
 > | **Dimensions** | ${dimensions} |
-> | **Tags** | ${tags || "None"} |
-> ${item.annotation ? `> **Annotation**: ${item.annotation}
+${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || "None"} |
+` : ""}> ${item.annotation ? `> **Annotation**: ${item.annotation}
 ` : ""}
 > [Open in Eagle](${linkUrl})
 
 `;
       }
+      // The Eagle tag as an Obsidian tag without its #, or '' if no valid tag can be made of it
       normalizeTag(tag) {
-        let normalized = tag.replace(/\s+/g, "-");
-        if (this.settings.tagNormalization === "lowercase") {
-          normalized = normalized.toLowerCase();
-        }
-        if (this.settings.tagPrefix) {
-          normalized = `${this.settings.tagPrefix}/${normalized}`;
-        }
-        return normalized;
+        return toObsidianTag(tag, this.settings.tagNormalization === "lowercase", this.settings.tagPrefix);
       }
       formatFileSize(bytes) {
         if (bytes < 1024)
@@ -1406,6 +1422,10 @@ var init_modals = __esm({
       constructor(app, api, folders, recentFolders, flattenedFolders, onSelect, context) {
         super(app);
         this.resolved = false;
+        // Tags suggested by the AI wand that do not exist in the Eagle library yet
+        this.aiNewTags = /* @__PURE__ */ new Set();
+        // What the user typed in the Hints box, passed to the AI wands and not saved to Eagle
+        this.aiUserHints = "";
         this.starRating = 0;
         // Folder tree state
         this.searchQuery = "";
@@ -1425,8 +1445,48 @@ var init_modals = __esm({
         this.itemDescription = (context == null ? void 0 : context.initialAltText) || "";
         this.itemTags = [...(context == null ? void 0 : context.initialTags) || []];
       }
+      /**
+       * A field label with an AI wand button beside it. `run` asks the assistant and fills the
+       * field. While it runs the wand is animated and ignores clicks; a failure is shown as a
+       * notice, using the assistant's own message.
+       */
+      createFieldLabel(groupEl, label, tooltip, run) {
+        var _a;
+        const rowEl = groupEl.createDiv({ cls: "cmdspace-eagle-field-label-row" });
+        rowEl.createEl("label", { text: label, cls: "cmdspace-eagle-field-label" });
+        const ai = (_a = this.context) == null ? void 0 : _a.ai;
+        if (!ai)
+          return;
+        const wandBtn = rowEl.createEl("button", { cls: "cmdspace-eagle-ai-wand clickable-icon", type: "button" });
+        (0, import_obsidian2.setIcon)(wandBtn, "wand-2");
+        if (wandBtn.childElementCount === 0)
+          wandBtn.setText("\u{1FA84}");
+        wandBtn.setAttr("aria-label", tooltip);
+        wandBtn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (wandBtn.hasClass("is-loading"))
+            return;
+          const imageUrl = this.previewUrl;
+          if (!imageUrl) {
+            new import_obsidian2.Notice("There is no image here to send to the AI provider.");
+            return;
+          }
+          wandBtn.addClass("is-loading");
+          void (async () => {
+            try {
+              await run(ai, imageUrl);
+            } catch (error) {
+              console.error("[Eagle Bridge] AI suggestion failed:", error);
+              new import_obsidian2.Notice(error instanceof Error && error.message ? error.message : "The AI request failed.", 8e3);
+            } finally {
+              wandBtn.removeClass("is-loading");
+            }
+          })();
+        });
+      }
       onOpen() {
-        var _a, _b, _c, _d;
+        var _a, _b, _c, _d, _e;
         const { contentEl, modalEl } = this;
         modalEl.addClass("cmdspace-eagle-picker-modal-window");
         contentEl.empty();
@@ -1483,8 +1543,21 @@ var init_modals = __esm({
           });
         }
         starContainer.addEventListener("mouseleave", () => updateStars(this.starRating));
+        const aiHints = () => {
+          var _a2, _b2;
+          return {
+            fileName: this.initialFileName,
+            altText: (_a2 = this.context) == null ? void 0 : _a2.initialAltText,
+            sourcePageUrl: (_b2 = this.context) == null ? void 0 : _b2.sourcePageUrl,
+            userHints: this.aiUserHints.trim() || void 0
+          };
+        };
         const nameGroup = leftPane.createDiv({ cls: "cmdspace-eagle-field-group" });
-        nameGroup.createEl("label", { text: "Name", cls: "cmdspace-eagle-field-label" });
+        this.createFieldLabel(nameGroup, "Name", "Suggest a name with AI", async (ai, imageUrl) => {
+          const name = await ai.suggestName(imageUrl, aiHints());
+          nameInput.value = name;
+          this.itemName = name;
+        });
         const nameInput = nameGroup.createEl("input", {
           type: "text",
           cls: "cmdspace-eagle-input",
@@ -1503,7 +1576,11 @@ var init_modals = __esm({
           }
         });
         const descGroup = leftPane.createDiv({ cls: "cmdspace-eagle-field-group" });
-        descGroup.createEl("label", { text: "Description", cls: "cmdspace-eagle-field-label" });
+        this.createFieldLabel(descGroup, "Description", "Suggest a description with AI", async (ai, imageUrl) => {
+          const description = await ai.suggestDescription(imageUrl, aiHints());
+          descTextarea.value = description;
+          this.itemDescription = description;
+        });
         const descTextarea = descGroup.createEl("textarea", {
           cls: "cmdspace-eagle-textarea",
           placeholder: "Add Description"
@@ -1522,17 +1599,39 @@ var init_modals = __esm({
           }
         });
         const tagsGroup = leftPane.createDiv({ cls: "cmdspace-eagle-field-group" });
-        tagsGroup.createEl("label", { text: "Tags", cls: "cmdspace-eagle-field-label" });
+        this.createFieldLabel(tagsGroup, "Tags", "Suggest tags with AI", async (ai, imageUrl) => {
+          const suggestions = await ai.suggestTags(imageUrl, aiHints(), this.itemTags);
+          for (const tag of suggestions.tags) {
+            if (this.itemTags.includes(tag.name))
+              continue;
+            this.itemTags.push(tag.name);
+            if (tag.isNew)
+              this.aiNewTags.add(tag.name);
+          }
+          renderTags();
+          if (suggestions.tags.length === 0) {
+            new import_obsidian2.Notice("No further tags were suggested.");
+          }
+          if (suggestions.truncatedTo) {
+            new import_obsidian2.Notice(`Your library has ${suggestions.truncatedTo.total} tags; the ${suggestions.truncatedTo.sent} most used were sent to the AI provider.`, 8e3);
+          }
+        });
         const tagsWrapper = tagsGroup.createDiv({ cls: "cmdspace-eagle-tags-wrapper" });
         const renderTags = () => {
           tagsWrapper.empty();
           for (const tag of this.itemTags) {
-            const pill = tagsWrapper.createDiv({ cls: "cmdspace-eagle-tag-pill" });
+            const isNewTag = this.aiNewTags.has(tag);
+            const pill = tagsWrapper.createDiv({
+              cls: isNewTag ? "cmdspace-eagle-tag-pill is-new" : "cmdspace-eagle-tag-pill"
+            });
+            if (isNewTag)
+              pill.title = "New tag: not in your Eagle library yet";
             pill.createSpan({ cls: "cmdspace-eagle-tag-pill-text", text: tag });
             const removeBtn = pill.createSpan({ cls: "cmdspace-eagle-tag-pill-remove", text: "\u2715" });
             removeBtn.addEventListener("click", (e) => {
               e.stopPropagation();
               this.itemTags = this.itemTags.filter((t) => t !== tag);
+              this.aiNewTags.delete(tag);
               renderTags();
             });
           }
@@ -1553,11 +1652,31 @@ var init_modals = __esm({
           });
         };
         renderTags();
+        if ((_a = this.context) == null ? void 0 : _a.ai) {
+          const hintsTooltip = 'Optional. Tell the AI what this image is, as briefly as you like, for example "WoW Dalaran fan art". The wand buttons use it to write a better name, description and tags. Hints are not saved to Eagle.';
+          const hintsGroup = leftPane.createDiv({ cls: "cmdspace-eagle-field-group" });
+          const hintsLabelRow = hintsGroup.createDiv({ cls: "cmdspace-eagle-field-label-row" });
+          hintsLabelRow.createEl("label", { text: "AI hints", cls: "cmdspace-eagle-field-label" });
+          const hintsHelp = hintsLabelRow.createSpan({ cls: "cmdspace-eagle-field-help" });
+          (0, import_obsidian2.setIcon)(hintsHelp, "help-circle");
+          if (hintsHelp.childElementCount === 0)
+            hintsHelp.setText("?");
+          hintsHelp.setAttr("aria-label", hintsTooltip);
+          const hintsTextarea = hintsGroup.createEl("textarea", {
+            cls: "cmdspace-eagle-textarea",
+            placeholder: "Optional: what is this?"
+          });
+          hintsTextarea.rows = 2;
+          hintsTextarea.setAttr("aria-label", hintsTooltip);
+          hintsTextarea.addEventListener("input", () => {
+            this.aiUserHints = hintsTextarea.value;
+          });
+        }
         const rightPane = splitContainer.createDiv({ cls: "cmdspace-eagle-picker-right-pane" });
         const headerEl = rightPane.createDiv({ cls: "cmdspace-eagle-picker-header" });
         headerEl.createDiv({ cls: "cmdspace-eagle-picker-title", text: "Select Eagle Folder" });
-        const activePath = (_b = (_a = this.context) == null ? void 0 : _a.activeFolderPath) == null ? void 0 : _b.trim();
-        const rootName = (_d = (_c = this.context) == null ? void 0 : _c.mirrorRootFolderName) == null ? void 0 : _d.trim();
+        const activePath = (_c = (_b = this.context) == null ? void 0 : _b.activeFolderPath) == null ? void 0 : _c.trim();
+        const rootName = (_e = (_d = this.context) == null ? void 0 : _d.mirrorRootFolderName) == null ? void 0 : _e.trim();
         let pathDisplay;
         if (rootName) {
           pathDisplay = activePath ? `${rootName} / ${activePath.replace(/\//g, " / ")}` : rootName;
@@ -2294,13 +2413,13 @@ __export(main_exports, {
   default: () => CMDSPACELinkEagle
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian5 = require("obsidian");
+var import_obsidian6 = require("obsidian");
 init_types();
 init_api();
 init_modals();
 
 // src/settings.ts
-var import_obsidian4 = require("obsidian");
+var import_obsidian5 = require("obsidian");
 init_api();
 
 // src/cloud-providers.ts
@@ -2919,16 +3038,603 @@ function getExtFromFilename(filename) {
   return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : "";
 }
 
+// src/ai-providers.ts
+var import_obsidian4 = require("obsidian");
+var AI_PROVIDER_LABELS = {
+  none: "None",
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  gemini: "Gemini",
+  "openai-compatible": "OpenAI-compatible",
+  lmstudio: "LM Studio"
+};
+var LM_STUDIO_DEFAULT_URL = "http://localhost:1234/v1";
+var OPENAI_BASE_URL = "https://api.openai.com/v1";
+var GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai";
+var MAX_IMAGE_EDGE = 1568;
+var MAX_TAGS_IN_PROMPT = 1e3;
+var AI_MAX_TAGS_LIMIT = 20;
+var DEFAULT_MAX_TAGS = 6;
+var DEFAULT_MAX_NEW_TAGS = 2;
+function resolveAiTagLimits(settings) {
+  const whole = (value, fallback) => typeof value === "number" && Number.isFinite(value) ? Math.round(value) : fallback;
+  const maxTags = Math.min(AI_MAX_TAGS_LIMIT, Math.max(1, whole(settings.aiMaxTags, DEFAULT_MAX_TAGS)));
+  const maxNewTags = Math.min(maxTags, Math.max(0, whole(settings.aiMaxNewTags, DEFAULT_MAX_NEW_TAGS)));
+  return { maxTags, maxNewTags };
+}
+var AiError = class extends Error {
+  constructor(message, status, outOfContext = false) {
+    super(message);
+    this.status = status;
+    this.outOfContext = outOfContext;
+  }
+};
+var rejectedThinkingOptions = /* @__PURE__ */ new Set();
+async function withOptionalThinking(key, send) {
+  const useSetting = key !== null && !rejectedThinkingOptions.has(key);
+  try {
+    return await send(useSetting);
+  } catch (error) {
+    const settingMayBeAtFault = useSetting && error instanceof AiError && error.status === 400 && !error.outOfContext;
+    if (!settingMayBeAtFault)
+      throw error;
+    const result = await send(false);
+    rejectedThinkingOptions.add(key);
+    return result;
+  }
+}
+var localRequestQueue = Promise.resolve();
+var ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1";
+var ANTHROPIC_VERSION = "2023-06-01";
+var AnthropicClient = class {
+  constructor(config) {
+    this.config = config;
+  }
+  async listModels() {
+    var _a;
+    const ids = [];
+    let afterId = null;
+    for (let page = 0; page < 10; page++) {
+      const query = afterId ? `?limit=100&after_id=${encodeURIComponent(afterId)}` : "?limit=100";
+      const json = await this.request("GET", `/models${query}`);
+      for (const model of (_a = json.data) != null ? _a : []) {
+        if (typeof (model == null ? void 0 : model.id) === "string")
+          ids.push(model.id);
+      }
+      if (!json.has_more || !json.last_id)
+        break;
+      afterId = json.last_id;
+    }
+    return ids;
+  }
+  async complete(system, prompt, image) {
+    var _a;
+    const body = {
+      model: this.config.model,
+      max_tokens: 16e3,
+      system,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "image", source: { type: "base64", media_type: image.mediaType, data: image.base64 } },
+          { type: "text", text: prompt }
+        ]
+      }]
+    };
+    const effort = this.config.effort && this.config.effort !== "default" && this.config.effort !== "none" ? this.config.effort : null;
+    const json = await withOptionalThinking(
+      effort ? `anthropic|${this.config.model}|${effort}` : null,
+      (withEffort) => this.request("POST", "/messages", withEffort ? { ...body, output_config: { effort } } : body)
+    );
+    if (json.stop_reason === "refusal") {
+      throw new AiError("The model declined to work on this image.");
+    }
+    let text = "";
+    for (const block of (_a = json.content) != null ? _a : []) {
+      if ((block == null ? void 0 : block.type) === "text" && typeof block.text === "string")
+        text += block.text;
+    }
+    return text;
+  }
+  async request(method, path, body) {
+    for (let attempt = 0; ; attempt++) {
+      let response;
+      try {
+        response = await (0, import_obsidian4.requestUrl)({
+          url: `${ANTHROPIC_BASE_URL}${path}`,
+          method,
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": this.config.apiKey,
+            "anthropic-version": ANTHROPIC_VERSION
+          },
+          body: body === void 0 ? void 0 : JSON.stringify(body),
+          throw: false
+        });
+      } catch (e) {
+        throw new AiError("Could not reach Anthropic. Check your internet connection.");
+      }
+      let json = null;
+      try {
+        json = response.json;
+      } catch (e) {
+      }
+      if (response.status >= 200 && response.status < 300 && json !== null) {
+        return json;
+      }
+      const retryable = response.status === 429 || response.status >= 500;
+      if (retryable && attempt === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        continue;
+      }
+      throw this.describe(response.status, json);
+    }
+  }
+  describe(status, json) {
+    var _a;
+    const message = (_a = json == null ? void 0 : json.error) == null ? void 0 : _a.message;
+    const detail = typeof message === "string" && message ? message : "";
+    switch (status) {
+      case 401:
+        return new AiError("Anthropic rejected the API key. Check it in the AI settings.", status);
+      case 402:
+        return new AiError(`Anthropic reported a billing problem with this account.${detail ? ` ${detail}` : ""}`, status);
+      case 403:
+        return new AiError("This Anthropic API key is not allowed to do that.", status);
+      case 404:
+        return new AiError(`Anthropic does not have a model named "${this.config.model}" available to this key.`, status);
+      case 413:
+        return new AiError("The image is too large for Anthropic to accept.", status);
+      case 429:
+        return new AiError("Anthropic rate limit reached. Try again in a moment.", status);
+      case 529:
+        return new AiError("Anthropic is overloaded right now. Try again in a moment.", status);
+      case 400:
+        return new AiError(`Anthropic rejected the request${detail ? `: ${detail}` : "."}`, status);
+      default:
+        return new AiError(`Anthropic error ${status}${detail ? `: ${detail}` : "."}`, status);
+    }
+  }
+};
+var OpenAiStyleClient = class {
+  constructor(label, baseUrl, apiKey, model, effort = "default") {
+    this.label = label;
+    this.apiKey = apiKey;
+    this.model = model;
+    this.effort = effort;
+    this.baseUrl = baseUrl.trim().replace(/\/+$/, "");
+  }
+  async listModels() {
+    const json = await this.request("GET", "/models");
+    const data = json == null ? void 0 : json.data;
+    if (!Array.isArray(data))
+      return [];
+    return data.map((model) => typeof (model == null ? void 0 : model.id) === "string" ? model.id.replace(/^models\//, "") : "").filter((id) => id.length > 0);
+  }
+  async complete(system, prompt, image) {
+    var _a, _b, _c;
+    if (!this.model) {
+      throw new AiError(`Choose a model for ${this.label} in the AI settings.`);
+    }
+    const body = {
+      model: this.model,
+      messages: [
+        { role: "system", content: system },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: prompt },
+            { type: "image_url", image_url: { url: `data:${image.mediaType};base64,${image.base64}` } }
+          ]
+        }
+      ]
+    };
+    const effort = this.effort !== "default" ? this.effort : null;
+    const json = await withOptionalThinking(
+      effort ? `${this.baseUrl}|${this.model}|${effort}` : null,
+      (withEffort) => this.request("POST", "/chat/completions", withEffort ? { ...body, reasoning_effort: effort } : body)
+    );
+    const content = (_c = (_b = (_a = json == null ? void 0 : json.choices) == null ? void 0 : _a[0]) == null ? void 0 : _b.message) == null ? void 0 : _c.content;
+    if (typeof content === "string")
+      return content;
+    if (Array.isArray(content)) {
+      return content.map((part) => typeof (part == null ? void 0 : part.text) === "string" ? part.text : "").join("");
+    }
+    throw new AiError(`${this.label} returned an answer in a format Eagle Bridge does not understand.`);
+  }
+  async request(method, path, body) {
+    if (!/^https?:\/\//.test(this.baseUrl)) {
+      throw new AiError(`Enter the ${this.label} address in the AI settings. It should start with http:// or https://.`);
+    }
+    const headers = { "Content-Type": "application/json" };
+    if (this.apiKey)
+      headers["Authorization"] = `Bearer ${this.apiKey}`;
+    let response;
+    try {
+      response = await (0, import_obsidian4.requestUrl)({
+        url: `${this.baseUrl}${path}`,
+        method,
+        headers,
+        body: body === void 0 ? void 0 : JSON.stringify(body),
+        throw: false
+      });
+    } catch (e) {
+      throw new AiError(`Could not reach ${this.label} at ${this.baseUrl}.`);
+    }
+    let json = null;
+    try {
+      json = response.json;
+    } catch (e) {
+    }
+    if (response.status >= 200 && response.status < 300) {
+      if (json === null) {
+        throw new AiError(`${this.label} at ${this.baseUrl} did not answer like an OpenAI-style API. Check the address.`);
+      }
+      return json;
+    }
+    const detail = this.errorDetail(json);
+    const status = response.status;
+    if (status === 401 || status === 403) {
+      throw new AiError(this.apiKey ? `${this.label} rejected the API key. Check it in the AI settings.` : `${this.label} needs an API key. Add it in the AI settings.`, status);
+    }
+    if (status === 404) {
+      throw new AiError(`${this.label} could not find ${path === "/models" ? "its model list" : `the model "${this.model}"`} at ${this.baseUrl}.${detail}`, status);
+    }
+    if (status === 429) {
+      throw new AiError(`${this.label} rate limit reached. Try again in a moment.`, status);
+    }
+    if (/failed to decode|context (length|window|size)|n_ctx|exceeds? the (available )?context/i.test(detail)) {
+      throw new AiError(`${this.label} ran out of context for this request. Load the model with a larger context length (16,000 tokens or more) and try again.`, status, true);
+    }
+    throw new AiError(`${this.label} error ${status}.${detail}`, status);
+  }
+  errorDetail(json) {
+    const error = json == null ? void 0 : json.error;
+    const message = typeof error === "string" ? error : error == null ? void 0 : error.message;
+    return typeof message === "string" && message ? ` ${message}` : "";
+  }
+};
+async function detectLmStudio(baseUrl, apiKey) {
+  var _a;
+  const base = (baseUrl || LM_STUDIO_DEFAULT_URL).trim().replace(/\/+$/, "");
+  const headers = {};
+  if (apiKey)
+    headers["Authorization"] = `Bearer ${apiKey}`;
+  try {
+    const response = await (0, import_obsidian4.requestUrl)({ url: `${base}/models`, method: "GET", headers, throw: false });
+    if (response.status === 401 || response.status === 403) {
+      return { state: "needs-key" };
+    }
+    if (response.status === 200) {
+      const data = (_a = response.json) == null ? void 0 : _a.data;
+      if (Array.isArray(data)) {
+        return { state: "ready", models: data.map((m) => {
+          var _a2;
+          return String((_a2 = m == null ? void 0 : m.id) != null ? _a2 : "");
+        }).filter(Boolean) };
+      }
+    }
+  } catch (e) {
+  }
+  return { state: "not-found" };
+}
+async function pickLmStudioModel(baseUrl, apiKey) {
+  var _a, _b;
+  const base = (baseUrl || LM_STUDIO_DEFAULT_URL).trim().replace(/\/+$/, "");
+  const headers = {};
+  if (apiKey)
+    headers["Authorization"] = `Bearer ${apiKey}`;
+  try {
+    const origin = base.replace(/\/v1$/, "");
+    const response = await (0, import_obsidian4.requestUrl)({ url: `${origin}/api/v0/models`, method: "GET", headers, throw: false });
+    if (response.status === 200) {
+      const data = (_a = response.json) == null ? void 0 : _a.data;
+      if (Array.isArray(data)) {
+        const vision = data.filter((m) => (m == null ? void 0 : m.type) === "vlm" && typeof (m == null ? void 0 : m.id) === "string");
+        const chosen = (_b = vision.find((m) => m.state === "loaded")) != null ? _b : vision[0];
+        if (chosen)
+          return chosen.id;
+      }
+    }
+  } catch (e) {
+  }
+  const status = await detectLmStudio(base, apiKey);
+  if (status.state === "needs-key") {
+    throw new AiError("LM Studio needs an API key. Add it in the AI settings.");
+  }
+  if (status.state === "not-found") {
+    throw new AiError(`LM Studio was not found at ${base}. Start its server, or check the address in the AI settings.`);
+  }
+  if (status.models.length === 0) {
+    throw new AiError("LM Studio has no models available. Download a vision model in LM Studio first.");
+  }
+  return status.models[0];
+}
+async function createClient(provider, config) {
+  if (provider === "none" || !config) {
+    throw new AiError("No AI provider is selected. Choose one in Settings \u2192 Eagle Bridge \u2192 AI.");
+  }
+  const label = AI_PROVIDER_LABELS[provider];
+  switch (provider) {
+    case "anthropic":
+      if (!config.apiKey)
+        throw new AiError("Add your Anthropic API key in the AI settings.");
+      if (!config.model)
+        throw new AiError("Choose an Anthropic model in the AI settings.");
+      return new AnthropicClient(config);
+    case "openai":
+      if (!config.apiKey)
+        throw new AiError("Add your OpenAI API key in the AI settings.");
+      return new OpenAiStyleClient(label, OPENAI_BASE_URL, config.apiKey, config.model, config.effort);
+    case "gemini":
+      if (!config.apiKey)
+        throw new AiError("Add your Gemini API key in the AI settings.");
+      return new OpenAiStyleClient(label, GEMINI_BASE_URL, config.apiKey, config.model, config.effort);
+    case "openai-compatible":
+      if (!config.baseUrl)
+        throw new AiError("Enter the address of your OpenAI-compatible server in the AI settings.");
+      return new OpenAiStyleClient(label, config.baseUrl, config.apiKey, config.model, config.effort);
+    case "lmstudio": {
+      const baseUrl = config.baseUrl || LM_STUDIO_DEFAULT_URL;
+      const model = config.model || await pickLmStudioModel(baseUrl, config.apiKey);
+      return new OpenAiStyleClient(label, baseUrl, config.apiKey, model, config.effort);
+    }
+  }
+}
+async function listAiModels(provider, config) {
+  const client = provider === "lmstudio" ? new OpenAiStyleClient(AI_PROVIDER_LABELS.lmstudio, config.baseUrl || LM_STUDIO_DEFAULT_URL, config.apiKey, config.model) : await createClient(provider, { ...config, model: config.model || "unset" });
+  return client.listModels();
+}
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new AiError("This image could not be read, so it cannot be sent to the AI provider."));
+    img.src = url;
+  });
+}
+async function prepareImage(imageUrl) {
+  const img = await loadImage(imageUrl);
+  const sourceWidth = img.naturalWidth || 1024;
+  const sourceHeight = img.naturalHeight || 1024;
+  const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(sourceWidth, sourceHeight));
+  const width = Math.max(1, Math.round(sourceWidth * scale));
+  const height = Math.max(1, Math.round(sourceHeight * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx)
+    throw new AiError("This image could not be prepared for the AI provider.");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(img, 0, 0, width, height);
+  let dataUrl;
+  try {
+    dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+  } catch (e) {
+    throw new AiError("This image could not be prepared for the AI provider.");
+  }
+  return { base64: dataUrl.slice(dataUrl.indexOf(",") + 1), mediaType: "image/jpeg" };
+}
+var SYSTEM_PROMPT = "You help someone catalogue images in Eagle, a personal asset library, so they can find each image again later. Answer with exactly what is asked for and nothing else: no preamble, no explanation, no quotation marks, no Markdown.";
+function describeHints(hints) {
+  var _a;
+  let text = "";
+  const userHints = (_a = hints.userHints) == null ? void 0 : _a.trim();
+  if (userHints) {
+    text += `
+
+The person adding this image says this about it:
+${userHints}
+
+Take that as true even where the image alone would not tell you, and build on it. It may be only a few words: work out what it refers to and bring in what you know about that subject, such as proper names, the work or series it belongs to, the people or places shown, and the right terms for them.`;
+  }
+  const lines = [];
+  if (hints.fileName)
+    lines.push(`File name: ${hints.fileName} (often meaningless, such as "image" or a random ID)`);
+  if (hints.altText)
+    lines.push(`Alt text from the page it came from: ${hints.altText}`);
+  if (hints.sourcePageUrl)
+    lines.push(`Page it came from: ${hints.sourcePageUrl}`);
+  if (lines.length > 0) {
+    text += `
+
+What is already known about this image. Use it only where it agrees with what you can see:
+${lines.join("\n")}`;
+  }
+  return text;
+}
+function cleanAiText(text) {
+  let cleaned = text.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, "").replace(/```[a-z]*\n?/gi, "").trim();
+  cleaned = cleaned.replace(/^(title|name|description|caption)\s*:\s*/i, "");
+  cleaned = cleaned.replace(/^["'“”‘’`*_]+|["'“”‘’`*_]+$/g, "").trim();
+  return cleaned;
+}
+function cleanAiName(text) {
+  const firstLine = cleanAiText(text).split(/\r?\n/).map((line) => line.trim()).find((line) => line.length > 0) || "";
+  return cleanAiText(firstLine).replace(/\.(png|jpe?g|gif|webp|svg|bmp|avif|tiff?|heic)$/i, "").replace(/[\\/:*?"<>|]/g, " ").replace(/\s+/g, " ").replace(/[.。]+$/, "").trim();
+}
+function parseAiTags(text) {
+  let lines = cleanAiText(text).split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+  if (lines.length === 1 && lines[0].includes(",")) {
+    lines = lines[0].split(",");
+  }
+  const seen = /* @__PURE__ */ new Set();
+  const tags = [];
+  for (const line of lines) {
+    const tag = line.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").replace(/^#/, "").replace(/^["'“”‘’`]+|["'“”‘’`]+$/g, "").replace(/\s+/g, " ").trim();
+    const key = tag.toLowerCase();
+    if (tag && tag.length <= 60 && !seen.has(key)) {
+      seen.add(key);
+      tags.push(tag);
+    }
+  }
+  return tags;
+}
+function classifyAiTags(suggested, existingTags, appliedTags, maxTags, maxNewTags) {
+  const existingByKey = new Map(existingTags.map((tag) => [tag.toLowerCase(), tag]));
+  const applied = new Set(appliedTags.map((tag) => tag.toLowerCase()));
+  const result = [];
+  let newCount = 0;
+  for (const tag of suggested) {
+    if (result.length >= maxTags)
+      break;
+    const key = tag.toLowerCase();
+    if (applied.has(key))
+      continue;
+    const existing = existingByKey.get(key);
+    if (existing) {
+      result.push({ name: existing, isNew: false });
+    } else if (newCount < maxNewTags) {
+      newCount++;
+      result.push({ name: tag, isNew: true });
+    }
+  }
+  return result;
+}
+function buildTagPrompt(tags, totalTags, appliedTags, hints, maxTags, maxNewTags) {
+  const count = (n, noun) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+  const parts = [
+    `Suggest up to ${count(maxTags, "tag")} for this image, most fitting first.`
+  ];
+  let answerFormat = "Answer with one tag per line and nothing else.";
+  const hintText = describeHints(hints).trim();
+  if (hintText)
+    parts.push(hintText);
+  if (tags.length > 0) {
+    const listed = tags.map((tag) => `${tag.name} (${tag.imageCount})`).join("\n");
+    const scope = tags.length < totalTags ? `The ${tags.length} most used of the library's ${totalTags} tags` : "Every tag in the library";
+    parts.push(`${scope}, each followed by how many items carry it:
+${listed}`);
+    const rules = [
+      "Use a tag from that list only when it clearly fits this image, and copy it exactly. Leave out any that do not fit: fewer tags is fine."
+    ];
+    if (maxNewTags > 0) {
+      rules.push(`When something important about the image has no fitting tag in the list, add at most ${count(maxNewTags, "new tag")}.`);
+      rules.push("Write a new tag the way the library writes its tags: the same capitalization and the same language.");
+      const prefixes = findTagPrefixes(tags);
+      if (prefixes.length > 0) {
+        rules.push(`This library files its tags under a prefix followed by a colon. The prefixes in use are: ${prefixes.join(", ")}. So write every new tag as "<prefix>: <value>", choosing the prefix that says what kind of thing the value is. A bare value with no prefix is wrong, unless none of those prefixes could describe it.`);
+        answerFormat = `Answer with one tag per line and nothing else. Every new tag starts with one of these prefixes and a colon: ${prefixes.join(", ")}.`;
+      }
+    } else {
+      rules.push("Do not make up new tags.");
+    }
+    parts.push(rules.map((rule) => `- ${rule}`).join("\n"));
+  } else {
+    parts.push(`The library has no tags yet, so propose at most ${count(maxNewTags, "short, general tag")}.`);
+  }
+  if (appliedTags.length > 0) {
+    parts.push(`Already applied, so leave these out: ${appliedTags.join(", ")}`);
+  }
+  parts.push(answerFormat);
+  return parts.join("\n\n");
+}
+function findTagPrefixes(tags) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const tag of tags) {
+    const match = tag.name.match(/^([^:]{1,30}):\s*\S/);
+    if (match) {
+      const prefix = match[1].trim();
+      counts.set(prefix, (counts.get(prefix) || 0) + 1);
+    }
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([prefix]) => prefix);
+}
+var AiAssistant = class {
+  constructor(getSettings, listTags) {
+    this.getSettings = getSettings;
+    this.listTags = listTags;
+    // The picker asks for a name, a description and tags about the same image
+    this.preparedImages = /* @__PURE__ */ new Map();
+  }
+  async suggestName(imageUrl, hints) {
+    const answer = await this.ask(
+      imageUrl,
+      "Write a title for this image: 3 to 8 words that say what it shows, specific enough to tell it apart from similar images. No file extension and no full stop at the end." + describeHints(hints)
+    );
+    const name = cleanAiName(answer);
+    if (!name)
+      throw new AiError("The model did not return a name.");
+    return name;
+  }
+  async suggestDescription(imageUrl, hints) {
+    const answer = await this.ask(
+      imageUrl,
+      "Describe this image in one or two sentences: what it shows, any text that matters, and its style or medium if that is notable. Write it so a search for the subject would find it." + describeHints(hints)
+    );
+    const description = cleanAiText(answer).replace(/\s*\n+\s*/g, " ").trim();
+    if (!description)
+      throw new AiError("The model did not return a description.");
+    return description;
+  }
+  async suggestTags(imageUrl, hints, appliedTags) {
+    const allTags = (await this.listTags()).filter((tag) => tag == null ? void 0 : tag.name).sort((a, b) => (b.imageCount || 0) - (a.imageCount || 0));
+    const sentTags = allTags.slice(0, MAX_TAGS_IN_PROMPT);
+    const { maxTags, maxNewTags } = resolveAiTagLimits(this.getSettings());
+    if (allTags.length === 0 && maxNewTags === 0) {
+      throw new AiError("Your Eagle library has no tags yet and new tags are set to 0, so there is nothing to suggest. Allow new tags in the AI settings.");
+    }
+    const answer = await this.ask(
+      imageUrl,
+      buildTagPrompt(sentTags, allTags.length, appliedTags, hints, maxTags, maxNewTags)
+    );
+    const tags = classifyAiTags(parseAiTags(answer), allTags.map((tag) => tag.name), appliedTags, maxTags, maxNewTags);
+    return {
+      tags,
+      truncatedTo: sentTags.length < allTags.length ? { sent: sentTags.length, total: allTags.length } : void 0
+    };
+  }
+  async ask(imageUrl, prompt) {
+    const settings = this.getSettings();
+    const provider = settings.aiProvider;
+    const isLocalServer = provider === "lmstudio" || provider === "openai-compatible";
+    const client = await createClient(provider, provider === "none" ? void 0 : settings.aiProviders[provider]);
+    let prepared = this.preparedImages.get(imageUrl);
+    if (!prepared) {
+      prepared = prepareImage(imageUrl);
+      this.preparedImages.set(imageUrl, prepared);
+      prepared.catch(() => this.preparedImages.delete(imageUrl));
+    }
+    const image = await prepared;
+    if (!isLocalServer) {
+      return client.complete(SYSTEM_PROMPT, prompt, image);
+    }
+    const result = localRequestQueue.then(() => client.complete(SYSTEM_PROMPT, prompt, image));
+    localRequestQueue = result.catch(() => void 0);
+    return result;
+  }
+};
+
 // src/settings.ts
 init_types();
+var AiModelPickerModal = class extends import_obsidian5.FuzzySuggestModal {
+  constructor(app, models, onChoose) {
+    super(app);
+    this.models = models;
+    this.onChoose = onChoose;
+    this.setPlaceholder("Choose a model\u2026");
+  }
+  getItems() {
+    return this.models;
+  }
+  getItemText(model) {
+    return model;
+  }
+  onChooseItem(model) {
+    this.onChoose(model);
+  }
+};
 var SETTINGS_TABS = [
   { id: "connections", label: "Connections", description: "How Eagle Bridge reaches Eagle and its Extra Links plugin." },
   { id: "cloud", label: "Cloud storage", description: "Where image copies are uploaded so they display on your other devices." },
   { id: "adding", label: "Adding images", description: "What happens when you paste or drop a new image into a note." },
   { id: "embedding", label: "Embedding", description: "How images that are in Eagle appear in your notes." },
+  { id: "ai", label: "AI", description: "Optional AI help for naming, describing and tagging images as you add them to Eagle." },
   { id: "extras", label: "Extras", description: "Excalidraw and Canvas support, and using one vault on several computers." }
 ];
-var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
+var CMDSPACEEagleSettingTab = class extends import_obsidian5.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.activeTab = "connections";
@@ -2958,6 +3664,9 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
         this.renderImageLinksSection(containerEl);
         this.renderMetadataCardSection(containerEl);
         this.renderSearchSection(containerEl);
+        break;
+      case "ai":
+        this.renderAiSection(containerEl);
         break;
       case "extras":
         this.renderExcalidrawSection(containerEl);
@@ -2992,56 +3701,56 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
     }
   }
   renderEagleConnectionSection(containerEl) {
-    new import_obsidian4.Setting(containerEl).setName("Eagle app").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("Eagle API base URL").setDesc("Address of Eagle's local API (default: http://localhost:41595)").addText((text) => text.setPlaceholder("http://localhost:41595").setValue(this.plugin.settings.eagleApiBaseUrl).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Eagle app").setHeading();
+    new import_obsidian5.Setting(containerEl).setName("Eagle API base URL").setDesc("Address of Eagle's local API (default: http://localhost:41595)").addText((text) => text.setPlaceholder("http://localhost:41595").setValue(this.plugin.settings.eagleApiBaseUrl).onChange(async (value) => {
       this.plugin.settings.eagleApiBaseUrl = value || "http://localhost:41595";
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Connection timeout").setDesc("How long to wait for Eagle to answer, in milliseconds").addText((text) => text.setPlaceholder("5000").setValue(this.plugin.settings.connectionTimeout.toString()).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Connection timeout").setDesc("How long to wait for Eagle to answer, in milliseconds").addText((text) => text.setPlaceholder("5000").setValue(this.plugin.settings.connectionTimeout.toString()).onChange(async (value) => {
       const num = parseInt(value, 10);
       if (!isNaN(num) && num > 0) {
         this.plugin.settings.connectionTimeout = num;
         await this.plugin.saveSettings();
       }
     }));
-    new import_obsidian4.Setting(containerEl).setName("Test connection").setDesc("Check that Eagle is running and reachable").addButton((button) => button.setButtonText("Test").onClick(async () => {
+    new import_obsidian5.Setting(containerEl).setName("Test connection").setDesc("Check that Eagle is running and reachable").addButton((button) => button.setButtonText("Test").onClick(async () => {
       const api = new EagleApiService(this.plugin.settings);
       const info = await api.getApplicationInfo();
       if (info) {
-        new import_obsidian4.Notice(`\u2713 Connected to Eagle ${info.version} (${info.platform})`);
+        new import_obsidian5.Notice(`\u2713 Connected to Eagle ${info.version} (${info.platform})`);
       } else {
-        new import_obsidian4.Notice("\u2717 Failed to connect to Eagle. Make sure Eagle is running.");
+        new import_obsidian5.Notice("\u2717 Failed to connect to Eagle. Make sure Eagle is running.");
       }
     }));
   }
   renderPasteDestinationSection(containerEl) {
-    new import_obsidian4.Setting(containerEl).setName("Destination").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("When pasting or dropping an image").setDesc('Where a new image is saved. "Ask every time" shows the choices with a description of what each one does.').addDropdown((dropdown) => dropdown.addOption("ask", "Ask every time").addOption("eagle", "Save to Eagle").addOption("local", "Save to vault").addOption("cloud", "Upload to cloud only").setValue(this.plugin.settings.imagePasteBehavior).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Destination").setHeading();
+    new import_obsidian5.Setting(containerEl).setName("When pasting or dropping an image").setDesc('Where a new image is saved. "Ask every time" shows the choices with a description of what each one does.').addDropdown((dropdown) => dropdown.addOption("ask", "Ask every time").addOption("eagle", "Save to Eagle").addOption("local", "Save to vault").addOption("cloud", "Upload to cloud only").setValue(this.plugin.settings.imagePasteBehavior).onChange(async (value) => {
       this.plugin.settings.imagePasteBehavior = value;
       await this.plugin.saveSettings();
     }));
   }
   renderSourceCaptureSection(containerEl) {
-    new import_obsidian4.Setting(containerEl).setName("Image source").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("Capture where an image came from").setDesc("When you paste or drop an image from a web browser, record the page and image URLs it came from and pass them to Eagle.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableImageSourceUrl).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Image source").setHeading();
+    new import_obsidian5.Setting(containerEl).setName("Capture where an image came from").setDesc("When you paste or drop an image from a web browser, record the page and image URLs it came from and pass them to Eagle.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableImageSourceUrl).onChange(async (value) => {
       this.plugin.settings.enableImageSourceUrl = value;
       await this.plugin.saveSettings();
       this.display();
     }));
     if (this.plugin.settings.enableImageSourceUrl) {
-      new import_obsidian4.Setting(containerEl).setName("URL saved as the Eagle website").setDesc("Which captured URL goes into the item's website field in Eagle.").addDropdown((dropdown) => dropdown.addOption("page-first", "Webpage URL (fallback to image URL)").addOption("image-first", "Direct image URL (fallback to webpage URL)").addOption("page-only", "Webpage URL only").addOption("image-only", "Direct image URL only").setValue(this.plugin.settings.imageSourceUrlPriority).onChange(async (value) => {
+      new import_obsidian5.Setting(containerEl).setName("URL saved as the Eagle website").setDesc("Which captured URL goes into the item's website field in Eagle.").addDropdown((dropdown) => dropdown.addOption("page-first", "Webpage URL (fallback to image URL)").addOption("image-first", "Direct image URL (fallback to webpage URL)").addOption("page-only", "Webpage URL only").addOption("image-only", "Direct image URL only").setValue(this.plugin.settings.imageSourceUrlPriority).onChange(async (value) => {
         this.plugin.settings.imageSourceUrlPriority = value;
         await this.plugin.saveSettings();
       }));
-      new import_obsidian4.Setting(containerEl).setName("Save source links to Extra Links").setDesc("Also list the captured URLs in the item's Extra Links panel in Eagle." + (this.plugin.settings.enableExtraLinks ? "" : " Eagle Extra Links is turned off (Connections tab), so nothing is saved.")).addDropdown((dropdown) => dropdown.addOption("none", "None").addOption("page", "Page URL").addOption("image", "Image URL").addOption("both", "Page URL and image URL").setValue(this.plugin.settings.extraLinksImageSource).onChange(async (value) => {
+      new import_obsidian5.Setting(containerEl).setName("Save source links to Extra Links").setDesc("Also list the captured URLs in the item's Extra Links panel in Eagle." + (this.plugin.settings.enableExtraLinks ? "" : " Eagle Extra Links is turned off (Connections tab), so nothing is saved.")).addDropdown((dropdown) => dropdown.addOption("none", "None").addOption("page", "Page URL").addOption("image", "Image URL").addOption("both", "Page URL and image URL").setValue(this.plugin.settings.extraLinksImageSource).onChange(async (value) => {
         this.plugin.settings.extraLinksImageSource = value;
         await this.plugin.saveSettings();
       }));
     }
   }
   renderImageLinksSection(containerEl) {
-    new import_obsidian4.Setting(containerEl).setName("Image links").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("Link embedded images to").setDesc("What an embedded Eagle image points to. Cloud copy uploads a copy to your cloud provider so the image displays on your other devices. Custom URL prefix links into the Eagle library through your own web server. Local file path only works on this computer.").addDropdown((dropdown) => dropdown.addOption("cloud", "Cloud copy").addOption("custom-url", "Custom URL prefix").addOption("file", "Local file path").setValue(this.plugin.settings.eagleEmbedUrlMode).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Image links").setHeading();
+    new import_obsidian5.Setting(containerEl).setName("Link embedded images to").setDesc("What an embedded Eagle image points to. Cloud copy uploads a copy to your cloud provider so the image displays on your other devices. Custom URL prefix links into the Eagle library through your own web server. Local file path only works on this computer.").addDropdown((dropdown) => dropdown.addOption("cloud", "Cloud copy").addOption("custom-url", "Custom URL prefix").addOption("file", "Local file path").setValue(this.plugin.settings.eagleEmbedUrlMode).onChange(async (value) => {
       this.plugin.settings.eagleEmbedUrlMode = value;
       await this.plugin.saveSettings();
       this.display();
@@ -3056,51 +3765,55 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
       }
     }
     if (this.plugin.settings.eagleEmbedUrlMode === "custom-url") {
-      new import_obsidian4.Setting(containerEl).setName("Custom URL prefix").setDesc("Address of the web or WebDAV server that serves your Eagle library folder (e.g. https://localhost:8080)").addText((text) => text.setPlaceholder("https://localhost:8080").setValue(this.plugin.settings.eagleCustomUrlPrefix).onChange(async (value) => {
+      new import_obsidian5.Setting(containerEl).setName("Custom URL prefix").setDesc("Address of the web or WebDAV server that serves your Eagle library folder (e.g. https://localhost:8080)").addText((text) => text.setPlaceholder("https://localhost:8080").setValue(this.plugin.settings.eagleCustomUrlPrefix).onChange(async (value) => {
         this.plugin.settings.eagleCustomUrlPrefix = value.trim() || "https://localhost:8080";
         await this.plugin.saveSettings();
       }));
     }
-    new import_obsidian4.Setting(containerEl).setName("When pasting an Eagle item").setDesc("What to insert when you paste an Eagle item link, or an image copied inside Eagle.").addDropdown((dropdown) => dropdown.addOption("ask", "Ask every time").addOption("embed", "Embed the image").addOption("inline", "Insert a link").setValue(this.plugin.settings.eagleLinkPasteMode).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("When pasting an Eagle item").setDesc("What to insert when you paste an Eagle item link, or an image copied inside Eagle.").addDropdown((dropdown) => dropdown.addOption("ask", "Ask every time").addOption("embed", "Embed the image").addOption("inline", "Insert a link").setValue(this.plugin.settings.eagleLinkPasteMode).onChange(async (value) => {
       this.plugin.settings.eagleLinkPasteMode = value;
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName('"Open in Eagle" link format').setDesc("Format of links that open an item in Eagle, used in metadata cards and inserted links.").addDropdown((dropdown) => dropdown.addOption("http", "HTTP (http://localhost:41595/item?id=\u2026)").addOption("eagle", "Eagle protocol (eagle://item/\u2026)").setValue(this.plugin.settings.eagleItemLinkFormat).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName('"Open in Eagle" link format').setDesc("Format of links that open an item in Eagle, used in metadata cards and inserted links.").addDropdown((dropdown) => dropdown.addOption("http", "HTTP (http://localhost:41595/item?id=\u2026)").addOption("eagle", "Eagle protocol (eagle://item/\u2026)").setValue(this.plugin.settings.eagleItemLinkFormat).onChange(async (value) => {
       this.plugin.settings.eagleItemLinkFormat = value;
       await this.plugin.saveSettings();
     }));
   }
   renderMetadataCardSection(containerEl) {
-    new import_obsidian4.Setting(containerEl).setName("Metadata card").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("Include metadata card").setDesc("Add a short card below each embedded image with its type, size, dimensions, tags and links. Images uploaded straight to the cloud have no tags or Eagle link.").addToggle((toggle) => toggle.setValue(this.plugin.settings.insertThumbnail).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Metadata card").setHeading();
+    new import_obsidian5.Setting(containerEl).setName("Include metadata card").setDesc("Add a short card below each embedded image with its type, size, dimensions, tags and links. Images uploaded straight to the cloud have no tags or Eagle link.").addToggle((toggle) => toggle.setValue(this.plugin.settings.insertThumbnail).onChange(async (value) => {
       this.plugin.settings.insertThumbnail = value;
       await this.plugin.saveSettings();
       this.display();
     }));
     if (!this.plugin.settings.insertThumbnail)
       return;
-    new import_obsidian4.Setting(containerEl).setName("Source links in the card").setDesc("Link back to where the image came from: the web page, the image file on that page, or both.").addDropdown((dropdown) => dropdown.addOption("none", "None").addOption("page", "Page URL").addOption("image", "Image URL").addOption("both", "Page URL and image URL").setValue(this.plugin.settings.includeSourceInMetadataCard).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Tags in the card").setDesc(`List the item's Eagle tags in the card, written as valid Obsidian tags: a colon or slash becomes a nested tag ("Topic: AI" is written #topic/ai), and spaces and other punctuation become hyphens. Turn this off to keep Eagle tags out of your notes.`).addToggle((toggle) => toggle.setValue(this.plugin.settings.includeTagsInMetadataCard).onChange(async (value) => {
+      this.plugin.settings.includeTagsInMetadataCard = value;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian5.Setting(containerEl).setName("Source links in the card").setDesc("Link back to where the image came from: the web page, the image file on that page, or both.").addDropdown((dropdown) => dropdown.addOption("none", "None").addOption("page", "Page URL").addOption("image", "Image URL").addOption("both", "Page URL and image URL").setValue(this.plugin.settings.includeSourceInMetadataCard).onChange(async (value) => {
       this.plugin.settings.includeSourceInMetadataCard = value;
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Local file link in the card").setDesc("For images dragged or pasted from File Explorer or Finder, link to the original file on this computer.").addToggle((toggle) => toggle.setValue(this.plugin.settings.includeLocalSourceInMetadataCard).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Local file link in the card").setDesc("For images dragged or pasted from File Explorer or Finder, link to the original file on this computer.").addToggle((toggle) => toggle.setValue(this.plugin.settings.includeLocalSourceInMetadataCard).onChange(async (value) => {
       this.plugin.settings.includeLocalSourceInMetadataCard = value;
       await this.plugin.saveSettings();
     }));
   }
   renderEagleFolderSection(containerEl) {
-    new import_obsidian4.Setting(containerEl).setName("Eagle folder").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("When adding an item to Eagle").setDesc("Which folder in your Eagle library new images go into.").addDropdown((dropdown) => dropdown.addOption("ask", "Ask").addOption("target", "Add to Target Folder").addOption("mirror", "Mirror Obsidian Folder Hierarchy").addOption("map", "Use Folder Map").setValue(this.plugin.settings.addFolderMode || (this.plugin.settings.enableDefaultFolder ? "target" : "target")).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Eagle folder").setHeading();
+    new import_obsidian5.Setting(containerEl).setName("When adding an item to Eagle").setDesc("Which folder in your Eagle library new images go into.").addDropdown((dropdown) => dropdown.addOption("ask", "Ask").addOption("target", "Add to Target Folder").addOption("mirror", "Mirror Obsidian Folder Hierarchy").addOption("map", "Use Folder Map").setValue(this.plugin.settings.addFolderMode || (this.plugin.settings.enableDefaultFolder ? "target" : "target")).onChange(async (value) => {
       this.plugin.settings.addFolderMode = value;
       await this.plugin.saveSettings();
       this.display();
     }));
     if (this.plugin.settings.addFolderMode === "target") {
-      new import_obsidian4.Setting(containerEl).setName("Target folder").setDesc(this.plugin.settings.defaultFolderName || "No folder selected (Root library)").addButton((button) => button.setButtonText("Select Folder").onClick(async () => {
+      new import_obsidian5.Setting(containerEl).setName("Target folder").setDesc(this.plugin.settings.defaultFolderName || "No folder selected (Root library)").addButton((button) => button.setButtonText("Select Folder").onClick(async () => {
         const api = new EagleApiService(this.plugin.settings);
         const folders = await api.listFolders();
         if (!folders || folders.length === 0) {
-          new import_obsidian4.Notice("No folders found or Eagle is not connected.");
+          new import_obsidian5.Notice("No folders found or Eagle is not connected.");
           return;
         }
         const { flattenEagleFolders: flattenEagleFolders2, EagleFolderModal: EagleFolderModal2 } = await Promise.resolve().then(() => (init_modals(), modals_exports));
@@ -3124,25 +3837,25 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
     } else if (this.plugin.settings.addFolderMode === "ask") {
       const recentCount = (this.plugin.settings.recentEagleFolders || []).length;
       const desc = recentCount > 0 ? `Prompts you with a searchable folder picker before each upload, featuring ${recentCount} recently used folder(s).` : "Prompts you with a searchable folder picker before each upload, featuring your recently used folders.";
-      const askSetting = new import_obsidian4.Setting(containerEl).setName("Folder prompt").setDesc(desc);
+      const askSetting = new import_obsidian5.Setting(containerEl).setName("Folder prompt").setDesc(desc);
       if (recentCount > 0) {
         askSetting.addButton((button) => button.setButtonText("Clear Recent History").onClick(async () => {
           this.plugin.settings.recentEagleFolders = [];
           await this.plugin.saveSettings();
-          new import_obsidian4.Notice("Recent Eagle folders cleared.");
+          new import_obsidian5.Notice("Recent Eagle folders cleared.");
           this.display();
         }));
       }
       this.renderMirrorRootFolderSettings(containerEl, true);
     } else if (this.plugin.settings.addFolderMode === "mirror") {
-      new import_obsidian4.Setting(containerEl).setName("Folder hierarchy mirroring").setDesc("Automatically creates and mirrors the active note\u2019s folder hierarchy inside Eagle relative to the vault and library roots. If the note is at the vault root, attachments are placed in the root library.");
+      new import_obsidian5.Setting(containerEl).setName("Folder hierarchy mirroring").setDesc("Automatically creates and mirrors the active note\u2019s folder hierarchy inside Eagle relative to the vault and library roots. If the note is at the vault root, attachments are placed in the root library.");
       this.renderMirrorRootFolderSettings(containerEl, false);
     } else if (this.plugin.settings.addFolderMode === "map") {
-      new import_obsidian4.Setting(containerEl).setName("Folder mappings").setDesc("Map Obsidian vault folders to corresponding Eagle folders. Subfolders automatically inherit their parent folder mapping unless specifically mapped.").addButton((button) => button.setButtonText("Add Folder Mapping").setCta().onClick(async () => {
+      new import_obsidian5.Setting(containerEl).setName("Folder mappings").setDesc("Map Obsidian vault folders to corresponding Eagle folders. Subfolders automatically inherit their parent folder mapping unless specifically mapped.").addButton((button) => button.setButtonText("Add Folder Mapping").setCta().onClick(async () => {
         const api = new EagleApiService(this.plugin.settings);
         const connected = await api.isConnected();
         if (!connected) {
-          new import_obsidian4.Notice("Eagle is not running. Please start Eagle and try again.");
+          new import_obsidian5.Notice("Eagle is not running. Please start Eagle and try again.");
           return;
         }
         const { AddFolderMappingModal: AddFolderMappingModal2 } = await Promise.resolve().then(() => (init_modals(), modals_exports));
@@ -3184,32 +3897,32 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
     }
   }
   renderEagleTagsSection(containerEl) {
-    new import_obsidian4.Setting(containerEl).setName("Eagle tags").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("Add default tags").setDesc("Tag every image you paste or drop into Eagle with the tags below.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableDefaultTags).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Eagle tags").setHeading();
+    new import_obsidian5.Setting(containerEl).setName("Add default tags").setDesc("Tag every image you paste or drop into Eagle with the tags below.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableDefaultTags).onChange(async (value) => {
       this.plugin.settings.enableDefaultTags = value;
       await this.plugin.saveSettings();
       this.display();
     }));
     if (this.plugin.settings.enableDefaultTags) {
-      new import_obsidian4.Setting(containerEl).setName("Default tags").setDesc("Comma-separated list of tags to add (e.g. obsidian, reference)").addText((text) => text.setPlaceholder("obsidian, reference").setValue(this.plugin.settings.defaultTags).onChange(async (value) => {
+      new import_obsidian5.Setting(containerEl).setName("Default tags").setDesc("Comma-separated list of tags to add (e.g. obsidian, reference)").addText((text) => text.setPlaceholder("obsidian, reference").setValue(this.plugin.settings.defaultTags).onChange(async (value) => {
         this.plugin.settings.defaultTags = value;
         await this.plugin.saveSettings();
       }));
     }
   }
   renderBacklinksSection(containerEl) {
-    new import_obsidian4.Setting(containerEl).setName("Backlinks to your notes").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("Add a backlink to the note").setDesc("When an image is added to Eagle or an Eagle item is pasted, save a link on the item that opens the note it was used in. Uses the Advanced URI plugin.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableBacklinks).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Backlinks to your notes").setHeading();
+    new import_obsidian5.Setting(containerEl).setName("Add a backlink to the note").setDesc("When an image is added to Eagle or an Eagle item is pasted, save a link on the item that opens the note it was used in. Uses the Advanced URI plugin.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableBacklinks).onChange(async (value) => {
       this.plugin.settings.enableBacklinks = value;
       await this.plugin.saveSettings();
       this.display();
     }));
     if (this.plugin.settings.enableBacklinks) {
-      new import_obsidian4.Setting(containerEl).setName("Note ID property").setDesc('Frontmatter property that identifies the note, so the link survives renames. Must match the "UID field" setting in Advanced URI. Created on the note if missing. Defaults to "id".').addText((text) => text.setPlaceholder("id").setValue(this.plugin.settings.frontmatterIdField).onChange(async (value) => {
+      new import_obsidian5.Setting(containerEl).setName("Note ID property").setDesc('Frontmatter property that identifies the note, so the link survives renames. Must match the "UID field" setting in Advanced URI. Created on the note if missing. Defaults to "id".').addText((text) => text.setPlaceholder("id").setValue(this.plugin.settings.frontmatterIdField).onChange(async (value) => {
         this.plugin.settings.frontmatterIdField = value.trim() || "id";
         await this.plugin.saveSettings();
       }));
-      new import_obsidian4.Setting(containerEl).setName("Save backlinks to").setDesc("Extra Links keeps backlinks in their own panel in Eagle. Eagle's own fields puts them in the item's website or notes field instead.").addDropdown((dropdown) => dropdown.addOption("extra-links", "Eagle Extra Links").addOption("legacy", "Eagle's own fields").setValue(this.plugin.settings.backlinkMode).onChange(async (value) => {
+      new import_obsidian5.Setting(containerEl).setName("Save backlinks to").setDesc("Extra Links keeps backlinks in their own panel in Eagle. Eagle's own fields puts them in the item's website or notes field instead.").addDropdown((dropdown) => dropdown.addOption("extra-links", "Eagle Extra Links").addOption("legacy", "Eagle's own fields").setValue(this.plugin.settings.backlinkMode).onChange(async (value) => {
         this.plugin.settings.backlinkMode = value;
         await this.plugin.saveSettings();
         this.display();
@@ -3223,7 +3936,7 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
           pausedEl.style.marginTop = "0";
         }
       } else {
-        new import_obsidian4.Setting(containerEl).setName("Eagle field").setDesc("Which of the item's fields in Eagle receives the backlink.").addDropdown((dropdown) => dropdown.addOption("url", "Website (URL)").addOption("note", "Notes").addOption("both", "Both").setValue(this.plugin.settings.backlinkDestination).onChange(async (value) => {
+        new import_obsidian5.Setting(containerEl).setName("Eagle field").setDesc("Which of the item's fields in Eagle receives the backlink.").addDropdown((dropdown) => dropdown.addOption("url", "Website (URL)").addOption("note", "Notes").addOption("both", "Both").setValue(this.plugin.settings.backlinkDestination).onChange(async (value) => {
           this.plugin.settings.backlinkDestination = value;
           await this.plugin.saveSettings();
         }));
@@ -3231,21 +3944,181 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
     }
   }
   renderExcalidrawSection(containerEl) {
-    new import_obsidian4.Setting(containerEl).setName("Excalidraw").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("Embed images in Excalidraw by URL").setDesc("When you paste or drop an image or an Eagle item onto an Excalidraw drawing, embed it from a URL that works on your other devices instead of saving a vault attachment. Uses a cloud copy, or your Custom URL prefix for Eagle items in that mode. Without a way to make such a URL, Excalidraw handles the paste as usual. Requires the Excalidraw plugin.").addToggle((toggle) => toggle.setValue(this.plugin.settings.excalidrawIntegration).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Excalidraw").setHeading();
+    new import_obsidian5.Setting(containerEl).setName("Embed images in Excalidraw by URL").setDesc("When you paste or drop an image or an Eagle item onto an Excalidraw drawing, embed it from a URL that works on your other devices instead of saving a vault attachment. Uses a cloud copy, or your Custom URL prefix for Eagle items in that mode. Without a way to make such a URL, Excalidraw handles the paste as usual. Requires the Excalidraw plugin.").addToggle((toggle) => toggle.setValue(this.plugin.settings.excalidrawIntegration).onChange(async (value) => {
       this.plugin.settings.excalidrawIntegration = value;
       await this.plugin.saveSettings();
       if (value)
         this.plugin.scanAndAttachExcalidrawContainers();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Also add new images to Eagle").setDesc("Add pasted or dropped images that are not in Eagle yet to your library, using the same folder, tags, source capture and backlink settings as images pasted into a note.").addToggle((toggle) => toggle.setValue(this.plugin.settings.excalidrawImportToEagle).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Also add new images to Eagle").setDesc("Add pasted or dropped images that are not in Eagle yet to your library, using the same folder, tags, source capture and backlink settings as images pasted into a note.").addToggle((toggle) => toggle.setValue(this.plugin.settings.excalidrawImportToEagle).onChange(async (value) => {
       this.plugin.settings.excalidrawImportToEagle = value;
       await this.plugin.saveSettings();
     }));
   }
+  renderAiSection(containerEl) {
+    new import_obsidian5.Setting(containerEl).setName("Provider").setHeading();
+    new import_obsidian5.Setting(containerEl).setName("AI provider").setDesc("Powers the wand buttons next to Name, Description and Tags in the dialog shown when you add an image to Eagle. With Anthropic, OpenAI or Gemini, each click sends that image, and for tags your tag list, to the provider. LM Studio runs on your own computer.").addDropdown((dropdown) => dropdown.addOption("none", AI_PROVIDER_LABELS.none).addOption("anthropic", AI_PROVIDER_LABELS.anthropic).addOption("openai", AI_PROVIDER_LABELS.openai).addOption("gemini", AI_PROVIDER_LABELS.gemini).addOption("openai-compatible", AI_PROVIDER_LABELS["openai-compatible"]).addOption("lmstudio", AI_PROVIDER_LABELS.lmstudio).setValue(this.plugin.settings.aiProvider).onChange(async (value) => {
+      this.plugin.settings.aiProvider = value;
+      await this.plugin.saveSettings();
+      this.display();
+    }));
+    const provider = this.plugin.settings.aiProvider;
+    if (provider === "none") {
+      this.renderLmStudioOffer(containerEl);
+      return;
+    }
+    const config = this.plugin.settings.aiProviders[provider];
+    const label = AI_PROVIDER_LABELS[provider];
+    new import_obsidian5.Setting(containerEl).setName(label).setHeading();
+    if (provider === "openai-compatible") {
+      new import_obsidian5.Setting(containerEl).setName("Server address").setDesc("Base address of the server's OpenAI-style API, including any version segment, for example https://example.com/v1. Requests are sent to /chat/completions under it.").addText((text) => text.setPlaceholder("https://example.com/v1").setValue(config.baseUrl || "").onChange(async (value) => {
+        config.baseUrl = value.trim();
+        await this.plugin.saveSettings();
+      }));
+    }
+    if (provider === "lmstudio") {
+      new import_obsidian5.Setting(containerEl).setName("Server address").setDesc(`Where LM Studio's local server listens (default: ${LM_STUDIO_DEFAULT_URL})`).addText((text) => text.setPlaceholder(LM_STUDIO_DEFAULT_URL).setValue(config.baseUrl || "").onChange(async (value) => {
+        config.baseUrl = value.trim() || LM_STUDIO_DEFAULT_URL;
+        await this.plugin.saveSettings();
+      }));
+      const statusSetting = new import_obsidian5.Setting(containerEl).setName("Detection").setDesc("Looking for LM Studio\u2026");
+      void (async () => {
+        const status = await detectLmStudio(config.baseUrl || LM_STUDIO_DEFAULT_URL, config.apiKey);
+        let message;
+        if (status.state === "ready") {
+          message = `\u2713 LM Studio detected with ${status.models.length} model${status.models.length === 1 ? "" : "s"} available.`;
+        } else if (status.state === "needs-key") {
+          message = config.apiKey ? "\u26A0 LM Studio was detected, but it rejected the API key below." : "\u26A0 LM Studio was detected, but it requires an API key. Enter it below.";
+        } else {
+          message = `\u26A0 LM Studio was not found at ${config.baseUrl || LM_STUDIO_DEFAULT_URL}. Start its local server, or check the address.`;
+        }
+        statusSetting.setDesc(message);
+        statusSetting.descEl.toggleClass("cmdspace-eagle-setting-required", status.state !== "ready");
+      })();
+    }
+    const keyOptional = provider === "openai-compatible" || provider === "lmstudio";
+    new import_obsidian5.Setting(containerEl).setName(keyOptional ? "API key (optional)" : "API key").setDesc(keyOptional ? "Only needed if the server requires one." : `Your ${label} API key. It is stored in this vault's plugin settings.`).addText((text) => {
+      text.inputEl.type = "password";
+      text.setValue(config.apiKey).onChange(async (value) => {
+        config.apiKey = value.trim();
+        await this.plugin.saveSettings();
+      });
+    });
+    let modelDesc = "A model that accepts images. Type its name, or use Browse to pick from the provider's list.";
+    if (provider === "anthropic") {
+      modelDesc = "Defaults to Claude Haiku 5.5 (claude-haiku-5-5). Type another model name, or use Browse to pick from the models your key can use.";
+    } else if (provider === "lmstudio") {
+      modelDesc = "Leave empty to use a loaded vision model automatically, or use Browse to pick one.";
+    }
+    new import_obsidian5.Setting(containerEl).setName("Model").setDesc(modelDesc).addText((text) => text.setPlaceholder(provider === "lmstudio" ? "Automatic" : "Model name").setValue(config.model).onChange(async (value) => {
+      config.model = value.trim();
+      await this.plugin.saveSettings();
+    })).addButton((button) => button.setButtonText("Browse").onClick(async () => {
+      button.setDisabled(true);
+      try {
+        const models = await listAiModels(provider, config);
+        if (models.length === 0) {
+          new import_obsidian5.Notice(`${label} did not list any models.`);
+          return;
+        }
+        new AiModelPickerModal(this.app, models, (model) => {
+          config.model = model;
+          void this.plugin.saveSettings().then(() => this.display());
+        }).open();
+      } catch (error) {
+        new import_obsidian5.Notice(`\u2717 ${error instanceof Error ? error.message : "Could not load the model list."}`, 8e3);
+      } finally {
+        button.setDisabled(false);
+      }
+    }));
+    const isLocalServer = provider === "lmstudio" || provider === "openai-compatible";
+    let effortDesc = "How much the model thinks before answering. Provider default leaves it to the model. Lower is faster and cheaper; higher may give better suggestions. A level the model rejects is left out automatically.";
+    if (isLocalServer) {
+      effortDesc = "How much the model thinks before answering. Provider default leaves it to the model: a reasoning model then thinks at length, which can take 20 seconds or more for a short title. Low shortens the thinking, High lengthens it, and None skips it for an answer in about a second. Models that do not reason ignore this, and a level the model rejects is left out automatically.";
+    } else if (provider === "anthropic") {
+      effortDesc = "How much effort Claude puts into the answer: how deeply it thinks and how thorough it is. Provider default leaves it to the model. Lower is faster and cheaper; higher may give better suggestions. A level the model rejects is left out automatically.";
+    }
+    new import_obsidian5.Setting(containerEl).setName("Effort").setDesc(effortDesc).addDropdown((dropdown) => {
+      dropdown.addOption("default", "Provider default");
+      if (isLocalServer)
+        dropdown.addOption("none", "None (skip thinking)");
+      dropdown.addOption("low", "Low").addOption("medium", "Medium").addOption("high", "High").setValue(config.effort || "default").onChange(async (value) => {
+        config.effort = value;
+        await this.plugin.saveSettings();
+      });
+    });
+    new import_obsidian5.Setting(containerEl).setName("Test connection").setDesc("Check that the provider can be reached with these settings. No image is sent.").addButton((button) => button.setButtonText("Test").onClick(async () => {
+      button.setDisabled(true);
+      try {
+        const models = await listAiModels(provider, config);
+        let message = `\u2713 Connected to ${label}. ${models.length} model${models.length === 1 ? "" : "s"} available.`;
+        if (config.model && models.length > 0 && !models.includes(config.model)) {
+          message += ` The chosen model "${config.model}" is not in that list.`;
+        }
+        new import_obsidian5.Notice(message, 8e3);
+      } catch (error) {
+        new import_obsidian5.Notice(`\u2717 ${error instanceof Error ? error.message : `Could not connect to ${label}.`}`, 8e3);
+      } finally {
+        button.setDisabled(false);
+      }
+    }));
+    this.renderAiTagSettings(containerEl);
+  }
+  renderAiTagSettings(containerEl) {
+    new import_obsidian5.Setting(containerEl).setName("Tag suggestions").setHeading();
+    const addCountField = (setting, min, read, write) => {
+      setting.addText((text) => {
+        text.inputEl.type = "number";
+        text.inputEl.min = String(min);
+        text.inputEl.max = String(AI_MAX_TAGS_LIMIT);
+        text.inputEl.step = "1";
+        text.inputEl.addClass("cmdspace-eagle-count-input");
+        text.setValue(String(read())).onChange(async (value) => {
+          const parsed = parseInt(value, 10);
+          if (isNaN(parsed))
+            return;
+          write(Math.min(AI_MAX_TAGS_LIMIT, Math.max(min, parsed)));
+          await this.plugin.saveSettings();
+        });
+        text.inputEl.addEventListener("blur", () => text.setValue(String(read())));
+      });
+    };
+    addCountField(
+      new import_obsidian5.Setting(containerEl).setName("Tags added per click").setDesc(`The most tags the tag wand adds each time you click it, from 1 to ${AI_MAX_TAGS_LIMIT}. Tags already on the image do not count.`),
+      1,
+      () => resolveAiTagLimits(this.plugin.settings).maxTags,
+      (value) => {
+        this.plugin.settings.aiMaxTags = value;
+      }
+    );
+    addCountField(
+      new import_obsidian5.Setting(containerEl).setName("New tags allowed").setDesc("How many of those may be tags that are not in your Eagle library yet. Set it to 0 to only ever use existing tags. It cannot exceed the number above."),
+      0,
+      () => resolveAiTagLimits(this.plugin.settings).maxNewTags,
+      (value) => {
+        this.plugin.settings.aiMaxNewTags = value;
+      }
+    );
+  }
+  // With no provider chosen, offer LM Studio if one is running on this computer
+  renderLmStudioOffer(containerEl) {
+    const offerEl = containerEl.createDiv();
+    const config = this.plugin.settings.aiProviders.lmstudio;
+    void (async () => {
+      const status = await detectLmStudio(config.baseUrl || LM_STUDIO_DEFAULT_URL, config.apiKey);
+      if (status.state === "not-found")
+        return;
+      new import_obsidian5.Setting(offerEl).setName("LM Studio detected").setDesc(status.state === "ready" ? `LM Studio is running on this computer with ${status.models.length} model${status.models.length === 1 ? "" : "s"} available.` : "LM Studio is running on this computer. It requires an API key, which you can enter after selecting it.").addButton((button) => button.setButtonText("Use LM Studio").setCta().onClick(async () => {
+        this.plugin.settings.aiProvider = "lmstudio";
+        await this.plugin.saveSettings();
+        this.display();
+      }));
+    })();
+  }
   renderCanvasSection(containerEl) {
-    new import_obsidian4.Setting(containerEl).setName("Canvas").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("Embed images in Canvas by URL").setDesc("When you paste or drop an image or an Eagle item onto an Obsidian Canvas, add it as a card that loads the image from a URL that works on your other devices, instead of saving a vault attachment. Without a way to make such a URL, Canvas handles the paste as usual.").addToggle((toggle) => toggle.setValue(this.plugin.settings.canvasIntegration).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Canvas").setHeading();
+    new import_obsidian5.Setting(containerEl).setName("Embed images in Canvas by URL").setDesc("When you paste or drop an image or an Eagle item onto an Obsidian Canvas, add it as a card that loads the image from a URL that works on your other devices, instead of saving a vault attachment. Without a way to make such a URL, Canvas handles the paste as usual.").addToggle((toggle) => toggle.setValue(this.plugin.settings.canvasIntegration).onChange(async (value) => {
       this.plugin.settings.canvasIntegration = value;
       await this.plugin.saveSettings();
       if (value)
@@ -3254,22 +4127,22 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
     }));
     if (!this.plugin.settings.canvasIntegration)
       return;
-    new import_obsidian4.Setting(containerEl).setName("Also add new images to Eagle").setDesc("Add pasted or dropped images that are not in Eagle yet to your library, using the same folder, tags, source capture and backlink settings as images pasted into a note.").addToggle((toggle) => toggle.setValue(this.plugin.settings.canvasImportToEagle).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Also add new images to Eagle").setDesc("Add pasted or dropped images that are not in Eagle yet to your library, using the same folder, tags, source capture and backlink settings as images pasted into a note.").addToggle((toggle) => toggle.setValue(this.plugin.settings.canvasImportToEagle).onChange(async (value) => {
       this.plugin.settings.canvasImportToEagle = value;
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Card type").setDesc("Text card: a card containing the image, plus its metadata card when that is enabled. Link card: a web card that loads the image address directly.").addDropdown((dropdown) => dropdown.addOption("text", "Text card").addOption("link", "Link card").addOption("ask", "Ask every time").setValue(this.plugin.settings.canvasNodeType).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Card type").setDesc("Text card: a card containing the image, plus its metadata card when that is enabled. Link card: a web card that loads the image address directly.").addDropdown((dropdown) => dropdown.addOption("text", "Text card").addOption("link", "Link card").addOption("ask", "Ask every time").setValue(this.plugin.settings.canvasNodeType).onChange(async (value) => {
       this.plugin.settings.canvasNodeType = value;
       await this.plugin.saveSettings();
     }));
   }
   renderSearchSection(containerEl) {
-    new import_obsidian4.Setting(containerEl).setName("Search").setDesc('Defaults for the "Search Eagle library and embed" command. You can still change them in the search window.').setHeading();
+    new import_obsidian5.Setting(containerEl).setName("Search").setDesc('Defaults for the "Search Eagle library and embed" command. You can still change them in the search window.').setHeading();
     this.renderSearchFiltersSettings(containerEl);
   }
   renderCloudSection(containerEl) {
-    new import_obsidian4.Setting(containerEl).setName("Provider").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("Cloud provider").setDesc("The service images are uploaded to. Only the selected provider is used; its settings appear below.").addDropdown((dropdown) => dropdown.addOption("r2", "Cloudflare R2").addOption("imghippo", "ImgHippo (Free)").addOption("s3", "Amazon S3").addOption("webdav", "WebDAV (Synology/NAS)").addOption("custom", "Custom Server").setValue(this.plugin.settings.activeCloudProvider).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Provider").setHeading();
+    new import_obsidian5.Setting(containerEl).setName("Cloud provider").setDesc("The service images are uploaded to. Only the selected provider is used; its settings appear below.").addDropdown((dropdown) => dropdown.addOption("r2", "Cloudflare R2").addOption("imghippo", "ImgHippo (Free)").addOption("s3", "Amazon S3").addOption("webdav", "WebDAV (Synology/NAS)").addOption("custom", "Custom Server").setValue(this.plugin.settings.activeCloudProvider).onChange(async (value) => {
       this.plugin.settings.activeCloudProvider = value;
       await this.plugin.saveSettings();
       this.display();
@@ -3277,7 +4150,7 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
     this.renderCloudProviderSettings(containerEl);
   }
   renderCrossPlatformSection(containerEl) {
-    new import_obsidian4.Setting(containerEl).setName("Cross-platform paths").setHeading();
+    new import_obsidian5.Setting(containerEl).setName("Cross-platform paths").setHeading();
     this.renderCrossPlatformSettings(containerEl);
   }
   renderFooter(containerEl) {
@@ -3316,14 +4189,14 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
     }
   }
   renderR2Settings(containerEl) {
-    new import_obsidian4.Setting(containerEl).setName("Cloudflare R2").setHeading();
+    new import_obsidian5.Setting(containerEl).setName("Cloudflare R2").setHeading();
     const infoEl = containerEl.createEl("div", { cls: "setting-item-description cmds-eagle-info-block" });
     infoEl.createEl("p", { text: "Cloudflare R2 requires a Worker for uploads. Setup:" });
     const r2List = infoEl.createEl("ol");
     r2List.createEl("li", { text: "Create an R2 bucket in Cloudflare dashboard" });
     r2List.createEl("li", { text: "Deploy the Eagle Cloud Worker (see plugin docs)" });
     r2List.createEl("li", { text: "Copy Worker URL and API Key below" });
-    new import_obsidian4.Setting(containerEl).setName("Worker URL").setDesc("Cloudflare Worker URL (must end with .workers.dev)").addText((text) => text.setPlaceholder("https://eagle-uploader.xxx.workers.dev").setValue(this.plugin.settings.cloudProviders.r2.workerUrl).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Worker URL").setDesc("Cloudflare Worker URL (must end with .workers.dev)").addText((text) => text.setPlaceholder("https://eagle-uploader.xxx.workers.dev").setValue(this.plugin.settings.cloudProviders.r2.workerUrl).onChange(async (value) => {
       let url = value.trim();
       if (url && !url.startsWith("http")) {
         url = "https://" + url;
@@ -3332,17 +4205,17 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
       this.plugin.settings.cloudProviders.r2.workerUrl = url;
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("API Key").setDesc("API_KEY from Cloudflare Worker Variables").addText((text) => text.setPlaceholder("your-api-key-here").setValue(this.plugin.settings.cloudProviders.r2.apiKey).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("API Key").setDesc("API_KEY from Cloudflare Worker Variables").addText((text) => text.setPlaceholder("your-api-key-here").setValue(this.plugin.settings.cloudProviders.r2.apiKey).onChange(async (value) => {
       this.plugin.settings.cloudProviders.r2.apiKey = value.trim();
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Public URL").setDesc("R2 bucket public URL (starts with pub-)").addText((text) => text.setPlaceholder("https://pub-xxx.r2.dev").setValue(this.plugin.settings.cloudProviders.r2.publicUrl).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Public URL").setDesc("R2 bucket public URL (starts with pub-)").addText((text) => text.setPlaceholder("https://pub-xxx.r2.dev").setValue(this.plugin.settings.cloudProviders.r2.publicUrl).onChange(async (value) => {
       this.plugin.settings.cloudProviders.r2.publicUrl = value.trim().replace(/\/$/, "");
       await this.plugin.saveSettings();
     }));
   }
   renderImgHippoSettings(containerEl) {
-    new import_obsidian4.Setting(containerEl).setName("ImgHippo (free image hosting)").setHeading();
+    new import_obsidian5.Setting(containerEl).setName("ImgHippo (free image hosting)").setHeading();
     const infoEl = containerEl.createEl("div", { cls: "setting-item-description cmds-eagle-info-block" });
     infoEl.createEl("p", { text: "ImgHippo is a free image hosting service. To get your API key:" });
     const ihList = infoEl.createEl("ol");
@@ -3354,101 +4227,101 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
     ihLi2.appendText("Go to ");
     ihLi2.createEl("a", { text: "Settings page", href: "https://www.imghippo.com/settings" });
     ihList.createEl("li", { text: "Copy your API key and paste it below" });
-    new import_obsidian4.Setting(containerEl).setName("API Key").setDesc("Your ImgHippo API key from the settings page").addText((text) => text.setPlaceholder("Your ImgHippo API key").setValue(this.plugin.settings.cloudProviders.imghippo.apiKey).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("API Key").setDesc("Your ImgHippo API key from the settings page").addText((text) => text.setPlaceholder("Your ImgHippo API key").setValue(this.plugin.settings.cloudProviders.imghippo.apiKey).onChange(async (value) => {
       this.plugin.settings.cloudProviders.imghippo.apiKey = value.trim();
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Test connection").setDesc("Check that an API key has been entered").addButton((button) => button.setButtonText("Test").onClick(async () => {
+    new import_obsidian5.Setting(containerEl).setName("Test connection").setDesc("Check that an API key has been entered").addButton((button) => button.setButtonText("Test").onClick(async () => {
       const config = this.plugin.settings.cloudProviders.imghippo;
       if (!config.apiKey) {
-        new import_obsidian4.Notice("\u2717 Please enter an API key first");
+        new import_obsidian5.Notice("\u2717 Please enter an API key first");
         return;
       }
-      new import_obsidian4.Notice("\u2713 ImgHippo API key configured");
+      new import_obsidian5.Notice("\u2713 ImgHippo API key configured");
     }));
   }
   renderS3Settings(containerEl) {
-    new import_obsidian4.Setting(containerEl).setName("Amazon S3").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("Endpoint").setDesc("S3-compatible endpoint URL").addText((text) => text.setPlaceholder("https://s3.amazonaws.com").setValue(this.plugin.settings.cloudProviders.s3.endpoint).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Amazon S3").setHeading();
+    new import_obsidian5.Setting(containerEl).setName("Endpoint").setDesc("S3-compatible endpoint URL").addText((text) => text.setPlaceholder("https://s3.amazonaws.com").setValue(this.plugin.settings.cloudProviders.s3.endpoint).onChange(async (value) => {
       this.plugin.settings.cloudProviders.s3.endpoint = value.trim();
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Region").addText((text) => text.setPlaceholder("us-east-1").setValue(this.plugin.settings.cloudProviders.s3.region).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Region").addText((text) => text.setPlaceholder("us-east-1").setValue(this.plugin.settings.cloudProviders.s3.region).onChange(async (value) => {
       this.plugin.settings.cloudProviders.s3.region = value.trim();
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Bucket").addText((text) => text.setPlaceholder("my-bucket").setValue(this.plugin.settings.cloudProviders.s3.bucket).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Bucket").addText((text) => text.setPlaceholder("my-bucket").setValue(this.plugin.settings.cloudProviders.s3.bucket).onChange(async (value) => {
       this.plugin.settings.cloudProviders.s3.bucket = value.trim();
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Access Key ID").addText((text) => text.setValue(this.plugin.settings.cloudProviders.s3.accessKeyId).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Access Key ID").addText((text) => text.setValue(this.plugin.settings.cloudProviders.s3.accessKeyId).onChange(async (value) => {
       this.plugin.settings.cloudProviders.s3.accessKeyId = value.trim();
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Secret Access Key").addText((text) => text.setValue(this.plugin.settings.cloudProviders.s3.secretAccessKey).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Secret Access Key").addText((text) => text.setValue(this.plugin.settings.cloudProviders.s3.secretAccessKey).onChange(async (value) => {
       this.plugin.settings.cloudProviders.s3.secretAccessKey = value.trim();
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Public URL (optional)").setDesc("Custom public URL for accessing uploaded files").addText((text) => text.setPlaceholder("https://cdn.example.com").setValue(this.plugin.settings.cloudProviders.s3.publicUrl).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Public URL (optional)").setDesc("Custom public URL for accessing uploaded files").addText((text) => text.setPlaceholder("https://cdn.example.com").setValue(this.plugin.settings.cloudProviders.s3.publicUrl).onChange(async (value) => {
       this.plugin.settings.cloudProviders.s3.publicUrl = value.trim();
       await this.plugin.saveSettings();
     }));
   }
   renderWebDAVSettings(containerEl) {
-    new import_obsidian4.Setting(containerEl).setName("WebDAV").setHeading();
+    new import_obsidian5.Setting(containerEl).setName("WebDAV").setHeading();
     containerEl.createEl("p", {
       text: "Works with Synology NAS, Nextcloud, ownCloud, or any WebDAV server.",
       cls: "setting-item-description"
     });
-    new import_obsidian4.Setting(containerEl).setName("Server URL").setDesc("WebDAV address that uploads are sent to. It requires your login.").addText((text) => text.setPlaceholder("https://nas.example.com/webdav").setValue(this.plugin.settings.cloudProviders.webdav.serverUrl).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Server URL").setDesc("WebDAV address that uploads are sent to. It requires your login.").addText((text) => text.setPlaceholder("https://nas.example.com/webdav").setValue(this.plugin.settings.cloudProviders.webdav.serverUrl).onChange(async (value) => {
       this.plugin.settings.cloudProviders.webdav.serverUrl = value.trim();
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Username").addText((text) => text.setValue(this.plugin.settings.cloudProviders.webdav.username).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Username").addText((text) => text.setValue(this.plugin.settings.cloudProviders.webdav.username).onChange(async (value) => {
       this.plugin.settings.cloudProviders.webdav.username = value.trim();
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Password").addText((text) => {
+    new import_obsidian5.Setting(containerEl).setName("Password").addText((text) => {
       text.inputEl.type = "password";
       text.setValue(this.plugin.settings.cloudProviders.webdav.password).onChange(async (value) => {
         this.plugin.settings.cloudProviders.webdav.password = value;
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian4.Setting(containerEl).setName("Upload path").setDesc("Folder under the Server URL that uploads go into. Created if it does not exist.").addText((text) => text.setPlaceholder("/eagle-uploads").setValue(this.plugin.settings.cloudProviders.webdav.uploadPath).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Upload path").setDesc("Folder under the Server URL that uploads go into. Created if it does not exist.").addText((text) => text.setPlaceholder("/eagle-uploads").setValue(this.plugin.settings.cloudProviders.webdav.uploadPath).onChange(async (value) => {
       this.plugin.settings.cloudProviders.webdav.uploadPath = value.trim() || "/eagle-uploads";
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Public URL").setDesc("Address that notes use to display uploaded files. It must work without a login. A Nextcloud public share link (https://host/s/TOKEN) is converted automatically.").addText((text) => text.setPlaceholder("https://public.example.com").setValue(this.plugin.settings.cloudProviders.webdav.publicUrl).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Public URL").setDesc("Address that notes use to display uploaded files. It must work without a login. A Nextcloud public share link (https://host/s/TOKEN) is converted automatically.").addText((text) => text.setPlaceholder("https://public.example.com").setValue(this.plugin.settings.cloudProviders.webdav.publicUrl).onChange(async (value) => {
       this.plugin.settings.cloudProviders.webdav.publicUrl = value.trim();
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Disable Nextcloud share link conversion").setDesc("Use the Public URL exactly as entered, even when it looks like a Nextcloud share link (https://host/s/TOKEN).").addToggle((toggle) => toggle.setValue(!!this.plugin.settings.cloudProviders.webdav.disableShareLinkConversion).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Disable Nextcloud share link conversion").setDesc("Use the Public URL exactly as entered, even when it looks like a Nextcloud share link (https://host/s/TOKEN).").addToggle((toggle) => toggle.setValue(!!this.plugin.settings.cloudProviders.webdav.disableShareLinkConversion).onChange(async (value) => {
       this.plugin.settings.cloudProviders.webdav.disableShareLinkConversion = value;
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Test connection").setDesc("Check the server login and, for a Nextcloud share, that the Public URL works without a login. Nothing is uploaded.").addButton((button) => button.setButtonText("Test").onClick(async () => {
+    new import_obsidian5.Setting(containerEl).setName("Test connection").setDesc("Check the server login and, for a Nextcloud share, that the Public URL works without a login. Nothing is uploaded.").addButton((button) => button.setButtonText("Test").onClick(async () => {
       button.setDisabled(true);
       try {
         const provider = new WebDAVProvider(this.plugin.settings.cloudProviders.webdav);
         const result = await provider.checkConnection();
-        new import_obsidian4.Notice(`${result.ok ? "\u2713" : "\u2717"} ${result.message}`, 8e3);
+        new import_obsidian5.Notice(`${result.ok ? "\u2713" : "\u2717"} ${result.message}`, 8e3);
       } finally {
         button.setDisabled(false);
       }
     }));
   }
   renderCustomSettings(containerEl) {
-    new import_obsidian4.Setting(containerEl).setName("Custom server").setHeading();
+    new import_obsidian5.Setting(containerEl).setName("Custom server").setHeading();
     containerEl.createEl("p", {
       text: 'Configure a custom upload endpoint. Server should accept multipart/form-data with "file" field.',
       cls: "setting-item-description"
     });
-    new import_obsidian4.Setting(containerEl).setName("Upload URL").addText((text) => text.setPlaceholder("https://your-server.com/upload").setValue(this.plugin.settings.cloudProviders.custom.uploadUrl).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Upload URL").addText((text) => text.setPlaceholder("https://your-server.com/upload").setValue(this.plugin.settings.cloudProviders.custom.uploadUrl).onChange(async (value) => {
       this.plugin.settings.cloudProviders.custom.uploadUrl = value.trim();
       await this.plugin.saveSettings();
     }));
-    new import_obsidian4.Setting(containerEl).setName("Public URL").setDesc("Base URL for accessing uploaded files").addText((text) => text.setPlaceholder("https://cdn.your-server.com").setValue(this.plugin.settings.cloudProviders.custom.publicUrl).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Public URL").setDesc("Base URL for accessing uploaded files").addText((text) => text.setPlaceholder("https://cdn.your-server.com").setValue(this.plugin.settings.cloudProviders.custom.publicUrl).onChange(async (value) => {
       this.plugin.settings.cloudProviders.custom.publicUrl = value.trim();
       await this.plugin.saveSettings();
     }));
@@ -3579,7 +4452,7 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
     const infoEl = containerEl.createEl("div", { cls: "setting-item-description cmds-eagle-info-block" });
     infoEl.createEl("p", { text: 'For notes that link to local files (the "Local file path" image link type) in a vault you open on more than one computer.' });
     infoEl.createEl("p", { text: "Local file links written on one computer are rewritten to match the computer you are on.", cls: "cmds-eagle-muted" });
-    new import_obsidian4.Setting(containerEl).setName("Convert file paths between computers").setDesc("Rewrite file:// links between the computers registered below").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableCrossPlatform).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Convert file paths between computers").setDesc("Rewrite file:// links between the computers registered below").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableCrossPlatform).onChange(async (value) => {
       this.plugin.settings.enableCrossPlatform = value;
       await this.plugin.saveSettings();
       this.display();
@@ -3587,18 +4460,18 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
     if (!this.plugin.settings.enableCrossPlatform) {
       return;
     }
-    new import_obsidian4.Setting(containerEl).setName("Convert when a note is opened").setDesc("Convert paths automatically each time you open a note, instead of only when you run the convert command").addToggle((toggle) => toggle.setValue(this.plugin.settings.autoConvertCrossPlatformPaths).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Convert when a note is opened").setDesc("Convert paths automatically each time you open a note, instead of only when you run the convert command").addToggle((toggle) => toggle.setValue(this.plugin.settings.autoConvertCrossPlatformPaths).onChange(async (value) => {
       this.plugin.settings.autoConvertCrossPlatformPaths = value;
       await this.plugin.saveSettings();
     }));
     const currentPlatform = process.platform;
     const currentUsername = this.detectCurrentUsername();
-    new import_obsidian4.Setting(containerEl).setName("Add current computer").setDesc(`Detected: ${currentPlatform === "darwin" ? "macOS" : "Windows"} / ${currentUsername}`).addButton((button) => button.setButtonText("Add").onClick(async () => {
+    new import_obsidian5.Setting(containerEl).setName("Add current computer").setDesc(`Detected: ${currentPlatform === "darwin" ? "macOS" : "Windows"} / ${currentUsername}`).addButton((button) => button.setButtonText("Add").onClick(async () => {
       const existingIndex = this.plugin.settings.computers.findIndex(
         (c) => c.platform === currentPlatform && c.username === currentUsername
       );
       if (existingIndex >= 0) {
-        new import_obsidian4.Notice("This computer is already registered");
+        new import_obsidian5.Notice("This computer is already registered");
         return;
       }
       const newProfile = {
@@ -3613,7 +4486,7 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
       this.plugin.settings.computers.push(newProfile);
       await this.plugin.saveSettings();
       this.display();
-      new import_obsidian4.Notice("Current computer added");
+      new import_obsidian5.Notice("Current computer added");
     }));
     if (this.plugin.settings.computers.length > 0) {
       const listContainer = containerEl.createDiv({ cls: "cmdspace-eagle-computer-list" });
@@ -3664,7 +4537,7 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
             this.plugin.settings.computers = this.plugin.settings.computers.filter((c) => c.id !== computer.id);
             await this.plugin.saveSettings();
             this.display();
-            new import_obsidian4.Notice("Computer removed");
+            new import_obsidian5.Notice("Computer removed");
           })();
         });
       }
@@ -3686,8 +4559,8 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
     return "unknown";
   }
   renderExtraLinksSettings(containerEl) {
-    new import_obsidian4.Setting(containerEl).setName("Eagle Extra Links").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("Use Eagle Extra Links").setDesc("Save Obsidian backlinks, image source links and cloud copy links to the Extra Links plugin in Eagle. When off, Eagle Bridge never contacts it and those links are not saved.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableExtraLinks).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Eagle Extra Links").setHeading();
+    new import_obsidian5.Setting(containerEl).setName("Use Eagle Extra Links").setDesc("Save Obsidian backlinks, image source links and cloud copy links to the Extra Links plugin in Eagle. When off, Eagle Bridge never contacts it and those links are not saved.").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableExtraLinks).onChange(async (value) => {
       this.plugin.settings.enableExtraLinks = value;
       this.plugin.extraLinksWarningShown = false;
       await this.plugin.saveSettings();
@@ -3695,19 +4568,19 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
     }));
     if (!this.plugin.settings.enableExtraLinks)
       return;
-    new import_obsidian4.Setting(containerEl).setName("Extra Links base URL").setDesc("Address of the Extra Links plugin's server in Eagle (default: http://127.0.0.1:41598)").addText((text) => text.setPlaceholder("http://127.0.0.1:41598").setValue(this.plugin.settings.extraLinksBaseUrl).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Extra Links base URL").setDesc("Address of the Extra Links plugin's server in Eagle (default: http://127.0.0.1:41598)").addText((text) => text.setPlaceholder("http://127.0.0.1:41598").setValue(this.plugin.settings.extraLinksBaseUrl).onChange(async (value) => {
       this.plugin.settings.extraLinksBaseUrl = value.trim() || "http://127.0.0.1:41598";
       this.plugin.extraLinksWarningShown = false;
       await this.plugin.saveSettings();
     }));
-    const statusSetting = new import_obsidian4.Setting(containerEl).setName("Test connection").setDesc("Checking for the Extra Links plugin\u2026");
+    const statusSetting = new import_obsidian5.Setting(containerEl).setName("Test connection").setDesc("Checking for the Extra Links plugin\u2026");
     const check = async (notify) => {
       const api = new EagleApiService(this.plugin.settings);
       const health = await api.checkExtraLinks(this.plugin.settings.extraLinksBaseUrl);
       statusSetting.setDesc(`${health.ok ? "\u2713" : "\u26A0"} ${health.message}`);
       statusSetting.descEl.toggleClass("cmdspace-eagle-setting-required", !health.ok);
       if (notify) {
-        new import_obsidian4.Notice(`${health.ok ? "\u2713" : "\u26A0"} ${health.message}`, 8e3);
+        new import_obsidian5.Notice(`${health.ok ? "\u2713" : "\u26A0"} ${health.message}`, 8e3);
       }
     };
     statusSetting.addButton((button) => button.setButtonText("Test").onClick(async () => {
@@ -3722,7 +4595,7 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
   }
   renderMirrorRootFolderSettings(containerEl, isAskMode = false) {
     const toggleDesc = isAskMode ? 'When using the "Mirror" button in the folder picker, nest the mirrored folder hierarchy under a designated Eagle root folder instead of the library root.' : "Nest the mirrored folder hierarchy under a designated Eagle root folder instead of the library root.";
-    new import_obsidian4.Setting(containerEl).setName("Place mirrored folders under a root folder").setDesc(toggleDesc).addToggle((toggle) => toggle.setValue(this.plugin.settings.enableMirrorRootFolder).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Place mirrored folders under a root folder").setDesc(toggleDesc).addToggle((toggle) => toggle.setValue(this.plugin.settings.enableMirrorRootFolder).onChange(async (value) => {
       this.plugin.settings.enableMirrorRootFolder = value;
       await this.plugin.saveSettings();
       this.display();
@@ -3730,7 +4603,7 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
     if (this.plugin.settings.enableMirrorRootFolder) {
       const isConfigured = !!this.plugin.settings.mirrorRootFolder && !!this.plugin.settings.mirrorRootFolderName;
       const descText = isConfigured ? this.plugin.settings.mirrorRootFolderName : "No folder selected (Required)";
-      const rootSetting = new import_obsidian4.Setting(containerEl).setName("Mirrored root folder").setDesc(descText);
+      const rootSetting = new import_obsidian5.Setting(containerEl).setName("Mirrored root folder").setDesc(descText);
       if (!isConfigured) {
         rootSetting.descEl.addClass("cmdspace-eagle-setting-required");
       }
@@ -3738,12 +4611,12 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian4.PluginSettingTab {
         const api = new EagleApiService(this.plugin.settings);
         const connected = await api.isConnected();
         if (!connected) {
-          new import_obsidian4.Notice("Eagle is not running. Please start Eagle and try again.");
+          new import_obsidian5.Notice("Eagle is not running. Please start Eagle and try again.");
           return;
         }
         const folders = await api.listFolders();
         if (!folders || folders.length === 0) {
-          new import_obsidian4.Notice("No folders found in your Eagle library.");
+          new import_obsidian5.Notice("No folders found in your Eagle library.");
           return;
         }
         const { flattenEagleFolders: flattenEagleFolders2, EagleFolderModal: EagleFolderModal2 } = await Promise.resolve().then(() => (init_modals(), modals_exports));
@@ -4236,7 +5109,7 @@ var ClipboardSourceService = class {
 
 // src/main.ts
 var PORTABLE_URL_FAILED = "Could not get a shareable URL for the image";
-var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
+var CMDSPACELinkEagle = class extends import_obsidian6.Plugin {
   constructor() {
     super(...arguments);
     this.lastModifiedFile = null;
@@ -4365,6 +5238,14 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
   async loadSettings() {
     const saved = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
+    const savedAi = saved == null ? void 0 : saved.aiProviders;
+    this.settings.aiProviders = {
+      anthropic: { ...DEFAULT_SETTINGS.aiProviders.anthropic, ...savedAi == null ? void 0 : savedAi.anthropic },
+      openai: { ...DEFAULT_SETTINGS.aiProviders.openai, ...savedAi == null ? void 0 : savedAi.openai },
+      gemini: { ...DEFAULT_SETTINGS.aiProviders.gemini, ...savedAi == null ? void 0 : savedAi.gemini },
+      "openai-compatible": { ...DEFAULT_SETTINGS.aiProviders["openai-compatible"], ...savedAi == null ? void 0 : savedAi["openai-compatible"] },
+      lmstudio: { ...DEFAULT_SETTINGS.aiProviders.lmstudio, ...savedAi == null ? void 0 : savedAi.lmstudio }
+    };
     if (this.settings.extraLinksBaseUrl === "http://127.0.0.1:41596" || this.settings.extraLinksBaseUrl === "http://localhost:41596") {
       this.settings.extraLinksBaseUrl = "http://127.0.0.1:41598";
       await this.saveSettings();
@@ -4391,16 +5272,16 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
     const clipboardText = await navigator.clipboard.readText();
     const parsed = parseEagleUrl(clipboardText.trim());
     if (!parsed || parsed.type !== "item") {
-      new import_obsidian5.Notice("Clipboard does not contain a valid Eagle item URL");
+      new import_obsidian6.Notice("Clipboard does not contain a valid Eagle item URL");
       return;
     }
     const item = await this.api.getItemInfo(parsed.id);
     if (!item) {
-      new import_obsidian5.Notice("Could not fetch item info from Eagle");
+      new import_obsidian6.Notice("Could not fetch item info from Eagle");
       return;
     }
     void this.insertItemLink(editor, item);
-    new import_obsidian5.Notice(`Inserted link to: ${item.name}`);
+    new import_obsidian6.Notice(`Inserted link to: ${item.name}`);
   }
   async insertItemLink(editor, item) {
     const sources = await this.resolveMetadataSources(item);
@@ -4531,7 +5412,7 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
   }
   buildMetadataCard(item, resolvedSources, cloudCopyUrl) {
     const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
-    const tags = item.tags.filter((t) => !t.startsWith("r2:") && t !== "r2-cloud" && t !== "cloud-upload").map((t) => `#${this.normalizeTag(t)}`).join(" ");
+    const tags = item.tags.filter((t) => !t.startsWith("r2:") && t !== "r2-cloud" && t !== "cloud-upload").map((t) => this.normalizeTag(t)).filter((t) => t.length > 0).map((t) => `#${t}`).join(" ");
     const dimensions = item.width && item.height ? `${item.width}\xD7${item.height}` : "N/A";
     const cloudUrl = cloudCopyUrl || this.api.getCloudUrl(item);
     const isUploaded = hasR2Upload(item) || !!cloudCopyUrl;
@@ -4540,7 +5421,8 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
       linkSection += ` | [Cloud](${cloudUrl})`;
     }
     linkSection += this.buildSourceLinks(resolvedSources, item.url);
-    return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)} | ${dimensions} | ${isUploaded ? "\u2601\uFE0F" : "\u{1F4C1}"} | ${tags || "No tags"}
+    const tagSection = this.settings.includeTagsInMetadataCard ? ` | ${tags || "No tags"}` : "";
+    return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)} | ${dimensions} | ${isUploaded ? "\u2601\uFE0F" : "\u{1F4C1}"}${tagSection}
 > ${linkSection}`;
   }
   // Metadata card for an image uploaded straight to the cloud provider (no Eagle item).
@@ -4596,7 +5478,7 @@ var CMDSPACELinkEagle = class extends import_obsidian5.Plugin {
   }
   buildLinkCard(item, resolvedSources) {
     const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
-    const tags = item.tags.filter((t) => !t.startsWith("r2:") && t !== "r2-cloud").map((t) => `#${this.normalizeTag(t)}`).join(" ");
+    const tags = item.tags.filter((t) => !t.startsWith("r2:") && t !== "r2-cloud").map((t) => this.normalizeTag(t)).filter((t) => t.length > 0).map((t) => `#${t}`).join(" ");
     const dimensions = item.width && item.height ? `${item.width}\xD7${item.height}` : "N/A";
     const imageUrl = this.getImageUrl(item);
     const cloudUrl = this.api.getCloudUrl(item);
@@ -4620,8 +5502,8 @@ ${imageSection}> | Property | Value |
 > | **Size** | ${this.formatFileSize(item.size)} |
 > | **Dimensions** | ${dimensions} |
 > | **R2 Status** | ${isUploaded ? "\u2601\uFE0F Uploaded" : "\u{1F4C1} Local only"} |
-> | **Tags** | ${tags || "None"} |
-${item.annotation ? `> | **Annotation** | ${item.annotation} |
+${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || "None"} |
+` : ""}${item.annotation ? `> | **Annotation** | ${item.annotation} |
 ` : ""}${linkSection}
 
 `;
@@ -4643,23 +5525,23 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
   async refreshCurrentNoteMetadata() {
     const activeFile = this.app.workspace.getActiveFile();
     if (!activeFile) {
-      new import_obsidian5.Notice("No active file");
+      new import_obsidian6.Notice("No active file");
       return;
     }
     const content = await this.app.vault.read(activeFile);
     const eagleLinks = this.extractEagleLinks(content);
     if (eagleLinks.length === 0) {
-      new import_obsidian5.Notice("No Eagle links found in current note");
+      new import_obsidian6.Notice("No Eagle links found in current note");
       return;
     }
-    new import_obsidian5.Notice(`Found ${eagleLinks.length} Eagle links. Refreshing...`);
+    new import_obsidian6.Notice(`Found ${eagleLinks.length} Eagle links. Refreshing...`);
     for (const id of eagleLinks) {
       const item = await this.api.getItemInfo(id);
       if (item) {
         console.log(`Refreshed: ${item.name}`);
       }
     }
-    new import_obsidian5.Notice("Eagle metadata refreshed");
+    new import_obsidian6.Notice("Eagle metadata refreshed");
   }
   extractEagleLinks(content) {
     const regex = /eagle:\/\/item\/([A-Z0-9]+)/gi;
@@ -4674,7 +5556,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     var _a;
     const activeFile = this.app.workspace.getActiveFile();
     if (!activeFile) {
-      new import_obsidian5.Notice("No active file");
+      new import_obsidian6.Notice("No active file");
       return;
     }
     const metadata = this.app.metadataCache.getFileCache(activeFile);
@@ -4682,7 +5564,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     const content = await this.app.vault.read(activeFile);
     const eagleLinks = this.extractEagleLinks(content);
     if (eagleLinks.length === 0) {
-      new import_obsidian5.Notice("No Eagle links found in current note");
+      new import_obsidian6.Notice("No Eagle links found in current note");
       return;
     }
     let updated = 0;
@@ -4691,46 +5573,50 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       if (success)
         updated++;
     }
-    new import_obsidian5.Notice(`Synced tags to ${updated}/${eagleLinks.length} Eagle items`);
+    new import_obsidian6.Notice(`Synced tags to ${updated}/${eagleLinks.length} Eagle items`);
   }
   async syncTagsFromEagle() {
     const activeFile = this.app.workspace.getActiveFile();
     if (!activeFile) {
-      new import_obsidian5.Notice("No active file");
+      new import_obsidian6.Notice("No active file");
       return;
     }
     const content = await this.app.vault.read(activeFile);
     const eagleLinks = this.extractEagleLinks(content);
     if (eagleLinks.length === 0) {
-      new import_obsidian5.Notice("No Eagle links found in current note");
+      new import_obsidian6.Notice("No Eagle links found in current note");
       return;
     }
     const allTags = /* @__PURE__ */ new Set();
     for (const id of eagleLinks) {
       const item = await this.api.getItemInfo(id);
       if (item) {
-        item.tags.forEach((t) => allTags.add(this.normalizeTag(t)));
+        for (const t of item.tags) {
+          const tag = this.normalizeTag(t);
+          if (tag)
+            allTags.add(tag);
+        }
       }
     }
     if (allTags.size === 0) {
-      new import_obsidian5.Notice("No tags found in linked Eagle items");
+      new import_obsidian6.Notice("No tags found in linked Eagle items");
       return;
     }
     await this.app.fileManager.processFrontMatter(activeFile, (frontmatter) => {
       const existingTags = frontmatter.tags || [];
       frontmatter.tags = [.../* @__PURE__ */ new Set([...existingTags, ...allTags])];
     });
-    new import_obsidian5.Notice(`Added ${allTags.size} tags from Eagle items`);
+    new import_obsidian6.Notice(`Added ${allTags.size} tags from Eagle items`);
   }
   async captureUrlToEagle(editor) {
     const clipboardText = await navigator.clipboard.readText();
     if (!clipboardText.startsWith("http://") && !clipboardText.startsWith("https://")) {
-      new import_obsidian5.Notice("Clipboard does not contain a valid URL");
+      new import_obsidian6.Notice("Clipboard does not contain a valid URL");
       return;
     }
     const connected = await this.api.isConnected();
     if (!connected) {
-      new import_obsidian5.Notice("Eagle is not running");
+      new import_obsidian6.Notice("Eagle is not running");
       return;
     }
     const defaultName = `Captured from Obsidian - ${new Date().toISOString()}`;
@@ -4739,7 +5625,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       fileName: defaultName
     });
     if (folderResolution.cancelled) {
-      new import_obsidian5.Notice("Capture to Eagle cancelled");
+      new import_obsidian6.Notice("Capture to Eagle cancelled");
       return;
     }
     const finalName = folderResolution.name || defaultName;
@@ -4755,10 +5641,10 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       annotation: finalAnnotation
     });
     if (success) {
-      new import_obsidian5.Notice("URL captured to Eagle");
+      new import_obsidian6.Notice("URL captured to Eagle");
       editor.replaceSelection(`[Captured: ${clipboardText}]`);
     } else {
-      new import_obsidian5.Notice("Failed to capture URL to Eagle");
+      new import_obsidian6.Notice("Failed to capture URL to Eagle");
     }
   }
   async openEagleItemUnderCursor(editor) {
@@ -4766,7 +5652,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     const line = editor.getLine(cursor.line);
     const match = line.match(/eagle:\/\/item\/([A-Za-z0-9]+)/i) || line.match(/https?:\/\/(?:localhost|127\.0\.0\.1):\d+\/item\?id=([A-Za-z0-9]+)/i);
     if (!match) {
-      new import_obsidian5.Notice("No Eagle link found on current line");
+      new import_obsidian6.Notice("No Eagle link found on current line");
       return;
     }
     const url = buildEagleItemUrl(match[1], this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
@@ -4794,39 +5680,39 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       }
     }
     if (!itemId && !directFilePath) {
-      new import_obsidian5.Notice("Clipboard does not contain a valid Eagle URL or file path.\nSupported: eagle://item/ID, localhost URL, or Eagle library path");
+      new import_obsidian6.Notice("Clipboard does not contain a valid Eagle URL or file path.\nSupported: eagle://item/ID, localhost URL, or Eagle library path");
       return;
     }
     const provider = this.getActiveCloudProvider();
     if (!provider) {
-      new import_obsidian5.Notice("No cloud provider configured. Check settings.");
+      new import_obsidian6.Notice("No cloud provider configured. Check settings.");
       return;
     }
     if (itemId) {
       const item = await this.api.getItemInfo(itemId);
       if (!item) {
-        new import_obsidian5.Notice("Could not fetch item info from Eagle");
+        new import_obsidian6.Notice("Could not fetch item info from Eagle");
         return;
       }
       if (hasR2Upload(item)) {
         const cloudUrl = this.api.getCloudUrl(item);
-        new import_obsidian5.Notice(`Already uploaded: ${cloudUrl}`);
+        new import_obsidian6.Notice(`Already uploaded: ${cloudUrl}`);
         if (cloudUrl) {
           await navigator.clipboard.writeText(cloudUrl);
         }
         return;
       }
-      new import_obsidian5.Notice(`Uploading ${item.name} to cloud...`);
+      new import_obsidian6.Notice(`Uploading ${item.name} to cloud...`);
       const filePath = await this.api.getOriginalFilePath(item);
       if (!filePath) {
-        new import_obsidian5.Notice("Could not get file path from Eagle");
+        new import_obsidian6.Notice("Could not get file path from Eagle");
         return;
       }
       const filename = `${item.name}.${item.ext}`;
       const mimeType = getMimeType2(item.ext);
       const result = await provider.upload(filePath, filename, mimeType);
       if (result.success && result.publicUrl) {
-        new import_obsidian5.Notice(`Uploaded! Cloud URL copied to clipboard`);
+        new import_obsidian6.Notice(`Uploaded! Cloud URL copied to clipboard`);
         await navigator.clipboard.writeText(result.publicUrl);
         const markdown = `![${filename}](${result.publicUrl})`;
         editor.replaceSelection(markdown);
@@ -4840,21 +5726,21 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
         }
         await this.api.updateItem(item.id, { tags: newTags });
       } else {
-        new import_obsidian5.Notice(`Upload failed: ${result.error}`);
+        new import_obsidian6.Notice(`Upload failed: ${result.error}`);
       }
     } else if (directFilePath) {
       const filename = directFilePath.split("/").pop() || "image";
       const ext = getExtFromFilename(filename);
       const mimeType = getMimeType2(ext);
-      new import_obsidian5.Notice(`Uploading ${filename} to cloud...`);
+      new import_obsidian6.Notice(`Uploading ${filename} to cloud...`);
       const result = await provider.upload(directFilePath, filename, mimeType);
       if (result.success && result.publicUrl) {
-        new import_obsidian5.Notice(`Uploaded! Cloud URL copied to clipboard`);
+        new import_obsidian6.Notice(`Uploaded! Cloud URL copied to clipboard`);
         await navigator.clipboard.writeText(result.publicUrl);
         const markdown = `![${filename}](${result.publicUrl})`;
         editor.replaceSelection(markdown);
       } else {
-        new import_obsidian5.Notice(`Upload failed: ${result.error}`);
+        new import_obsidian6.Notice(`Upload failed: ${result.error}`);
       }
     }
   }
@@ -4880,34 +5766,34 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       }
     }
     if (!itemId && !directFilePath) {
-      new import_obsidian5.Notice("Clipboard does not contain a valid Eagle URL or file path");
+      new import_obsidian6.Notice("Clipboard does not contain a valid Eagle URL or file path");
       return;
     }
     const provider = this.getActiveCloudProvider();
     if (!provider) {
-      new import_obsidian5.Notice("No cloud provider configured. Check settings.");
+      new import_obsidian6.Notice("No cloud provider configured. Check settings.");
       return;
     }
     const providerName = this.getActiveCloudProviderName();
     if (itemId) {
       const item = await this.api.getItemInfo(itemId);
       if (!item) {
-        new import_obsidian5.Notice("Could not fetch item info from Eagle");
+        new import_obsidian6.Notice("Could not fetch item info from Eagle");
         return;
       }
       const filePath = await this.api.getOriginalFilePath(item);
       if (!filePath) {
-        new import_obsidian5.Notice("Could not get file path from Eagle");
+        new import_obsidian6.Notice("Could not get file path from Eagle");
         return;
       }
-      new import_obsidian5.Notice(`Uploading ${item.name} to ${providerName}...`);
+      new import_obsidian6.Notice(`Uploading ${item.name} to ${providerName}...`);
       const filename = `${item.name}.${item.ext}`;
       const mimeType = getMimeType2(item.ext);
       const result = await provider.upload(filePath, filename, mimeType);
       if (result.success && result.publicUrl) {
         const markdown = `![${filename}](${result.publicUrl})`;
         editor.replaceSelection(markdown);
-        new import_obsidian5.Notice(`Embedded and uploaded to ${providerName}!`);
+        new import_obsidian6.Notice(`Embedded and uploaded to ${providerName}!`);
         if (result.key) {
           const cloudTag = `cloud:${result.key}`;
           const newTags = [...item.tags];
@@ -4920,20 +5806,20 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
           await this.api.updateItem(item.id, { tags: newTags });
         }
       } else {
-        new import_obsidian5.Notice(`Upload failed: ${result.error}`);
+        new import_obsidian6.Notice(`Upload failed: ${result.error}`);
       }
     } else if (directFilePath) {
       const filename = directFilePath.split("/").pop() || "image";
       const ext = getExtFromFilename(filename);
       const mimeType = getMimeType2(ext);
-      new import_obsidian5.Notice(`Uploading ${filename} to ${providerName}...`);
+      new import_obsidian6.Notice(`Uploading ${filename} to ${providerName}...`);
       const result = await provider.upload(directFilePath, filename, mimeType);
       if (result.success && result.publicUrl) {
         const markdown = `![${filename}](${result.publicUrl})`;
         editor.replaceSelection(markdown);
-        new import_obsidian5.Notice(`Embedded and uploaded to ${providerName}!`);
+        new import_obsidian6.Notice(`Embedded and uploaded to ${providerName}!`);
       } else {
-        new import_obsidian5.Notice(`Upload failed: ${result.error}`);
+        new import_obsidian6.Notice(`Upload failed: ${result.error}`);
       }
     }
   }
@@ -5072,15 +5958,9 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     }
     return decoded;
   }
+  // The Eagle tag as an Obsidian tag without its #, or '' if no valid tag can be made of it
   normalizeTag(tag) {
-    let normalized = tag.replace(/\s+/g, "-");
-    if (this.settings.tagNormalization === "lowercase") {
-      normalized = normalized.toLowerCase();
-    }
-    if (this.settings.tagPrefix) {
-      normalized = `${this.settings.tagPrefix}/${normalized}`;
-    }
-    return normalized;
+    return toObsidianTag(tag, this.settings.tagNormalization === "lowercase", this.settings.tagPrefix);
   }
   formatFileSize(bytes) {
     if (bytes < 1024)
@@ -5385,17 +6265,17 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
   async saveImageLocally(file, editor) {
     const activeFile = this.app.workspace.getActiveFile();
     if (!activeFile) {
-      new import_obsidian5.Notice("No active file");
+      new import_obsidian6.Notice("No active file");
       return;
     }
     try {
       const saved = await this.saveFileToVault(file, activeFile);
       const markdownImage = `![${file.name}](${encodeURI(saved.path)})`;
       editor.replaceSelection(markdownImage);
-      new import_obsidian5.Notice(`Saved locally: ${file.name}`);
+      new import_obsidian6.Notice(`Saved locally: ${file.name}`);
     } catch (error) {
       console.error("Failed to save image locally:", error);
-      new import_obsidian5.Notice(`Failed to save: ${file.name}`);
+      new import_obsidian6.Notice(`Failed to save: ${file.name}`);
     }
   }
   // Saves a pasted or dropped file as a vault attachment, following the vault's attachment
@@ -5446,24 +6326,24 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
         markdownImage += "\n\n" + this.buildMetadataCard(item, sources, cloudUrl);
       }
       this.replaceTextInDocument(editor, placeholderText, markdownImage);
-      new import_obsidian5.Notice(`Uploaded to Eagle: ${displayName}`);
+      new import_obsidian6.Notice(`Uploaded to Eagle: ${displayName}`);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
       if (errorMessage === "Upload cancelled") {
         this.replaceTextInDocument(editor, placeholderText, "");
-        new import_obsidian5.Notice("Upload cancelled");
+        new import_obsidian6.Notice("Upload cancelled");
         return;
       }
       const errorText = `<!-- Failed to upload ${file.name}: ${errorMessage} -->`;
       this.replaceTextInDocument(editor, placeholderText, errorText);
       console.error("Failed to upload image:", error);
-      new import_obsidian5.Notice(`Failed to upload: ${file.name}`);
+      new import_obsidian6.Notice(`Failed to upload: ${file.name}`);
     }
   }
   async uploadToCloudWithProgress(file, editor, sourceInfo, localFilePath) {
     const provider = this.getActiveCloudProvider();
     if (!provider) {
-      new import_obsidian5.Notice("No cloud provider configured");
+      new import_obsidian6.Notice("No cloud provider configured");
       return;
     }
     const pasteId = this.generatePasteId();
@@ -5481,7 +6361,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
           markdownImage += "\n\n" + await this.buildCloudMetadataCard(file, result.publicUrl, sourceInfo, localFilePath);
         }
         this.replaceTextInDocument(editor, placeholderText, markdownImage);
-        new import_obsidian5.Notice(`Uploaded to ${providerName}: ${file.name}`);
+        new import_obsidian6.Notice(`Uploaded to ${providerName}: ${file.name}`);
       } else {
         throw new Error(result.error || "Upload failed");
       }
@@ -5490,7 +6370,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       const errorText = `<!-- Failed to upload ${file.name}: ${errorMessage} -->`;
       this.replaceTextInDocument(editor, placeholderText, errorText);
       console.error("Failed to upload to cloud:", error);
-      new import_obsidian5.Notice(`Failed to upload: ${file.name}`);
+      new import_obsidian6.Notice(`Failed to upload: ${file.name}`);
     }
   }
   getActiveCloudProvider() {
@@ -5527,7 +6407,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : errorMessage;
     }
-    new import_obsidian5.Notice(`Cloud copy failed: ${errorMessage}. Linking to the local file instead.`);
+    new import_obsidian6.Notice(`Cloud copy failed: ${errorMessage}. Linking to the local file instead.`);
     return null;
   }
   // When the pasted or dropped image was copied from the cloud provider itself, returns the
@@ -5625,7 +6505,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     const health = await this.api.checkExtraLinks(this.settings.extraLinksBaseUrl);
     if (!health.ok && !this.extraLinksWarningShown) {
       this.extraLinksWarningShown = true;
-      new import_obsidian5.Notice(`\u26A0 ${health.message}`, 1e4);
+      new import_obsidian6.Notice(`\u26A0 ${health.message}`, 1e4);
     }
   }
   // One-line descriptions for the paste/drop destination dialog.
@@ -5681,7 +6561,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       if (cursor.ch >= start && cursor.ch <= end) {
         const filename = match[1];
         const file = this.app.metadataCache.getFirstLinkpathDest(filename, "");
-        if (file instanceof import_obsidian5.TFile) {
+        if (file instanceof import_obsidian6.TFile) {
           return {
             file,
             startPos: { line: cursor.line, ch: start },
@@ -5699,7 +6579,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
         const filepath = match[2];
         if (!filepath.startsWith("http") && !filepath.startsWith("file://") && !filepath.startsWith("eagle://")) {
           const file = this.app.metadataCache.getFirstLinkpathDest(filepath, "");
-          if (file instanceof import_obsidian5.TFile) {
+          if (file instanceof import_obsidian6.TFile) {
             return {
               file,
               startPos: { line: cursor.line, ch: start },
@@ -5732,7 +6612,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       });
       if (folderResolution.cancelled) {
         this.replaceTextInDocument(editor, placeholderText, originalText);
-        new import_obsidian5.Notice("Eagle import cancelled");
+        new import_obsidian6.Notice("Eagle import cancelled");
         return;
       }
       const finalName = folderResolution.name || filenameWithoutExt;
@@ -5780,12 +6660,12 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       }
       const markdownImage = `![${file.basename}](${imageUrl})`;
       this.replaceTextInDocument(editor, placeholderText, markdownImage);
-      new import_obsidian5.Notice(`Uploaded to Eagle: ${file.name}`);
+      new import_obsidian6.Notice(`Uploaded to Eagle: ${file.name}`);
       await this.offerToReplaceOtherReferences(file, imageUrl, { line: startPos.line, ch: startPos.ch });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
       this.replaceTextInDocument(editor, placeholderText, originalText);
-      new import_obsidian5.Notice(`Failed to upload: ${errorMessage}`);
+      new import_obsidian6.Notice(`Failed to upload: ${errorMessage}`);
     }
   }
   async offerToReplaceOtherReferences(originalFile, newUrl, excludePosition) {
@@ -5811,7 +6691,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     if (!shouldReplace)
       return;
     await this.replaceAllReferences(filteredRefs, originalFile, newUrl);
-    new import_obsidian5.Notice(`Replaced ${totalCount} references in ${fileCount} files`);
+    new import_obsidian6.Notice(`Replaced ${totalCount} references in ${fileCount} files`);
   }
   findAllReferencesToFile(targetFile) {
     const results = [];
@@ -5839,7 +6719,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
   }
   async confirmReplaceReferences(count, fileCount, filename) {
     return new Promise((resolve) => {
-      const notice = new import_obsidian5.Notice(
+      const notice = new import_obsidian6.Notice(
         `Found ${count} other references to "${filename}" in ${fileCount} files. Click to replace all with Eagle link.`,
         1e4
       );
@@ -5855,7 +6735,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
   async replaceAllReferences(references, originalFile, newUrl) {
     for (const ref of references) {
       const file = this.app.vault.getAbstractFileByPath(ref.notePath);
-      if (!(file instanceof import_obsidian5.TFile))
+      if (!(file instanceof import_obsidian6.TFile))
         continue;
       let content = await this.app.vault.read(file);
       const sortedPositions = [...ref.positions].sort((a, b) => {
@@ -5881,12 +6761,12 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
   async handleEagleLinkPaste(text, editor) {
     const itemId = extractEagleItemId(text);
     if (!itemId) {
-      new import_obsidian5.Notice("Invalid Eagle URL");
+      new import_obsidian6.Notice("Invalid Eagle URL");
       return;
     }
     const item = await this.api.getItemInfo(itemId);
     if (!item) {
-      new import_obsidian5.Notice("Could not fetch item info from Eagle");
+      new import_obsidian6.Notice("Could not fetch item info from Eagle");
       return;
     }
     await this.pasteEagleItem(item, editor);
@@ -5934,7 +6814,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
           markdown += "\n\n" + this.buildMetadataCard(item, sources, cloudUrl);
         }
         editor.replaceSelection(markdown);
-        new import_obsidian5.Notice(`Embedded: ${filename}`);
+        new import_obsidian6.Notice(`Embedded: ${filename}`);
         return;
       }
     }
@@ -5953,7 +6833,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
         markdown += "\n\n" + this.buildMetadataCard(item, sources);
       }
       editor.replaceSelection(markdown);
-      new import_obsidian5.Notice(`Embedded: ${filename}`);
+      new import_obsidian6.Notice(`Embedded: ${filename}`);
       return;
     }
     let filePath = null;
@@ -5970,9 +6850,9 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
         markdown += "\n\n" + this.buildMetadataCard(item, sources);
       }
       editor.replaceSelection(markdown);
-      new import_obsidian5.Notice(`Embedded: ${filename}`);
+      new import_obsidian6.Notice(`Embedded: ${filename}`);
     } else {
-      new import_obsidian5.Notice("Could not get file path from Eagle");
+      new import_obsidian6.Notice("Could not get file path from Eagle");
     }
   }
   insertEagleInlineLink(editor, item) {
@@ -5980,7 +6860,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     const filename = `${item.name}.${item.ext}`;
     const markdown = `[${filename}](${linkUrl})`;
     editor.replaceSelection(markdown);
-    new import_obsidian5.Notice(`Inserted link to: ${filename}`);
+    new import_obsidian6.Notice(`Inserted link to: ${filename}`);
   }
   isEagleLibraryPath(text) {
     if (text.startsWith("![") || text.startsWith("](")) {
@@ -6002,7 +6882,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     const fallbackPath = normalizedPath.replace(/_thumbnail(\.[A-Za-z0-9]+)$/, "$1");
     const filename = fallbackPath.split("/").pop() || "image";
     editor.replaceSelection(`![${filename}](${this.pathToFileUrl(fallbackPath)})`);
-    new import_obsidian5.Notice(`Embedded: ${filename}`);
+    new import_obsidian6.Notice(`Embedded: ${filename}`);
   }
   async getEagleItemFilePath(itemId, name, ext) {
     const thumbnailPath = await this.api.getThumbnailPath(itemId);
@@ -6094,20 +6974,20 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     void this.addToExcalidraw(view, content);
   }
   async addToExcalidraw(view, content) {
-    const progress = new import_obsidian5.Notice("Adding to Excalidraw\u2026", 0);
+    const progress = new import_obsidian6.Notice("Adding to Excalidraw\u2026", 0);
     try {
       const images = await this.resolveSurfaceContent(content, this.settings.excalidrawImportToEagle, false);
       for (const image of images) {
         if (image.kind === "url") {
           await view.addImageWithURL(image.url);
-          new import_obsidian5.Notice(`Added to drawing: ${image.name}`);
+          new import_obsidian6.Notice(`Added to drawing: ${image.name}`);
         } else {
-          new import_obsidian5.Notice(`Could not upload ${image.name}. It was saved to ${image.file.path} in your vault instead; drag it onto the drawing from there.`, 1e4);
+          new import_obsidian6.Notice(`Could not upload ${image.name}. It was saved to ${image.file.path} in your vault instead; drag it onto the drawing from there.`, 1e4);
         }
       }
     } catch (error) {
       console.error("[Eagle Bridge] Excalidraw embed failed:", error);
-      new import_obsidian5.Notice("Failed to add image to Excalidraw");
+      new import_obsidian6.Notice("Failed to add image to Excalidraw");
     } finally {
       progress.hide();
     }
@@ -6149,7 +7029,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     const nodeType = await this.chooseCanvasNodeType();
     if (!nodeType)
       return;
-    const progress = new import_obsidian5.Notice("Adding to canvas\u2026", 0);
+    const progress = new import_obsidian6.Notice("Adding to canvas\u2026", 0);
     try {
       const images = await this.resolveSurfaceContent(
         content,
@@ -6166,24 +7046,24 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
         if (image.kind === "vault") {
           if (typeof canvas.createFileNode === "function") {
             canvas.createFileNode({ pos: center, position: "center", size, file: image.file, focus: false });
-            new import_obsidian5.Notice(`Could not upload ${image.name}. It was added as a vault attachment instead.`, 1e4);
+            new import_obsidian6.Notice(`Could not upload ${image.name}. It was added as a vault attachment instead.`, 1e4);
           } else {
-            new import_obsidian5.Notice(`Could not upload ${image.name}. It was saved to ${image.file.path} in your vault instead.`, 1e4);
+            new import_obsidian6.Notice(`Could not upload ${image.name}. It was saved to ${image.file.path} in your vault instead.`, 1e4);
           }
         } else if (nodeType === "link") {
           canvas.createLinkNode({ pos: center, position: "center", size, url: image.url, focus: false });
-          new import_obsidian5.Notice(`Added to canvas: ${image.name}`);
+          new import_obsidian6.Notice(`Added to canvas: ${image.name}`);
         } else {
           let text = `![${image.name}](${image.url.replace(/ /g, "%20")})`;
           if (image.card)
             text += "\n\n" + image.card;
           canvas.createTextNode({ pos: center, position: "center", size, text, focus: false });
-          new import_obsidian5.Notice(`Added to canvas: ${image.name}`);
+          new import_obsidian6.Notice(`Added to canvas: ${image.name}`);
         }
       }
     } catch (error) {
       console.error("[Eagle Bridge] Canvas embed failed:", error);
-      new import_obsidian5.Notice("Failed to add image to the canvas");
+      new import_obsidian6.Notice("Failed to add image to the canvas");
     } finally {
       progress.hide();
     }
@@ -6300,12 +7180,12 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
   async resolveEagleReferenceForSurface(ref, withCard) {
     const item = await this.resolveEagleItemFromReference(ref);
     if (!item) {
-      new import_obsidian5.Notice("Could not fetch item info from Eagle");
+      new import_obsidian6.Notice("Could not fetch item info from Eagle");
       return null;
     }
     const { url, cloudUrl } = await this.getPortableEagleUrl(item);
     if (!url) {
-      new import_obsidian5.Notice(`Could not get a shareable URL for ${item.name}`);
+      new import_obsidian6.Notice(`Could not get a shareable URL for ${item.name}`);
       return null;
     }
     let card = null;
@@ -6347,10 +7227,10 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
         if (message === PORTABLE_URL_FAILED) {
-          new import_obsidian5.Notice(`${file.name} was added to Eagle, but could not be uploaded.`);
+          new import_obsidian6.Notice(`${file.name} was added to Eagle, but could not be uploaded.`);
           tryCloudOnly = false;
         } else if (message !== "Upload cancelled") {
-          new import_obsidian5.Notice(`Could not add ${file.name} to Eagle (${message}). Uploading it without Eagle.`);
+          new import_obsidian6.Notice(`Could not add ${file.name} to Eagle (${message}). Uploading it without Eagle.`);
         }
       }
     }
@@ -6373,7 +7253,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       return { kind: "vault", file: saved, name: file.name };
     } catch (error) {
       console.error("[Eagle Bridge] Failed to save image to the vault:", error);
-      new import_obsidian5.Notice(`Failed to add ${file.name}`);
+      new import_obsidian6.Notice(`Failed to add ${file.name}`);
       return null;
     }
   }
@@ -6489,8 +7369,8 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
     return parsedTags.length > 0 ? parsedTags : void 0;
   }
   async resolveEagleFolderForUpload(contextOrFile) {
-    var _a, _b;
-    const context = contextOrFile instanceof import_obsidian5.TFile ? { activeFile: contextOrFile } : contextOrFile || {};
+    var _a, _b, _c;
+    const context = contextOrFile instanceof import_obsidian6.TFile ? { activeFile: contextOrFile } : contextOrFile || {};
     const mode = this.settings.addFolderMode || (this.settings.enableDefaultFolder ? "target" : "target");
     switch (mode) {
       case "ask": {
@@ -6502,7 +7382,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
             createdBlobUrl = true;
           } catch (e) {
           }
-        } else if (!previewUrl && context.file instanceof import_obsidian5.TFile) {
+        } else if (!previewUrl && context.file instanceof import_obsidian6.TFile) {
           previewUrl = this.app.vault.getResourcePath(context.file);
         }
         const fileName = context.fileName || resolveImageFileName(context.file, context.sourceInfo);
@@ -6525,7 +7405,9 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
             mirrorRootFolderName,
             onMirror: async () => {
               return await this.resolveMirroredEagleFolder(activeFile);
-            }
+            },
+            sourcePageUrl: (_c = context.sourceInfo) == null ? void 0 : _c.pageUrl,
+            ai: new AiAssistant(() => this.settings, () => this.api.listTags())
           }
         );
         if (createdBlobUrl && previewUrl) {
@@ -6544,13 +7426,13 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
       }
       case "mirror": {
         const folderId = await this.resolveMirroredEagleFolder(
-          context.activeFile || (context.file instanceof import_obsidian5.TFile ? context.file : void 0)
+          context.activeFile || (context.file instanceof import_obsidian6.TFile ? context.file : void 0)
         );
         return { folderId, cancelled: false };
       }
       case "map": {
         const folderId = this.resolveMappedEagleFolder(
-          context.activeFile || (context.file instanceof import_obsidian5.TFile ? context.file : void 0)
+          context.activeFile || (context.file instanceof import_obsidian6.TFile ? context.file : void 0)
         );
         return { folderId, cancelled: false };
       }
@@ -6596,7 +7478,7 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |
         const rootFolderNode = this.findFolderInTree(eagleFolders, rootFolderId);
         if (!rootFolderNode) {
           console.warn(`[Eagle Bridge] Configured mirror root folder ID '${rootFolderId}' not found in Eagle. Falling back to library root.`);
-          new import_obsidian5.Notice("Configured Eagle mirror root folder was not found. Using Library Root.");
+          new import_obsidian6.Notice("Configured Eagle mirror root folder was not found. Using Library Root.");
           currentParentId = void 0;
           currentLevelFolders = eagleFolders;
         } else {
@@ -6962,12 +7844,12 @@ ${updates.annotation}`;
   }
   async convertCrossPlatformPaths() {
     if (!this.settings.enableCrossPlatform) {
-      new import_obsidian5.Notice("Cross-platform sync is disabled in settings");
+      new import_obsidian6.Notice("Cross-platform sync is disabled in settings");
       return;
     }
     const activeFile = this.app.workspace.getActiveFile();
     if (!activeFile) {
-      new import_obsidian5.Notice("No active file");
+      new import_obsidian6.Notice("No active file");
       return;
     }
     const content = await this.app.vault.read(activeFile);
@@ -6990,9 +7872,9 @@ ${updates.annotation}`;
     }
     if (convertedCount > 0) {
       await this.app.vault.modify(activeFile, newContent);
-      new import_obsidian5.Notice(`Converted ${convertedCount} cross-platform image paths`);
+      new import_obsidian6.Notice(`Converted ${convertedCount} cross-platform image paths`);
     } else {
-      new import_obsidian5.Notice("No cross-platform paths found to convert");
+      new import_obsidian6.Notice("No cross-platform paths found to convert");
     }
   }
   async autoConvertOnFileOpen(file) {
@@ -7016,17 +7898,17 @@ ${updates.annotation}`;
     }
     if (convertedCount > 0) {
       await this.app.vault.modify(file, newContent);
-      new import_obsidian5.Notice(`Auto-converted ${convertedCount} cross-platform paths`);
+      new import_obsidian6.Notice(`Auto-converted ${convertedCount} cross-platform paths`);
     }
   }
   async convertCrossPlatformRenderOnly() {
     if (!this.settings.enableCrossPlatform) {
-      new import_obsidian5.Notice("Cross-platform sync is disabled in settings");
+      new import_obsidian6.Notice("Cross-platform sync is disabled in settings");
       return;
     }
-    const view = this.app.workspace.getActiveViewOfType(import_obsidian5.MarkdownView);
+    const view = this.app.workspace.getActiveViewOfType(import_obsidian6.MarkdownView);
     if (!view) {
-      new import_obsidian5.Notice("No active markdown view");
+      new import_obsidian6.Notice("No active markdown view");
       return;
     }
     const allContainers = [
@@ -7085,13 +7967,13 @@ ${updates.annotation}`;
       });
     }
     if (convertedCount > 0) {
-      new import_obsidian5.Notice(`Render-only: converted ${convertedCount} image paths (source unchanged)`);
+      new import_obsidian6.Notice(`Render-only: converted ${convertedCount} image paths (source unchanged)`);
     } else {
-      new import_obsidian5.Notice("No cross-platform paths found to convert");
+      new import_obsidian6.Notice("No cross-platform paths found to convert");
     }
   }
   async autoConvertRenderOnlyOnFileOpen() {
-    const view = this.app.workspace.getActiveViewOfType(import_obsidian5.MarkdownView);
+    const view = this.app.workspace.getActiveViewOfType(import_obsidian6.MarkdownView);
     if (!view)
       return;
     const contentEl = view.contentEl;
@@ -7135,12 +8017,12 @@ ${updates.annotation}`;
   async uploadAllImagesToCloud() {
     const provider = this.getActiveCloudProvider();
     if (!provider) {
-      new import_obsidian5.Notice("No cloud provider configured. Check settings.");
+      new import_obsidian6.Notice("No cloud provider configured. Check settings.");
       return;
     }
     const activeFile = this.app.workspace.getActiveFile();
     if (!activeFile) {
-      new import_obsidian5.Notice("No active file");
+      new import_obsidian6.Notice("No active file");
       return;
     }
     const content = await this.app.vault.read(activeFile);
@@ -7186,10 +8068,10 @@ ${updates.annotation}`;
       });
     }
     if (imageMatches.length === 0) {
-      new import_obsidian5.Notice("No local images found in current note");
+      new import_obsidian6.Notice("No local images found in current note");
       return;
     }
-    new import_obsidian5.Notice(`Found ${imageMatches.length} images. Uploading to ${providerName}...`);
+    new import_obsidian6.Notice(`Found ${imageMatches.length} images. Uploading to ${providerName}...`);
     let uploaded = 0;
     let newContent = content;
     for (const img of imageMatches) {
@@ -7215,6 +8097,6 @@ ${updates.annotation}`;
     if (newContent !== content) {
       await this.app.vault.modify(activeFile, newContent);
     }
-    new import_obsidian5.Notice(`Uploaded ${uploaded}/${imageMatches.length} images to ${providerName}`);
+    new import_obsidian6.Notice(`Uploaded ${uploaded}/${imageMatches.length} images to ${providerName}`);
   }
 };

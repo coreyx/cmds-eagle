@@ -591,6 +591,33 @@ export class EagleApiService {
 // Title prefix of the Extra Link that records an item's cloud copy.
 export const CLOUD_COPY_LINK_TITLE = 'Cloud Copy';
 
+/**
+ * Writes an Eagle tag as a valid Obsidian tag, without the leading #. An Obsidian tag may
+ * only contain letters, numbers, underscores, hyphens and, between nesting levels, forward
+ * slashes; anything else ends the tag early. So:
+ * - a colon or slash separates nesting levels ("Topic: AI" becomes topic/ai)
+ * - apostrophes and quotation marks are dropped ("Don't" becomes dont)
+ * - spaces and all other punctuation become single hyphens ("R&D Notes" becomes r-d-notes)
+ * Returns '' when nothing usable is left.
+ */
+export function toObsidianTag(tag: string, lowercase: boolean, prefix = ''): string {
+	const levels = tag
+		.split(/[:/]/)
+		.map(level => level
+			.replace(/['’‘"“”`]/g, '')
+			.replace(/[^\p{L}\p{N}\p{M}\p{Extended_Pictographic}‍️_-]+/gu, '-')
+			.replace(/-{2,}/g, '-')
+			.replace(/^-+|-+$/g, ''))
+		.filter(level => level.length > 0);
+	if (levels.length === 0) return '';
+
+	let normalized = levels.join('/');
+	if (lowercase) {
+		normalized = normalized.toLowerCase();
+	}
+	return prefix ? `${prefix}/${normalized}` : normalized;
+}
+
 export function buildEagleItemUrl(
 	itemId: string,
 	format: EagleItemLinkFormat = 'http',

@@ -9,6 +9,7 @@ import {
 	Modal,
 	Setting,
 	TFolder,
+	setIcon,
 } from 'obsidian';
 import { 
 	EagleItem,
@@ -18,6 +19,7 @@ import {
 	EagleTag,
 	EagleFolderPickerResult,
 	EagleFolderPickerContext,
+	EagleAiAssistant,
 	CMDSPACEEagleSettings,
 	SearchScope,
 	SUPPORTED_IMAGE_EXTENSIONS,
@@ -26,7 +28,7 @@ import {
 	ComputerProfile,
 	PlatformType,
 } from './types';
-import { EagleApiService, buildEagleItemUrl, buildEagleCustomEmbedUrl } from './api';
+import { EagleApiService, buildEagleItemUrl, buildEagleCustomEmbedUrl, toObsidianTag } from './api';
 
 type FileTypeCategory = 'images' | 'videos' | 'documents' | 'all';
 
@@ -444,16 +446,24 @@ export class EagleSearchModal extends FuzzySuggestModal<EagleItem> {
 		const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
 		const tags = item.tags
 			.filter(t => !t.startsWith('r2:') && t !== 'r2-cloud' && t !== 'cloud-upload')
-			.map(t => `#${this.normalizeTag(t)}`)
+			.map(t => this.normalizeTag(t))
+			.filter(t => t.length > 0)
+			.map(t => `#${t}`)
 			.join(' ');
 		const dimensions = item.width && item.height ? `${item.width}×${item.height}` : '';
 
-		return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)}${dimensions ? ` | ${dimensions}` : ''} | ${tags || 'No tags'} | [Eagle](${linkUrl})`;
+		const tagSection = this.settings.includeTagsInMetadataCard ? ` | ${tags || 'No tags'}` : '';
+
+		return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)}${dimensions ? ` | ${dimensions}` : ''}${tagSection} | [Eagle](${linkUrl})`;
 	}
 
 	private buildLinkCard(item: EagleItem): string {
 		const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
-		const tags = item.tags.map(t => `#${this.normalizeTag(t)}`).join(' ');
+		const tags = item.tags
+			.map(t => this.normalizeTag(t))
+			.filter(t => t.length > 0)
+			.map(t => `#${t}`)
+			.join(' ');
 		const dimensions = item.width && item.height ? `${item.width}×${item.height}` : 'N/A';
 		
 		return `> [!cmdspace-eagle] ${item.name}
@@ -463,22 +473,15 @@ export class EagleSearchModal extends FuzzySuggestModal<EagleItem> {
 > | **Type** | ${item.ext.toUpperCase()} |
 > | **Size** | ${this.formatFileSize(item.size)} |
 > | **Dimensions** | ${dimensions} |
-> | **Tags** | ${tags || 'None'} |
-> ${item.annotation ? `> **Annotation**: ${item.annotation}\n` : ''}
+${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\n` : ''}> ${item.annotation ? `> **Annotation**: ${item.annotation}\n` : ''}
 > [Open in Eagle](${linkUrl})
 
 `;
 	}
 
+	// The Eagle tag as an Obsidian tag without its #, or '' if no valid tag can be made of it
 	private normalizeTag(tag: string): string {
-		let normalized = tag.replace(/\s+/g, '-');
-		if (this.settings.tagNormalization === 'lowercase') {
-			normalized = normalized.toLowerCase();
-		}
-		if (this.settings.tagPrefix) {
-			normalized = `${this.settings.tagPrefix}/${normalized}`;
-		}
-		return normalized;
+		return toObsidianTag(tag, this.settings.tagNormalization === 'lowercase', this.settings.tagPrefix);
 	}
 
 	private formatFileSize(bytes: number): string {
@@ -721,6 +724,10 @@ export class EagleFolderPickerModal extends Modal {
 	private itemName: string;
 	private itemDescription: string;
 	private itemTags: string[];
+	// Tags suggested by the AI wand that do not exist in the Eagle library yet
+	private aiNewTags = new Set<string>();
+	// What the user typed in the Hints box, passed to the AI wands and not saved to Eagle
+	private aiUserHints = '';
 	private starRating = 0;
 
 	// Folder tree state
@@ -756,6 +763,53 @@ export class EagleFolderPickerModal extends Modal {
 		this.itemName = this.initialFileName;
 		this.itemDescription = context?.initialAltText || '';
 		this.itemTags = [...(context?.initialTags || [])];
+	}
+
+	/**
+	 * A field label with an AI wand button beside it. `run` asks the assistant and fills the
+	 * field. While it runs the wand is animated and ignores clicks; a failure is shown as a
+	 * notice, using the assistant's own message.
+	 */
+	private createFieldLabel(
+		groupEl: HTMLElement,
+		label: string,
+		tooltip: string,
+		run: (ai: EagleAiAssistant, imageUrl: string) => Promise<void>
+	): void {
+		const rowEl = groupEl.createDiv({ cls: 'cmdspace-eagle-field-label-row' });
+		rowEl.createEl('label', { text: label, cls: 'cmdspace-eagle-field-label' });
+
+		const ai = this.context?.ai;
+		if (!ai) return;
+
+		const wandBtn = rowEl.createEl('button', { cls: 'cmdspace-eagle-ai-wand clickable-icon', type: 'button' });
+		setIcon(wandBtn, 'wand-2');
+		if (wandBtn.childElementCount === 0) wandBtn.setText('🪄');
+		wandBtn.setAttr('aria-label', tooltip);
+
+		wandBtn.addEventListener('click', (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			if (wandBtn.hasClass('is-loading')) return;
+
+			const imageUrl = this.previewUrl;
+			if (!imageUrl) {
+				new Notice('There is no image here to send to the AI provider.');
+				return;
+			}
+
+			wandBtn.addClass('is-loading');
+			void (async () => {
+				try {
+					await run(ai, imageUrl);
+				} catch (error) {
+					console.error('[Eagle Bridge] AI suggestion failed:', error);
+					new Notice(error instanceof Error && error.message ? error.message : 'The AI request failed.', 8000);
+				} finally {
+					wandBtn.removeClass('is-loading');
+				}
+			})();
+		});
 	}
 
 	onOpen(): void {
@@ -828,8 +882,20 @@ export class EagleFolderPickerModal extends Modal {
 		starContainer.addEventListener('mouseleave', () => updateStars(this.starRating));
 
 		// 3. Name Field
+		// Read at click time, so the wands see whatever is in the Hints box at that moment
+		const aiHints = () => ({
+			fileName: this.initialFileName,
+			altText: this.context?.initialAltText,
+			sourcePageUrl: this.context?.sourcePageUrl,
+			userHints: this.aiUserHints.trim() || undefined,
+		});
+
 		const nameGroup = leftPane.createDiv({ cls: 'cmdspace-eagle-field-group' });
-		nameGroup.createEl('label', { text: 'Name', cls: 'cmdspace-eagle-field-label' });
+		this.createFieldLabel(nameGroup, 'Name', 'Suggest a name with AI', async (ai, imageUrl) => {
+			const name = await ai.suggestName(imageUrl, aiHints());
+			nameInput.value = name;
+			this.itemName = name;
+		});
 		const nameInput = nameGroup.createEl('input', {
 			type: 'text',
 			cls: 'cmdspace-eagle-input',
@@ -850,7 +916,11 @@ export class EagleFolderPickerModal extends Modal {
 
 		// 4. Description Field
 		const descGroup = leftPane.createDiv({ cls: 'cmdspace-eagle-field-group' });
-		descGroup.createEl('label', { text: 'Description', cls: 'cmdspace-eagle-field-label' });
+		this.createFieldLabel(descGroup, 'Description', 'Suggest a description with AI', async (ai, imageUrl) => {
+			const description = await ai.suggestDescription(imageUrl, aiHints());
+			descTextarea.value = description;
+			this.itemDescription = description;
+		});
 		const descTextarea = descGroup.createEl('textarea', {
 			cls: 'cmdspace-eagle-textarea',
 			placeholder: 'Add Description',
@@ -871,18 +941,38 @@ export class EagleFolderPickerModal extends Modal {
 
 		// 5. Tags Section with Pills & "+ Add Tag" / "+" Button
 		const tagsGroup = leftPane.createDiv({ cls: 'cmdspace-eagle-field-group' });
-		tagsGroup.createEl('label', { text: 'Tags', cls: 'cmdspace-eagle-field-label' });
+		this.createFieldLabel(tagsGroup, 'Tags', 'Suggest tags with AI', async (ai, imageUrl) => {
+			const suggestions = await ai.suggestTags(imageUrl, aiHints(), this.itemTags);
+			for (const tag of suggestions.tags) {
+				if (this.itemTags.includes(tag.name)) continue;
+				this.itemTags.push(tag.name);
+				if (tag.isNew) this.aiNewTags.add(tag.name);
+			}
+			renderTags();
+
+			if (suggestions.tags.length === 0) {
+				new Notice('No further tags were suggested.');
+			}
+			if (suggestions.truncatedTo) {
+				new Notice(`Your library has ${suggestions.truncatedTo.total} tags; the ${suggestions.truncatedTo.sent} most used were sent to the AI provider.`, 8000);
+			}
+		});
 		const tagsWrapper = tagsGroup.createDiv({ cls: 'cmdspace-eagle-tags-wrapper' });
 
 		const renderTags = () => {
 			tagsWrapper.empty();
 			for (const tag of this.itemTags) {
-				const pill = tagsWrapper.createDiv({ cls: 'cmdspace-eagle-tag-pill' });
+				const isNewTag = this.aiNewTags.has(tag);
+				const pill = tagsWrapper.createDiv({
+					cls: isNewTag ? 'cmdspace-eagle-tag-pill is-new' : 'cmdspace-eagle-tag-pill',
+				});
+				if (isNewTag) pill.title = 'New tag: not in your Eagle library yet';
 				pill.createSpan({ cls: 'cmdspace-eagle-tag-pill-text', text: tag });
 				const removeBtn = pill.createSpan({ cls: 'cmdspace-eagle-tag-pill-remove', text: '✕' });
 				removeBtn.addEventListener('click', (e) => {
 					e.stopPropagation();
 					this.itemTags = this.itemTags.filter((t) => t !== tag);
+					this.aiNewTags.delete(tag);
 					renderTags();
 				});
 			}
@@ -906,6 +996,29 @@ export class EagleFolderPickerModal extends Modal {
 		};
 
 		renderTags();
+
+		// 6. Hints for the AI wands (only shown with them, and not saved to Eagle)
+		if (this.context?.ai) {
+			const hintsTooltip = 'Optional. Tell the AI what this image is, as briefly as you like, for example "WoW Dalaran fan art". The wand buttons use it to write a better name, description and tags. Hints are not saved to Eagle.';
+
+			const hintsGroup = leftPane.createDiv({ cls: 'cmdspace-eagle-field-group' });
+			const hintsLabelRow = hintsGroup.createDiv({ cls: 'cmdspace-eagle-field-label-row' });
+			hintsLabelRow.createEl('label', { text: 'AI hints', cls: 'cmdspace-eagle-field-label' });
+			const hintsHelp = hintsLabelRow.createSpan({ cls: 'cmdspace-eagle-field-help' });
+			setIcon(hintsHelp, 'help-circle');
+			if (hintsHelp.childElementCount === 0) hintsHelp.setText('?');
+			hintsHelp.setAttr('aria-label', hintsTooltip);
+
+			const hintsTextarea = hintsGroup.createEl('textarea', {
+				cls: 'cmdspace-eagle-textarea',
+				placeholder: 'Optional: what is this?',
+			});
+			hintsTextarea.rows = 2;
+			hintsTextarea.setAttr('aria-label', hintsTooltip);
+			hintsTextarea.addEventListener('input', () => {
+				this.aiUserHints = hintsTextarea.value;
+			});
+		}
 
 		// --- RIGHT PANE: Folder Tree, Search, Recents ---
 		const rightPane = splitContainer.createDiv({ cls: 'cmdspace-eagle-picker-right-pane' });

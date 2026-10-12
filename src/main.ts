@@ -29,6 +29,7 @@ import {
 	isEagleLocalhostUrl,
 	extractEagleItemId,
 	buildEagleCustomEmbedUrl,
+	toObsidianTag,
 	CLOUD_COPY_LINK_TITLE,
 	resolveImageFileName,
 } from './api';
@@ -36,6 +37,7 @@ import { EagleSearchModal, ImagePasteChoiceModal, EagleLinkChoiceModal, EagleFol
 import { CMDSPACEEagleSettingTab } from './settings';
 import { createCloudProvider, isCloudProviderConfigured, isPublicUrlGone, getMimeType, getExtFromFilename, CloudProvider } from './cloud-providers';
 import { ClipboardSourceService, extractDomain, cleanUrl, isValidHttpUrl, isDirectImageUrl } from './clipboard-source';
+import { AiAssistant } from './ai-providers';
 
 // Minimal shape of the Excalidraw plugin's view that we drive.
 // (The Excalidraw plugin is an optional peer, so we don't import its types.)
@@ -231,6 +233,16 @@ export default class CMDSPACELinkEagle extends Plugin {
 	async loadSettings(): Promise<void> {
 		const saved = (await this.loadData()) as Partial<CMDSPACEEagleSettings> | null;
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
+		// Each AI provider keeps its own entry; fill in any that the saved settings predate,
+		// on copies so the defaults themselves are never edited
+		const savedAi = saved?.aiProviders;
+		this.settings.aiProviders = {
+			anthropic: { ...DEFAULT_SETTINGS.aiProviders.anthropic, ...savedAi?.anthropic },
+			openai: { ...DEFAULT_SETTINGS.aiProviders.openai, ...savedAi?.openai },
+			gemini: { ...DEFAULT_SETTINGS.aiProviders.gemini, ...savedAi?.gemini },
+			'openai-compatible': { ...DEFAULT_SETTINGS.aiProviders['openai-compatible'], ...savedAi?.['openai-compatible'] },
+			lmstudio: { ...DEFAULT_SETTINGS.aiProviders.lmstudio, ...savedAi?.lmstudio },
+		};
 		// Auto-migrate from deprecated port 41596 (conflicted with Eagle MCP server) to 41598
 		if (
 			this.settings.extraLinksBaseUrl === 'http://127.0.0.1:41596' ||
@@ -444,7 +456,9 @@ export default class CMDSPACELinkEagle extends Plugin {
 		const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
 		const tags = item.tags
 			.filter(t => !t.startsWith('r2:') && t !== 'r2-cloud' && t !== 'cloud-upload')
-			.map(t => `#${this.normalizeTag(t)}`)
+			.map(t => this.normalizeTag(t))
+			.filter(t => t.length > 0)
+			.map(t => `#${t}`)
 			.join(' ');
 		const dimensions = item.width && item.height ? `${item.width}×${item.height}` : 'N/A';
 		const cloudUrl = cloudCopyUrl || this.api.getCloudUrl(item);
@@ -456,7 +470,9 @@ export default class CMDSPACELinkEagle extends Plugin {
 		}
 		linkSection += this.buildSourceLinks(resolvedSources, item.url);
 
-		return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)} | ${dimensions} | ${isUploaded ? '☁️' : '📁'} | ${tags || 'No tags'}
+		const tagSection = this.settings.includeTagsInMetadataCard ? ` | ${tags || 'No tags'}` : '';
+
+		return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)} | ${dimensions} | ${isUploaded ? '☁️' : '📁'}${tagSection}
 > ${linkSection}`;
 	}
 
@@ -545,7 +561,9 @@ export default class CMDSPACELinkEagle extends Plugin {
 		const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
 		const tags = item.tags
 			.filter(t => !t.startsWith('r2:') && t !== 'r2-cloud')
-			.map(t => `#${this.normalizeTag(t)}`)
+			.map(t => this.normalizeTag(t))
+			.filter(t => t.length > 0)
+			.map(t => `#${t}`)
 			.join(' ');
 		const dimensions = item.width && item.height ? `${item.width}×${item.height}` : 'N/A';
 		
@@ -572,8 +590,7 @@ ${imageSection}> | Property | Value |
 > | **Size** | ${this.formatFileSize(item.size)} |
 > | **Dimensions** | ${dimensions} |
 > | **R2 Status** | ${isUploaded ? '☁️ Uploaded' : '📁 Local only'} |
-> | **Tags** | ${tags || 'None'} |
-${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSection}
+${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\n` : ''}${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSection}
 
 `;
 	}
@@ -677,7 +694,10 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		for (const id of eagleLinks) {
 			const item = await this.api.getItemInfo(id);
 			if (item) {
-				item.tags.forEach(t => allTags.add(this.normalizeTag(t)));
+				for (const t of item.tags) {
+					const tag = this.normalizeTag(t);
+					if (tag) allTags.add(tag);
+				}
 			}
 		}
 
@@ -1111,15 +1131,9 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 		return decoded;
 	}
 
+	// The Eagle tag as an Obsidian tag without its #, or '' if no valid tag can be made of it
 	private normalizeTag(tag: string): string {
-		let normalized = tag.replace(/\s+/g, '-');
-		if (this.settings.tagNormalization === 'lowercase') {
-			normalized = normalized.toLowerCase();
-		}
-		if (this.settings.tagPrefix) {
-			normalized = `${this.settings.tagPrefix}/${normalized}`;
-		}
-		return normalized;
+		return toObsidianTag(tag, this.settings.tagNormalization === 'lowercase', this.settings.tagPrefix);
 	}
 
 	private formatFileSize(bytes: number): string {
@@ -2847,6 +2861,8 @@ ${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSec
 						onMirror: async () => {
 							return await this.resolveMirroredEagleFolder(activeFile);
 						},
+						sourcePageUrl: context.sourceInfo?.pageUrl,
+						ai: new AiAssistant(() => this.settings, () => this.api.listTags()),
 					}
 				);
 

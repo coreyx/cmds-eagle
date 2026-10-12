@@ -18,6 +18,7 @@ Eagle Bridge started as a fork of [CMDS Eagle](https://github.com/johnfkoo951/cm
 - **Cross-Platform Sync**: Automatically convert image paths between Mac and Windows
 - **Excalidraw Integration**: Paste or drop images onto an Excalidraw canvas — Eagle assets embed the original, and clipboard screenshots are uploaded to your cloud provider (and optionally added to your Eagle library) instead of bloating the vault with attachments
 - **Canvas Integration**: Paste or drop images and Eagle items onto an Obsidian Canvas as text or link cards that load the image by URL
+- **AI Suggestions**: Let an AI model look at the image and suggest its name, description and tags as you add it to Eagle, using Anthropic, OpenAI, Gemini, any OpenAI-compatible server, or LM Studio on your own computer
 
 ## Installation
 
@@ -85,6 +86,38 @@ Control where newly added images are stored in your Eagle library with 4 workflo
 - **Mirror Obsidian Folder Hierarchy**: Automatically creates and mirrors your active note's relative vault path in Eagle, creating intermediate folders as needed.
 - **Use Folder Map**: Map specific Obsidian vault directories to specific Eagle folders with automatic longest-prefix matching for subdirectories.
 
+### AI Suggestions
+
+When the Eagle folder setting is **Ask**, the dialog shown as you add an image has a wand button next to **Name**, **Description** and **Tags**. Click one and an AI model looks at the image and fills that field in:
+
+- **Name**: a short title for the image.
+- **Description**: one or two sentences describing it.
+- **Tags**: up to six tags. Tags already in your Eagle library are preferred; at most two new ones are proposed, written the way your library writes its tags (for example a `Topic: …` prefix if you use one). New tags are shown with a dashed outline so you can see what would be created, and every suggestion can be removed before you save. Both limits can be changed under **Settings → AI → Tag suggestions**; setting new tags to 0 restricts suggestions to tags you already have.
+
+Below the tags is an optional **AI hints** box. Type what the image is, as briefly as you like (for example `WoW Dalaran fan art`), and the wands treat it as true and build on it with what the model knows: proper names, the series it belongs to, the right terms. Hints are only sent to the model; they are not saved to Eagle.
+
+Choose the model under **Settings → AI**. Nothing is selected by default.
+
+| Provider | What you enter |
+|----------|----------------|
+| **Anthropic** | API key. The model defaults to Claude Haiku 5.5. |
+| **OpenAI** | API key and a model that accepts images. |
+| **Gemini** | API key and a model that accepts images. |
+| **OpenAI-compatible** | The server's address (for example `https://example.com/v1`), an optional API key, and a model. |
+| **LM Studio** | Nothing, if its local server is running without a key. It is detected automatically, and a loaded vision model is chosen if you leave the model empty. Add an API key if your LM Studio requires one. |
+
+**Browse** next to the model field lists the models the provider offers, and **Test connection** checks your settings without sending an image.
+
+**Effort** (per provider, under **Settings → AI**) sets how much the model thinks before answering. **Provider default** sends no setting and leaves it to the model. **Low**, **Medium** and **High** ask for less or more; for Claude, effort also covers how thorough the answer is, not only the thinking. A level the model does not accept is left out automatically.
+
+**Local models (LM Studio and OpenAI-compatible servers):**
+
+- With **Provider default**, a reasoning model thinks at length before answering: its best results, but a short title can take 20 seconds or more. Effort also offers **None**, which skips the thinking and answers in about a second.
+- Requests run one at a time, so clicking several wands at once is fine.
+- An image takes roughly 1,500 tokens of the model's context, and thinking uses the same context. Load a reasoning model with a context length of 16,000 tokens or more; 8,000 is enough with effort set to None.
+
+Each click sends the image, scaled down to at most 1568 pixels on its long side, to the selected provider; a tag request also sends your Eagle tag names and how often each is used. With LM Studio, nothing leaves your computer. API keys are stored in the vault's plugin settings file.
+
 ### Cloud Upload
 
 Upload images to cloud storage for sharing and portability.
@@ -139,7 +172,7 @@ Canvas support relies on Canvas functions that are not part of Obsidian's public
 
 ## Settings
 
-The settings are organized into five tabs:
+The settings are organized into six tabs:
 
 | Tab | What it covers |
 |-----|----------------|
@@ -147,6 +180,7 @@ The settings are organized into five tabs:
 | **Cloud storage** | Which cloud provider to use and its credentials |
 | **Adding images** | Where pasted or dropped images go, the Eagle folder and tags they get, source capture, and backlinks to your notes |
 | **Embedding** | What embedded Eagle images link to, the metadata card, and search defaults |
+| **AI** | The AI provider and model behind the name, description and tag wands |
 | **Extras** | Excalidraw and Canvas support, and cross-platform path conversion |
 
 

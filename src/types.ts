@@ -94,6 +94,22 @@ export type EagleEmbedUrlMode = 'cloud' | 'custom-url' | 'file';
 
 export type CanvasNodeType = 'text' | 'link' | 'ask';
 
+export type AiProviderType = 'none' | 'anthropic' | 'openai' | 'gemini' | 'openai-compatible' | 'lmstudio';
+
+// How much a model should think before answering. 'default' sends no setting and leaves it
+// to the model; 'none' (offered for local servers) asks it not to think at all.
+export type AiEffort = 'default' | 'none' | 'low' | 'medium' | 'high';
+
+export interface AiProviderConfig {
+	apiKey: string;
+	model: string;
+	// Only for providers whose address the user sets (OpenAI-compatible, LM Studio)
+	baseUrl?: string;
+	effort?: AiEffort;
+}
+
+export type AiProviderConfigs = Record<Exclude<AiProviderType, 'none'>, AiProviderConfig>;
+
 export type EagleItemLinkFormat = 'http' | 'eagle';
 
 export type ImageSourceUrlPriority = 'page-first' | 'image-first' | 'page-only' | 'image-only';
@@ -156,6 +172,32 @@ export interface EagleFolderPickerContext {
 	activeFolderPath?: string;
 	mirrorRootFolderName?: string;
 	onMirror?: () => Promise<string | undefined>;
+	// Where the image came from, passed to the AI wands as a hint
+	sourcePageUrl?: string;
+	ai?: EagleAiAssistant;
+}
+
+// What the AI wands in the folder picker call. Implemented in ai-providers.ts; every
+// method rejects with an Error whose message can be shown to the user as is.
+export interface EagleAiAssistant {
+	suggestName(imageUrl: string, hints: AiImageHints): Promise<string>;
+	suggestDescription(imageUrl: string, hints: AiImageHints): Promise<string>;
+	suggestTags(imageUrl: string, hints: AiImageHints, appliedTags: string[]): Promise<AiTagSuggestions>;
+}
+
+export interface AiImageHints {
+	fileName?: string;
+	altText?: string;
+	sourcePageUrl?: string;
+	// What the user typed in the dialog's Hints box
+	userHints?: string;
+}
+
+export interface AiTagSuggestions {
+	// Tags to add, each flagged if it does not exist in the Eagle library yet
+	tags: Array<{ name: string; isNew: boolean }>;
+	// Set when the library has more tags than were sent to the model
+	truncatedTo?: { sent: number; total: number };
 }
 
 export interface EagleExtraLink {
@@ -284,6 +326,7 @@ export interface CMDSPACEEagleSettings {
 	enableImageSourceUrl: boolean;
 	imageSourceUrlPriority: ImageSourceUrlPriority;
 	extraLinksImageSource: ExtraLinksImageSource;
+	includeTagsInMetadataCard: boolean;
 	includeSourceInMetadataCard: MetadataCardImageSource;
 	includeLocalSourceInMetadataCard: boolean;
 	r2WorkerUrl: string;
@@ -298,6 +341,11 @@ export interface CMDSPACEEagleSettings {
 	canvasIntegration: boolean;
 	canvasImportToEagle: boolean;
 	canvasNodeType: CanvasNodeType;
+	aiProvider: AiProviderType;
+	aiProviders: AiProviderConfigs;
+	// Limits for the tag wand: tags added per click, and how many of those may be new
+	aiMaxTags: number;
+	aiMaxNewTags: number;
 	activeCloudProvider: CloudProviderType;
 	searchScope: SearchScope[];
 	searchFileTypes: string[];
@@ -348,6 +396,7 @@ export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
 	enableImageSourceUrl: true,
 	imageSourceUrlPriority: 'page-first',
 	extraLinksImageSource: 'none',
+	includeTagsInMetadataCard: true,
 	includeSourceInMetadataCard: 'page',
 	includeLocalSourceInMetadataCard: false,
 	r2WorkerUrl: '',
@@ -362,6 +411,16 @@ export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
 	canvasIntegration: true,
 	canvasImportToEagle: true,
 	canvasNodeType: 'text',
+	aiProvider: 'none',
+	aiProviders: {
+		anthropic: { apiKey: '', model: 'claude-haiku-5-5' },
+		openai: { apiKey: '', model: '' },
+		gemini: { apiKey: '', model: '' },
+		'openai-compatible': { apiKey: '', model: '', baseUrl: '' },
+		lmstudio: { apiKey: '', model: '', baseUrl: 'http://localhost:1234/v1' },
+	},
+	aiMaxTags: 6,
+	aiMaxNewTags: 2,
 	activeCloudProvider: 'imghippo',
 	searchScope: ['name', 'tags'],
 	searchFileTypes: [...SUPPORTED_IMAGE_EXTENSIONS],

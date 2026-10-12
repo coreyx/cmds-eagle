@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **AI Provider Settings**: Added an **AI** settings tab for choosing the model behind the new wand buttons: Anthropic, OpenAI or Gemini with an API key; any OpenAI-compatible server with a custom address and optional key; or LM Studio, which is detected automatically on this computer and takes an optional key. Each provider has a model field with a **Browse** list and a **Test connection** button. No provider is selected by default, and Anthropic defaults to Claude Haiku 5.5.
+- **AI Name and Description**: The Eagle folder dialog has a wand button next to **Name** and **Description** that sends the image to the selected provider and fills in a short title or a one-to-two sentence description. The file name, alt text and source page are passed along as hints.
+- **Tags in the Metadata Card Can Be Turned Off**: Added a "Tags in the card" setting under **Embedding → Metadata card**, on by default. Turn it off to leave Eagle tags out of metadata and link cards.
+- **AI Tags**: A wand button next to **Tags** suggests up to six tags. Tags already in the Eagle library are preferred and matched against the real tag list; at most two new tags are proposed, in the format the library already uses, and are marked with a dashed outline. Both limits are settings under **AI → Tag suggestions**: "Tags added per click" (1 to 20) and "New tags allowed" (0 or more; 0 restricts suggestions to existing tags).
+
+- **AI Hints**: The Eagle folder dialog has an optional **AI hints** box below the tags. Whatever is typed there, however brief, is passed to the model as something to trust and expand on when a wand is clicked. Hints are not saved to Eagle.
+- **Effort Setting**: Each AI provider has an **Effort** setting: Provider default (the default, which sends nothing and leaves it to the model), Low, Medium or High. LM Studio and OpenAI-compatible servers also offer **None**, which skips a reasoning model's thinking phase; on a local 27B reasoning model a title took about 21 seconds at the default, 9 at Low and under one at None. A level the model does not accept is left out automatically and not tried again.
+- **Local Requests Run One at a Time**: Clicking several wands at once no longer fails on LM Studio. Simultaneous image requests overflowed the loaded model's context ("failed to decode"); they are now queued. If a request does run out of context, the message says so and what to change.
+- **Tag Format With Prefixes**: When the Eagle library files tags under prefixes such as `Topic: …` and `Type: …`, the tag request names those prefixes and asks for every new tag in that form, and no longer pushes the model to use an existing tag that does not fit.
+
+### Fixed
+- **Eagle Tags Obsidian Could Not Read**: Eagle tags are now written into notes as valid Obsidian tags. Previously only spaces were replaced, so any other character an Obsidian tag cannot contain cut the tag short: `Source: Obsidian` was written as `#source:-obsidian`, of which Obsidian only recognizes `#source`. Now a colon or slash becomes a nested tag (`#source/obsidian`), apostrophes and quotation marks are dropped, and spaces and all other punctuation become single hyphens (`R&D Notes` is written `#r-d-notes`). A tag with nothing valid left in it is left out.
+
 ## [1.9.0] - 2026-10-11
 
 ### Added

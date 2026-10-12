@@ -1,7 +1,8 @@
-import { App, PluginSettingTab, Setting, Notice } from 'obsidian';
+import { App, FuzzySuggestModal, PluginSettingTab, Setting, Notice } from 'obsidian';
 import CMDSPACELinkEagle from './main';
 import { EagleApiService } from './api';
 import { WebDAVProvider, isCloudProviderConfigured } from './cloud-providers';
+import { AI_MAX_TAGS_LIMIT, AI_PROVIDER_LABELS, LM_STUDIO_DEFAULT_URL, detectLmStudio, listAiModels, resolveAiTagLimits } from './ai-providers';
 import { 
 	CloudProviderType, 
 	ImagePasteBehavior,
@@ -9,6 +10,8 @@ import {
 	EagleLinkPasteMode,
 	EagleEmbedUrlMode,
 	CanvasNodeType,
+	AiProviderType,
+	AiEffort,
 	EagleItemLinkFormat,
 	ImageSourceUrlPriority,
 	ExtraLinksImageSource,
@@ -23,13 +26,34 @@ import {
 	PlatformType,
 } from './types';
 
-type SettingsTabId = 'connections' | 'cloud' | 'adding' | 'embedding' | 'extras';
+type SettingsTabId = 'connections' | 'cloud' | 'adding' | 'embedding' | 'ai' | 'extras';
+
+// Lets the user pick a model from the list a provider returned
+class AiModelPickerModal extends FuzzySuggestModal<string> {
+	constructor(app: App, private models: string[], private onChoose: (model: string) => void) {
+		super(app);
+		this.setPlaceholder('Choose a model…');
+	}
+
+	getItems(): string[] {
+		return this.models;
+	}
+
+	getItemText(model: string): string {
+		return model;
+	}
+
+	onChooseItem(model: string): void {
+		this.onChoose(model);
+	}
+}
 
 const SETTINGS_TABS: Array<{ id: SettingsTabId; label: string; description: string }> = [
 	{ id: 'connections', label: 'Connections', description: 'How Eagle Bridge reaches Eagle and its Extra Links plugin.' },
 	{ id: 'cloud', label: 'Cloud storage', description: 'Where image copies are uploaded so they display on your other devices.' },
 	{ id: 'adding', label: 'Adding images', description: 'What happens when you paste or drop a new image into a note.' },
 	{ id: 'embedding', label: 'Embedding', description: 'How images that are in Eagle appear in your notes.' },
+	{ id: 'ai', label: 'AI', description: 'Optional AI help for naming, describing and tagging images as you add them to Eagle.' },
 	{ id: 'extras', label: 'Extras', description: 'Excalidraw and Canvas support, and using one vault on several computers.' },
 ];
 
@@ -69,6 +93,9 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 				this.renderImageLinksSection(containerEl);
 				this.renderMetadataCardSection(containerEl);
 				this.renderSearchSection(containerEl);
+				break;
+			case 'ai':
+				this.renderAiSection(containerEl);
 				break;
 			case 'extras':
 				this.renderExcalidrawSection(containerEl);
@@ -297,6 +324,16 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 				}));
 
 		if (!this.plugin.settings.insertThumbnail) return;
+
+		new Setting(containerEl)
+			.setName('Tags in the card')
+			.setDesc('List the item\'s Eagle tags in the card, written as valid Obsidian tags: a colon or slash becomes a nested tag ("Topic: AI" is written #topic/ai), and spaces and other punctuation become hyphens. Turn this off to keep Eagle tags out of your notes.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.includeTagsInMetadataCard)
+				.onChange(async (value) => {
+					this.plugin.settings.includeTagsInMetadataCard = value;
+					await this.plugin.saveSettings();
+				}));
 
 		new Setting(containerEl)
 			.setName('Source links in the card')
@@ -579,6 +616,259 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 					this.plugin.settings.excalidrawImportToEagle = value;
 					await this.plugin.saveSettings();
 				}));
+	}
+
+	private renderAiSection(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName('Provider').setHeading();
+
+		new Setting(containerEl)
+			.setName('AI provider')
+			.setDesc('Powers the wand buttons next to Name, Description and Tags in the dialog shown when you add an image to Eagle. With Anthropic, OpenAI or Gemini, each click sends that image, and for tags your tag list, to the provider. LM Studio runs on your own computer.')
+			.addDropdown(dropdown => dropdown
+				.addOption('none', AI_PROVIDER_LABELS.none)
+				.addOption('anthropic', AI_PROVIDER_LABELS.anthropic)
+				.addOption('openai', AI_PROVIDER_LABELS.openai)
+				.addOption('gemini', AI_PROVIDER_LABELS.gemini)
+				.addOption('openai-compatible', AI_PROVIDER_LABELS['openai-compatible'])
+				.addOption('lmstudio', AI_PROVIDER_LABELS.lmstudio)
+				.setValue(this.plugin.settings.aiProvider)
+				.onChange(async (value: AiProviderType) => {
+					this.plugin.settings.aiProvider = value;
+					await this.plugin.saveSettings();
+					this.display();
+				}));
+
+		const provider = this.plugin.settings.aiProvider;
+		if (provider === 'none') {
+			this.renderLmStudioOffer(containerEl);
+			return;
+		}
+
+		const config = this.plugin.settings.aiProviders[provider];
+		const label = AI_PROVIDER_LABELS[provider];
+		new Setting(containerEl).setName(label).setHeading();
+
+		if (provider === 'openai-compatible') {
+			new Setting(containerEl)
+				.setName('Server address')
+				.setDesc('Base address of the server\'s OpenAI-style API, including any version segment, for example https://example.com/v1. Requests are sent to /chat/completions under it.')
+				.addText(text => text
+					.setPlaceholder('https://example.com/v1')
+					.setValue(config.baseUrl || '')
+					.onChange(async (value) => {
+						config.baseUrl = value.trim();
+						await this.plugin.saveSettings();
+					}));
+		}
+
+		if (provider === 'lmstudio') {
+			new Setting(containerEl)
+				.setName('Server address')
+				.setDesc(`Where LM Studio's local server listens (default: ${LM_STUDIO_DEFAULT_URL})`)
+				.addText(text => text
+					.setPlaceholder(LM_STUDIO_DEFAULT_URL)
+					.setValue(config.baseUrl || '')
+					.onChange(async (value) => {
+						config.baseUrl = value.trim() || LM_STUDIO_DEFAULT_URL;
+						await this.plugin.saveSettings();
+					}));
+
+			// Checked every time the tab opens, so a stopped server is visible without a click
+			const statusSetting = new Setting(containerEl)
+				.setName('Detection')
+				.setDesc('Looking for LM Studio…');
+			void (async () => {
+				const status = await detectLmStudio(config.baseUrl || LM_STUDIO_DEFAULT_URL, config.apiKey);
+				let message: string;
+				if (status.state === 'ready') {
+					message = `✓ LM Studio detected with ${status.models.length} model${status.models.length === 1 ? '' : 's'} available.`;
+				} else if (status.state === 'needs-key') {
+					message = config.apiKey
+						? '⚠ LM Studio was detected, but it rejected the API key below.'
+						: '⚠ LM Studio was detected, but it requires an API key. Enter it below.';
+				} else {
+					message = `⚠ LM Studio was not found at ${config.baseUrl || LM_STUDIO_DEFAULT_URL}. Start its local server, or check the address.`;
+				}
+				statusSetting.setDesc(message);
+				statusSetting.descEl.toggleClass('cmdspace-eagle-setting-required', status.state !== 'ready');
+			})();
+		}
+
+		const keyOptional = provider === 'openai-compatible' || provider === 'lmstudio';
+		new Setting(containerEl)
+			.setName(keyOptional ? 'API key (optional)' : 'API key')
+			.setDesc(keyOptional
+				? 'Only needed if the server requires one.'
+				: `Your ${label} API key. It is stored in this vault's plugin settings.`)
+			.addText(text => {
+				text.inputEl.type = 'password';
+				text
+					.setValue(config.apiKey)
+					.onChange(async (value) => {
+						config.apiKey = value.trim();
+						await this.plugin.saveSettings();
+					});
+			});
+
+		let modelDesc = 'A model that accepts images. Type its name, or use Browse to pick from the provider\'s list.';
+		if (provider === 'anthropic') {
+			modelDesc = 'Defaults to Claude Haiku 5.5 (claude-haiku-5-5). Type another model name, or use Browse to pick from the models your key can use.';
+		} else if (provider === 'lmstudio') {
+			modelDesc = 'Leave empty to use a loaded vision model automatically, or use Browse to pick one.';
+		}
+
+		new Setting(containerEl)
+			.setName('Model')
+			.setDesc(modelDesc)
+			.addText(text => text
+				.setPlaceholder(provider === 'lmstudio' ? 'Automatic' : 'Model name')
+				.setValue(config.model)
+				.onChange(async (value) => {
+					config.model = value.trim();
+					await this.plugin.saveSettings();
+				}))
+			.addButton(button => button
+				.setButtonText('Browse')
+				.onClick(async () => {
+					button.setDisabled(true);
+					try {
+						const models = await listAiModels(provider, config);
+						if (models.length === 0) {
+							new Notice(`${label} did not list any models.`);
+							return;
+						}
+						new AiModelPickerModal(this.app, models, (model) => {
+							config.model = model;
+							void this.plugin.saveSettings().then(() => this.display());
+						}).open();
+					} catch (error) {
+						new Notice(`✗ ${error instanceof Error ? error.message : 'Could not load the model list.'}`, 8000);
+					} finally {
+						button.setDisabled(false);
+					}
+				}));
+
+		// "None" is only offered where it is known to work: it was tested against LM Studio,
+		// and the cloud providers do not all accept it
+		const isLocalServer = provider === 'lmstudio' || provider === 'openai-compatible';
+		let effortDesc = 'How much the model thinks before answering. Provider default leaves it to the model. Lower is faster and cheaper; higher may give better suggestions. A level the model rejects is left out automatically.';
+		if (isLocalServer) {
+			effortDesc = 'How much the model thinks before answering. Provider default leaves it to the model: a reasoning model then thinks at length, which can take 20 seconds or more for a short title. Low shortens the thinking, High lengthens it, and None skips it for an answer in about a second. Models that do not reason ignore this, and a level the model rejects is left out automatically.';
+		} else if (provider === 'anthropic') {
+			effortDesc = 'How much effort Claude puts into the answer: how deeply it thinks and how thorough it is. Provider default leaves it to the model. Lower is faster and cheaper; higher may give better suggestions. A level the model rejects is left out automatically.';
+		}
+		new Setting(containerEl)
+			.setName('Effort')
+			.setDesc(effortDesc)
+			.addDropdown(dropdown => {
+				dropdown.addOption('default', 'Provider default');
+				if (isLocalServer) dropdown.addOption('none', 'None (skip thinking)');
+				dropdown
+					.addOption('low', 'Low')
+					.addOption('medium', 'Medium')
+					.addOption('high', 'High')
+					.setValue(config.effort || 'default')
+					.onChange(async (value: AiEffort) => {
+						config.effort = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName('Test connection')
+			.setDesc('Check that the provider can be reached with these settings. No image is sent.')
+			.addButton(button => button
+				.setButtonText('Test')
+				.onClick(async () => {
+					button.setDisabled(true);
+					try {
+						const models = await listAiModels(provider, config);
+						let message = `✓ Connected to ${label}. ${models.length} model${models.length === 1 ? '' : 's'} available.`;
+						if (config.model && models.length > 0 && !models.includes(config.model)) {
+							message += ` The chosen model "${config.model}" is not in that list.`;
+						}
+						new Notice(message, 8000);
+					} catch (error) {
+						new Notice(`✗ ${error instanceof Error ? error.message : `Could not connect to ${label}.`}`, 8000);
+					} finally {
+						button.setDisabled(false);
+					}
+				}));
+
+		this.renderAiTagSettings(containerEl);
+	}
+
+	private renderAiTagSettings(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName('Tag suggestions').setHeading();
+
+		// A whole-number field that saves what is typed, and on leaving the field shows the
+		// value actually in effect (out-of-range entries are brought within bounds)
+		const addCountField = (
+			setting: Setting,
+			min: number,
+			read: () => number,
+			write: (value: number) => void
+		): void => {
+			setting.addText(text => {
+				text.inputEl.type = 'number';
+				text.inputEl.min = String(min);
+				text.inputEl.max = String(AI_MAX_TAGS_LIMIT);
+				text.inputEl.step = '1';
+				text.inputEl.addClass('cmdspace-eagle-count-input');
+				text
+					.setValue(String(read()))
+					.onChange(async (value) => {
+						const parsed = parseInt(value, 10);
+						if (isNaN(parsed)) return;
+						write(Math.min(AI_MAX_TAGS_LIMIT, Math.max(min, parsed)));
+						await this.plugin.saveSettings();
+					});
+				text.inputEl.addEventListener('blur', () => text.setValue(String(read())));
+			});
+		};
+
+		addCountField(
+			new Setting(containerEl)
+				.setName('Tags added per click')
+				.setDesc(`The most tags the tag wand adds each time you click it, from 1 to ${AI_MAX_TAGS_LIMIT}. Tags already on the image do not count.`),
+			1,
+			() => resolveAiTagLimits(this.plugin.settings).maxTags,
+			(value) => { this.plugin.settings.aiMaxTags = value; }
+		);
+
+		addCountField(
+			new Setting(containerEl)
+				.setName('New tags allowed')
+				.setDesc('How many of those may be tags that are not in your Eagle library yet. Set it to 0 to only ever use existing tags. It cannot exceed the number above.'),
+			0,
+			() => resolveAiTagLimits(this.plugin.settings).maxNewTags,
+			(value) => { this.plugin.settings.aiMaxNewTags = value; }
+		);
+	}
+
+	// With no provider chosen, offer LM Studio if one is running on this computer
+	private renderLmStudioOffer(containerEl: HTMLElement): void {
+		const offerEl = containerEl.createDiv();
+		const config = this.plugin.settings.aiProviders.lmstudio;
+
+		void (async () => {
+			const status = await detectLmStudio(config.baseUrl || LM_STUDIO_DEFAULT_URL, config.apiKey);
+			if (status.state === 'not-found') return;
+
+			new Setting(offerEl)
+				.setName('LM Studio detected')
+				.setDesc(status.state === 'ready'
+					? `LM Studio is running on this computer with ${status.models.length} model${status.models.length === 1 ? '' : 's'} available.`
+					: 'LM Studio is running on this computer. It requires an API key, which you can enter after selecting it.')
+				.addButton(button => button
+					.setButtonText('Use LM Studio')
+					.setCta()
+					.onClick(async () => {
+						this.plugin.settings.aiProvider = 'lmstudio';
+						await this.plugin.saveSettings();
+						this.display();
+					}));
+		})();
 	}
 
 	private renderCanvasSection(containerEl: HTMLElement): void {

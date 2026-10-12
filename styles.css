@@ -722,6 +722,63 @@
 	color: var(--text-muted);
 }
 
+.cmdspace-eagle-field-label-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 6px;
+	min-height: 20px;
+}
+
+.cmdspace-eagle-ai-wand {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	padding: 2px;
+	border: none;
+	background: transparent;
+	box-shadow: none;
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.cmdspace-eagle-ai-wand:hover {
+	color: var(--text-accent);
+}
+
+.cmdspace-eagle-field-help {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	color: var(--text-faint);
+	cursor: help;
+}
+
+.cmdspace-eagle-field-help .svg-icon {
+	width: 14px;
+	height: 14px;
+}
+
+.cmdspace-eagle-ai-wand .svg-icon {
+	width: 14px;
+	height: 14px;
+}
+
+.cmdspace-eagle-ai-wand.is-loading {
+	color: var(--text-accent);
+	cursor: progress;
+	animation: cmdspace-eagle-ai-pulse 1s ease-in-out infinite;
+}
+
+@keyframes cmdspace-eagle-ai-pulse {
+	0%, 100% { opacity: 1; transform: rotate(0deg); }
+	50% { opacity: 0.4; transform: rotate(-20deg); }
+}
+
 .cmdspace-eagle-input {
 	width: 100%;
 	padding: 6px 10px;
@@ -779,6 +836,14 @@
 	font-size: 12px;
 	font-weight: 500;
 	line-height: 1.2;
+}
+
+/* A tag suggested by AI that does not exist in the Eagle library yet */
+.cmdspace-eagle-tag-pill.is-new {
+	background: transparent;
+	color: var(--text-accent);
+	outline: 1px dashed var(--interactive-accent);
+	outline-offset: -1px;
 }
 
 .cmdspace-eagle-tag-pill-text {
@@ -983,6 +1048,10 @@
 
 .cmdspace-eagle-settings-tab-desc {
 	margin: 0 0 4px;
+}
+
+.cmdspace-eagle-count-input {
+	width: 72px;
 }
 
 .cmdspace-eagle-setting-required {
