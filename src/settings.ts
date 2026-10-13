@@ -2,6 +2,7 @@ import { App, FuzzySuggestModal, PluginSettingTab, Setting, Notice } from 'obsid
 import CMDSPACELinkEagle from './main';
 import { EagleApiService } from './api';
 import { WebDAVProvider, isCloudProviderConfigured } from './cloud-providers';
+import { getMetadataCardRows } from './metadata-card';
 import { AI_MAX_TAGS_LIMIT, AI_PROVIDER_LABELS, LM_STUDIO_DEFAULT_URL, detectLmStudio, listAiModels, resolveAiTagLimits, resolveNewTagFormat } from './ai-providers';
 import { 
 	CloudProviderType, 
@@ -391,7 +392,7 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Include metadata card')
-			.setDesc('Add a short card below each embedded image with its type, size, dimensions, tags and links. Images uploaded straight to the cloud have no tags or Eagle link.')
+			.setDesc('Add a short card below each embedded image with its type, size, dimensions, tags and links. Each part can be turned off below. Images uploaded straight to the cloud have no tags or Eagle link.')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.insertThumbnail)
 				.onChange(async (value) => {
@@ -402,15 +403,70 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 
 		if (!this.plugin.settings.insertThumbnail) return;
 
-		new Setting(containerEl)
-			.setName('Tags in the card')
-			.setDesc('List the item\'s Eagle tags in the card, written as valid Obsidian tags: a colon or slash becomes a nested tag ("Topic: AI" is written #topic/ai), and spaces and other punctuation become hyphens. Turn this off to keep Eagle tags out of your notes.')
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.includeTagsInMetadataCard)
-				.onChange(async (value) => {
-					this.plugin.settings.includeTagsInMetadataCard = value;
-					await this.plugin.saveSettings();
-				}));
+		// What the card will look like with the parts chosen below, for an image that has everything
+		const previewEl = containerEl.createDiv({ cls: 'setting-item-description cmdspace-eagle-card-preview' });
+		const updatePreview = () => {
+			const settings = this.plugin.settings;
+			const sourceMode = settings.includeSourceInMetadataCard;
+			const sourceLinks: string[] = [];
+			if (sourceMode === 'page' || sourceMode === 'both') sourceLinks.push('Source: example.com');
+			if (sourceMode === 'image' || sourceMode === 'both') sourceLinks.push('Direct: example.com');
+			if (settings.includeLocalSourceInMetadataCard) sourceLinks.push('Source: File');
+			const rows = getMetadataCardRows(settings, {
+				ext: 'png',
+				size: '3.4 MB',
+				dimensions: '1920×1080',
+				inCloud: true,
+				tags: '#topic/ai #type/illustration',
+				eagleLink: 'Open in Eagle',
+				cloudLink: 'Cloud',
+				sourceLinks,
+			});
+			previewEl.empty();
+			previewEl.createDiv({ cls: 'cmdspace-eagle-card-preview-label', text: 'Preview' });
+			if (rows.length === 0) {
+				previewEl.createDiv({ text: 'Every part is turned off, so no card is added.' });
+				return;
+			}
+			for (const row of rows) {
+				previewEl.createDiv({ cls: 'cmdspace-eagle-card-preview-row', text: row.replace(/\*\*/g, '') });
+			}
+		};
+
+		// One on/off setting for a part of the card
+		const addPartToggle = (
+			name: string,
+			desc: string,
+			read: () => boolean,
+			write: (value: boolean) => void
+		): void => {
+			new Setting(containerEl)
+				.setName(name)
+				.setDesc(desc)
+				.addToggle(toggle => toggle
+					.setValue(read())
+					.onChange(async (value) => {
+						write(value);
+						await this.plugin.saveSettings();
+						updatePreview();
+					}));
+		};
+		const settings = this.plugin.settings;
+
+		addPartToggle('File type in the card', 'The image\'s format, such as PNG.',
+			() => settings.includeTypeInMetadataCard, (value) => { settings.includeTypeInMetadataCard = value; });
+		addPartToggle('File size in the card', 'How large the file is, such as 3.4 MB.',
+			() => settings.includeSizeInMetadataCard, (value) => { settings.includeSizeInMetadataCard = value; });
+		addPartToggle('Dimensions in the card', 'The image\'s width and height in pixels.',
+			() => settings.includeDimensionsInMetadataCard, (value) => { settings.includeDimensionsInMetadataCard = value; });
+		addPartToggle('Cloud or local icon in the card', 'A cloud when the image has a cloud copy, a folder when it does not.',
+			() => settings.includeStorageInMetadataCard, (value) => { settings.includeStorageInMetadataCard = value; });
+		addPartToggle('Tags in the card', 'List the item\'s Eagle tags in the card, written as valid Obsidian tags: a colon or slash becomes a nested tag ("Topic: AI" is written #topic/ai), and spaces and other punctuation become hyphens. Turn this off to keep Eagle tags out of your notes.',
+			() => settings.includeTagsInMetadataCard, (value) => { settings.includeTagsInMetadataCard = value; });
+		addPartToggle('"Open in Eagle" link in the card', 'A link that opens the item in Eagle on this computer.',
+			() => settings.includeEagleLinkInMetadataCard, (value) => { settings.includeEagleLinkInMetadataCard = value; });
+		addPartToggle('Cloud link in the card', 'A link to the image\'s cloud copy, when it has one.',
+			() => settings.includeCloudLinkInMetadataCard, (value) => { settings.includeCloudLinkInMetadataCard = value; });
 
 		new Setting(containerEl)
 			.setName('Source links in the card')
@@ -424,17 +480,13 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 				.onChange(async (value: MetadataCardImageSource) => {
 					this.plugin.settings.includeSourceInMetadataCard = value;
 					await this.plugin.saveSettings();
+					updatePreview();
 				}));
 
-		new Setting(containerEl)
-			.setName('Local file link in the card')
-			.setDesc('For images dragged or pasted from File Explorer or Finder, link to the original file on this computer.')
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.includeLocalSourceInMetadataCard)
-				.onChange(async (value) => {
-					this.plugin.settings.includeLocalSourceInMetadataCard = value;
-					await this.plugin.saveSettings();
-				}));
+		addPartToggle('Local file link in the card', 'For images dragged or pasted from File Explorer or Finder, link to the original file on this computer.',
+			() => settings.includeLocalSourceInMetadataCard, (value) => { settings.includeLocalSourceInMetadataCard = value; });
+
+		updatePreview();
 	}
 
 	private renderEagleFolderSection(containerEl: HTMLElement): void {

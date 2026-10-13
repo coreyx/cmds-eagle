@@ -92,7 +92,13 @@ var init_types = __esm({
       enableImageSourceUrl: true,
       imageSourceUrlPriority: "page-first",
       extraLinksImageSource: "none",
+      includeTypeInMetadataCard: true,
+      includeSizeInMetadataCard: true,
+      includeDimensionsInMetadataCard: true,
+      includeStorageInMetadataCard: true,
       includeTagsInMetadataCard: true,
+      includeEagleLinkInMetadataCard: true,
+      includeCloudLinkInMetadataCard: true,
       includeSourceInMetadataCard: "page",
       includeLocalSourceInMetadataCard: false,
       r2WorkerUrl: "",
@@ -860,6 +866,40 @@ var init_api = __esm({
   }
 });
 
+// src/metadata-card.ts
+function getMetadataCardRows(settings, parts) {
+  const facts = [];
+  if (settings.includeTypeInMetadataCard)
+    facts.push(`**${parts.ext.toUpperCase()}**`);
+  if (settings.includeSizeInMetadataCard)
+    facts.push(parts.size);
+  if (settings.includeDimensionsInMetadataCard)
+    facts.push(parts.dimensions);
+  if (settings.includeStorageInMetadataCard)
+    facts.push(parts.inCloud ? "\u2601\uFE0F" : "\u{1F4C1}");
+  if (settings.includeTagsInMetadataCard && parts.tags !== void 0)
+    facts.push(parts.tags || "No tags");
+  const links = [];
+  if (settings.includeEagleLinkInMetadataCard && parts.eagleLink)
+    links.push(parts.eagleLink);
+  if (settings.includeCloudLinkInMetadataCard && parts.cloudLink)
+    links.push(parts.cloudLink);
+  links.push(...parts.sourceLinks || []);
+  return [facts, links].filter((row) => row.length > 0).map((row) => row.join(" | "));
+}
+function formatMetadataCard(settings, parts) {
+  return getMetadataCardRows(settings, parts).map((row) => `> ${row}`).join("\n");
+}
+function appendMetadataCard(markdown, card) {
+  return card ? `${markdown}
+
+${card}` : markdown;
+}
+var init_metadata_card = __esm({
+  "src/metadata-card.ts"() {
+  }
+});
+
 // src/modals.ts
 var modals_exports = {};
 __export(modals_exports, {
@@ -890,6 +930,7 @@ var init_modals = __esm({
     import_obsidian2 = require("obsidian");
     init_types();
     init_api();
+    init_metadata_card();
     EagleSearchModal = class extends import_obsidian2.FuzzySuggestModal {
       constructor(app, api, settings, resolveEmbedUrl) {
         super(app);
@@ -1111,7 +1152,7 @@ var init_modals = __esm({
           if (embedUrl) {
             let output = `![${filename}](${embedUrl})`;
             if (this.settings.insertThumbnail) {
-              output += "\n\n" + this.buildMetadataLine(item);
+              output = appendMetadataCard(output, this.buildMetadataLine(item));
             }
             editor.replaceSelection(output);
             new import_obsidian2.Notice(`Embedded: ${item.name}`);
@@ -1123,7 +1164,7 @@ var init_modals = __esm({
             const fileUrl = this.pathToFileUrl(filePath);
             let output = `![${filename}](${fileUrl})`;
             if (this.settings.insertThumbnail) {
-              output += "\n\n" + this.buildMetadataLine(item);
+              output = appendMetadataCard(output, this.buildMetadataLine(item));
             }
             editor.replaceSelection(output);
             new import_obsidian2.Notice(`Embedded: ${item.name}`);
@@ -1165,30 +1206,49 @@ var init_modals = __esm({
         }
         return `file://${encodedPath}`;
       }
+      // The one-line card below an image embedded from search. Empty when every part is turned off.
       buildMetadataLine(item) {
         const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
         const tags = item.tags.filter((t) => !t.startsWith("r2:") && t !== "r2-cloud" && t !== "cloud-upload").map((t) => this.normalizeTag(t)).filter((t) => t.length > 0).map((t) => `#${t}`).join(" ");
         const dimensions = item.width && item.height ? `${item.width}\xD7${item.height}` : "";
-        const tagSection = this.settings.includeTagsInMetadataCard ? ` | ${tags || "No tags"}` : "";
-        return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)}${dimensions ? ` | ${dimensions}` : ""}${tagSection} | [Eagle](${linkUrl})`;
+        const parts = [];
+        if (this.settings.includeTypeInMetadataCard)
+          parts.push(`**${item.ext.toUpperCase()}**`);
+        if (this.settings.includeSizeInMetadataCard)
+          parts.push(this.formatFileSize(item.size));
+        if (this.settings.includeDimensionsInMetadataCard && dimensions)
+          parts.push(dimensions);
+        if (this.settings.includeTagsInMetadataCard)
+          parts.push(tags || "No tags");
+        if (this.settings.includeEagleLinkInMetadataCard)
+          parts.push(`[Eagle](${linkUrl})`);
+        return parts.length > 0 ? `> ${parts.join(" | ")}` : "";
       }
+      // The larger card inserted with a link to an item. Its rows follow the same settings.
       buildLinkCard(item) {
         const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
         const tags = item.tags.map((t) => this.normalizeTag(t)).filter((t) => t.length > 0).map((t) => `#${t}`).join(" ");
         const dimensions = item.width && item.height ? `${item.width}\xD7${item.height}` : "N/A";
-        return `> [!cmdspace-eagle] ${item.name}
-> 
-> | Property | Value |
-> |----------|-------|
-> | **Type** | ${item.ext.toUpperCase()} |
-> | **Size** | ${this.formatFileSize(item.size)} |
-> | **Dimensions** | ${dimensions} |
-${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || "None"} |
-` : ""}> ${item.annotation ? `> **Annotation**: ${item.annotation}
-` : ""}
-> [Open in Eagle](${linkUrl})
-
-`;
+        const lines = [`> [!cmdspace-eagle] ${item.name}`, "> "];
+        const rows = [];
+        if (this.settings.includeTypeInMetadataCard)
+          rows.push(`> | **Type** | ${item.ext.toUpperCase()} |`);
+        if (this.settings.includeSizeInMetadataCard)
+          rows.push(`> | **Size** | ${this.formatFileSize(item.size)} |`);
+        if (this.settings.includeDimensionsInMetadataCard)
+          rows.push(`> | **Dimensions** | ${dimensions} |`);
+        if (this.settings.includeTagsInMetadataCard)
+          rows.push(`> | **Tags** | ${tags || "None"} |`);
+        if (rows.length > 0) {
+          lines.push("> | Property | Value |", "> |----------|-------|", ...rows);
+        }
+        if (item.annotation) {
+          lines.push("> ", `> **Annotation**: ${item.annotation}`);
+        }
+        if (this.settings.includeEagleLinkInMetadataCard) {
+          lines.push("> ", `> [Open in Eagle](${linkUrl})`);
+        }
+        return lines.join("\n") + "\n\n";
       }
       // The Eagle tag as an Obsidian tag without its #, or '' if no valid tag can be made of it
       normalizeTag(tag) {
@@ -3039,6 +3099,9 @@ function getExtFromFilename(filename) {
   return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : "";
 }
 
+// src/settings.ts
+init_metadata_card();
+
 // src/ai-providers.ts
 var import_obsidian4 = require("obsidian");
 var AI_PROVIDER_LABELS = {
@@ -3938,25 +4001,122 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian5.PluginSettingTab {
   }
   renderMetadataCardSection(containerEl) {
     new import_obsidian5.Setting(containerEl).setName("Metadata card").setHeading();
-    new import_obsidian5.Setting(containerEl).setName("Include metadata card").setDesc("Add a short card below each embedded image with its type, size, dimensions, tags and links. Images uploaded straight to the cloud have no tags or Eagle link.").addToggle((toggle) => toggle.setValue(this.plugin.settings.insertThumbnail).onChange(async (value) => {
+    new import_obsidian5.Setting(containerEl).setName("Include metadata card").setDesc("Add a short card below each embedded image with its type, size, dimensions, tags and links. Each part can be turned off below. Images uploaded straight to the cloud have no tags or Eagle link.").addToggle((toggle) => toggle.setValue(this.plugin.settings.insertThumbnail).onChange(async (value) => {
       this.plugin.settings.insertThumbnail = value;
       await this.plugin.saveSettings();
       this.display();
     }));
     if (!this.plugin.settings.insertThumbnail)
       return;
-    new import_obsidian5.Setting(containerEl).setName("Tags in the card").setDesc(`List the item's Eagle tags in the card, written as valid Obsidian tags: a colon or slash becomes a nested tag ("Topic: AI" is written #topic/ai), and spaces and other punctuation become hyphens. Turn this off to keep Eagle tags out of your notes.`).addToggle((toggle) => toggle.setValue(this.plugin.settings.includeTagsInMetadataCard).onChange(async (value) => {
-      this.plugin.settings.includeTagsInMetadataCard = value;
-      await this.plugin.saveSettings();
-    }));
+    const previewEl = containerEl.createDiv({ cls: "setting-item-description cmdspace-eagle-card-preview" });
+    const updatePreview = () => {
+      const settings2 = this.plugin.settings;
+      const sourceMode = settings2.includeSourceInMetadataCard;
+      const sourceLinks = [];
+      if (sourceMode === "page" || sourceMode === "both")
+        sourceLinks.push("Source: example.com");
+      if (sourceMode === "image" || sourceMode === "both")
+        sourceLinks.push("Direct: example.com");
+      if (settings2.includeLocalSourceInMetadataCard)
+        sourceLinks.push("Source: File");
+      const rows = getMetadataCardRows(settings2, {
+        ext: "png",
+        size: "3.4 MB",
+        dimensions: "1920\xD71080",
+        inCloud: true,
+        tags: "#topic/ai #type/illustration",
+        eagleLink: "Open in Eagle",
+        cloudLink: "Cloud",
+        sourceLinks
+      });
+      previewEl.empty();
+      previewEl.createDiv({ cls: "cmdspace-eagle-card-preview-label", text: "Preview" });
+      if (rows.length === 0) {
+        previewEl.createDiv({ text: "Every part is turned off, so no card is added." });
+        return;
+      }
+      for (const row of rows) {
+        previewEl.createDiv({ cls: "cmdspace-eagle-card-preview-row", text: row.replace(/\*\*/g, "") });
+      }
+    };
+    const addPartToggle = (name, desc, read, write) => {
+      new import_obsidian5.Setting(containerEl).setName(name).setDesc(desc).addToggle((toggle) => toggle.setValue(read()).onChange(async (value) => {
+        write(value);
+        await this.plugin.saveSettings();
+        updatePreview();
+      }));
+    };
+    const settings = this.plugin.settings;
+    addPartToggle(
+      "File type in the card",
+      "The image's format, such as PNG.",
+      () => settings.includeTypeInMetadataCard,
+      (value) => {
+        settings.includeTypeInMetadataCard = value;
+      }
+    );
+    addPartToggle(
+      "File size in the card",
+      "How large the file is, such as 3.4 MB.",
+      () => settings.includeSizeInMetadataCard,
+      (value) => {
+        settings.includeSizeInMetadataCard = value;
+      }
+    );
+    addPartToggle(
+      "Dimensions in the card",
+      "The image's width and height in pixels.",
+      () => settings.includeDimensionsInMetadataCard,
+      (value) => {
+        settings.includeDimensionsInMetadataCard = value;
+      }
+    );
+    addPartToggle(
+      "Cloud or local icon in the card",
+      "A cloud when the image has a cloud copy, a folder when it does not.",
+      () => settings.includeStorageInMetadataCard,
+      (value) => {
+        settings.includeStorageInMetadataCard = value;
+      }
+    );
+    addPartToggle(
+      "Tags in the card",
+      `List the item's Eagle tags in the card, written as valid Obsidian tags: a colon or slash becomes a nested tag ("Topic: AI" is written #topic/ai), and spaces and other punctuation become hyphens. Turn this off to keep Eagle tags out of your notes.`,
+      () => settings.includeTagsInMetadataCard,
+      (value) => {
+        settings.includeTagsInMetadataCard = value;
+      }
+    );
+    addPartToggle(
+      '"Open in Eagle" link in the card',
+      "A link that opens the item in Eagle on this computer.",
+      () => settings.includeEagleLinkInMetadataCard,
+      (value) => {
+        settings.includeEagleLinkInMetadataCard = value;
+      }
+    );
+    addPartToggle(
+      "Cloud link in the card",
+      "A link to the image's cloud copy, when it has one.",
+      () => settings.includeCloudLinkInMetadataCard,
+      (value) => {
+        settings.includeCloudLinkInMetadataCard = value;
+      }
+    );
     new import_obsidian5.Setting(containerEl).setName("Source links in the card").setDesc("Link back to where the image came from: the web page, the image file on that page, or both.").addDropdown((dropdown) => dropdown.addOption("none", "None").addOption("page", "Page URL").addOption("image", "Image URL").addOption("both", "Page URL and image URL").setValue(this.plugin.settings.includeSourceInMetadataCard).onChange(async (value) => {
       this.plugin.settings.includeSourceInMetadataCard = value;
       await this.plugin.saveSettings();
+      updatePreview();
     }));
-    new import_obsidian5.Setting(containerEl).setName("Local file link in the card").setDesc("For images dragged or pasted from File Explorer or Finder, link to the original file on this computer.").addToggle((toggle) => toggle.setValue(this.plugin.settings.includeLocalSourceInMetadataCard).onChange(async (value) => {
-      this.plugin.settings.includeLocalSourceInMetadataCard = value;
-      await this.plugin.saveSettings();
-    }));
+    addPartToggle(
+      "Local file link in the card",
+      "For images dragged or pasted from File Explorer or Finder, link to the original file on this computer.",
+      () => settings.includeLocalSourceInMetadataCard,
+      (value) => {
+        settings.includeLocalSourceInMetadataCard = value;
+      }
+    );
+    updatePreview();
   }
   renderEagleFolderSection(containerEl) {
     new import_obsidian5.Setting(containerEl).setName("Eagle folder").setHeading();
@@ -4739,6 +4899,9 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian5.PluginSettingTab {
   }
 };
 
+// src/main.ts
+init_metadata_card();
+
 // src/clipboard-source.ts
 function safelyReadClipboard(fn) {
   const proc = typeof process !== "undefined" ? process : null;
@@ -5380,7 +5543,7 @@ var CMDSPACELinkEagle = class extends import_obsidian6.Plugin {
         const filename = `${item.name}.${item.ext}`;
         let output = `![${filename}](${fileUrl})`;
         if (this.settings.insertThumbnail) {
-          output += "\n\n" + this.buildMetadataCard(item, sources);
+          output = appendMetadataCard(output, this.buildMetadataCard(item, sources));
         }
         editor.replaceSelection(output);
         return;
@@ -5498,30 +5661,35 @@ var CMDSPACELinkEagle = class extends import_obsidian6.Plugin {
     const sources = await this.resolveMetadataSources(item, fallbackSourceUrl);
     return sources.pageUrl || sources.imageUrl || sources.webUrl;
   }
+  // The card inserted below an embedded Eagle image. Empty when every part is turned off.
   buildMetadataCard(item, resolvedSources, cloudCopyUrl) {
     const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
     const tags = item.tags.filter((t) => !t.startsWith("r2:") && t !== "r2-cloud" && t !== "cloud-upload").map((t) => this.normalizeTag(t)).filter((t) => t.length > 0).map((t) => `#${t}`).join(" ");
-    const dimensions = item.width && item.height ? `${item.width}\xD7${item.height}` : "N/A";
     const cloudUrl = cloudCopyUrl || this.api.getCloudUrl(item);
-    const isUploaded = hasR2Upload(item) || !!cloudCopyUrl;
-    let linkSection = `[Open in Eagle](${linkUrl})`;
-    if (cloudUrl) {
-      linkSection += ` | [Cloud](${cloudUrl})`;
-    }
-    linkSection += this.buildSourceLinks(resolvedSources, item.url);
-    const tagSection = this.settings.includeTagsInMetadataCard ? ` | ${tags || "No tags"}` : "";
-    return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)} | ${dimensions} | ${isUploaded ? "\u2601\uFE0F" : "\u{1F4C1}"}${tagSection}
-> ${linkSection}`;
+    return formatMetadataCard(this.settings, {
+      ext: item.ext,
+      size: this.formatFileSize(item.size),
+      dimensions: item.width && item.height ? `${item.width}\xD7${item.height}` : "N/A",
+      inCloud: hasR2Upload(item) || !!cloudCopyUrl,
+      tags,
+      eagleLink: `[Open in Eagle](${linkUrl})`,
+      cloudLink: cloudUrl ? `[Cloud](${cloudUrl})` : void 0,
+      sourceLinks: this.getSourceLinks(resolvedSources, item.url)
+    });
   }
   // Metadata card for an image uploaded straight to the cloud provider (no Eagle item).
   async buildCloudMetadataCard(file, publicUrl, sourceInfo, localFilePath) {
     const ext = getExtFromFilename(file.name) || file.type.split("/")[1] || "file";
     const size = await this.getImageDimensions(file);
-    const dimensions = size ? `${size.width}\xD7${size.height}` : "N/A";
     const sources = await this.resolveMetadataSources(null, sourceInfo, localFilePath);
-    const linkSection = `[Cloud](${publicUrl})` + this.buildSourceLinks(sources);
-    return `> **${ext.toUpperCase()}** | ${this.formatFileSize(file.size)} | ${dimensions} | \u2601\uFE0F
-> ${linkSection}`;
+    return formatMetadataCard(this.settings, {
+      ext,
+      size: this.formatFileSize(file.size),
+      dimensions: size ? `${size.width}\xD7${size.height}` : "N/A",
+      inCloud: true,
+      cloudLink: `[Cloud](${publicUrl})`,
+      sourceLinks: this.getSourceLinks(sources)
+    });
   }
   async getImageDimensions(file) {
     try {
@@ -5533,37 +5701,40 @@ var CMDSPACELinkEagle = class extends import_obsidian6.Plugin {
       return null;
     }
   }
-  // Source links (" | [Source: …] | [Direct: …] | [Source: File]") appended to a card's link row.
-  buildSourceLinks(resolvedSources, itemUrl) {
+  // Source links for a card's link row ("[Source: …]", "[Direct: …]", "[Source: File]"), as
+  // chosen by the two source link settings.
+  getSourceLinks(resolvedSources, itemUrl) {
     const sources = typeof resolvedSources === "string" ? { webUrl: resolvedSources, pageUrl: resolvedSources } : resolvedSources || {};
     const mode = typeof this.settings.includeSourceInMetadataCard === "boolean" ? this.settings.includeSourceInMetadataCard ? "page" : "none" : this.settings.includeSourceInMetadataCard || "page";
     const effectivePageUrl = sources.pageUrl || (!sources.imageUrl ? sources.webUrl : null);
     const effectiveImageUrl = sources.imageUrl || (sources.webUrl && /\.(jpe?g|png|gif|webp|bmp|svg|avif|ico)(\?.*)?$/i.test(sources.webUrl) ? sources.webUrl : null);
     const localFileUrl = sources.localFileUrl ? cleanUrl(sources.localFileUrl) : itemUrl && /^file:\/\//i.test(cleanUrl(itemUrl)) ? cleanUrl(itemUrl) : null;
-    let links = "";
+    const links = [];
     if (mode === "page" || mode === "both") {
       if (effectivePageUrl) {
         const domain = extractDomain(effectivePageUrl);
-        links += ` | [Source: ${domain || "Web"}](${effectivePageUrl})`;
+        links.push(`[Source: ${domain || "Web"}](${effectivePageUrl})`);
       } else if (mode === "page" && sources.webUrl) {
         const domain = extractDomain(sources.webUrl);
-        links += ` | [Source: ${domain || "Web"}](${sources.webUrl})`;
+        links.push(`[Source: ${domain || "Web"}](${sources.webUrl})`);
       }
     }
     if (mode === "image" || mode === "both") {
       if (effectiveImageUrl && (mode === "image" || effectiveImageUrl !== effectivePageUrl)) {
         const domain = extractDomain(effectiveImageUrl);
-        links += ` | [Direct: ${domain || "Image"}](${effectiveImageUrl})`;
+        links.push(`[Direct: ${domain || "Image"}](${effectiveImageUrl})`);
       } else if (mode === "image" && sources.webUrl) {
         const domain = extractDomain(sources.webUrl);
-        links += ` | [Direct: ${domain || "Image"}](${sources.webUrl})`;
+        links.push(`[Direct: ${domain || "Image"}](${sources.webUrl})`);
       }
     }
     if (this.settings.includeLocalSourceInMetadataCard && localFileUrl) {
-      links += ` | [Source: File](${localFileUrl})`;
+      links.push(`[Source: File](${localFileUrl})`);
     }
     return links;
   }
+  // The larger card inserted with a link to an item (rather than an embed of it). Its rows
+  // and links follow the same per-part settings as the metadata card.
   buildLinkCard(item, resolvedSources) {
     const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
     const tags = item.tags.filter((t) => !t.startsWith("r2:") && t !== "r2-cloud").map((t) => this.normalizeTag(t)).filter((t) => t.length > 0).map((t) => `#${t}`).join(" ");
@@ -5571,30 +5742,36 @@ var CMDSPACELinkEagle = class extends import_obsidian6.Plugin {
     const imageUrl = this.getImageUrl(item);
     const cloudUrl = this.api.getCloudUrl(item);
     const isUploaded = hasR2Upload(item);
-    let imageSection = "";
+    const lines = [`> [!cmdspace-eagle] ${item.name}`, "> "];
     if (this.settings.embedImageInCard && imageUrl) {
-      imageSection = `> ![${item.name}](${imageUrl})
->
-`;
+      lines.push(`> ![${item.name}](${imageUrl})`, ">");
     }
-    let linkSection = `> [Open in Eagle](${linkUrl})`;
-    if (cloudUrl) {
-      linkSection += ` | [Cloud URL](${cloudUrl})`;
+    const rows = [];
+    if (this.settings.includeTypeInMetadataCard)
+      rows.push(`> | **Type** | ${item.ext.toUpperCase()} |`);
+    if (this.settings.includeSizeInMetadataCard)
+      rows.push(`> | **Size** | ${this.formatFileSize(item.size)} |`);
+    if (this.settings.includeDimensionsInMetadataCard)
+      rows.push(`> | **Dimensions** | ${dimensions} |`);
+    if (this.settings.includeStorageInMetadataCard)
+      rows.push(`> | **R2 Status** | ${isUploaded ? "\u2601\uFE0F Uploaded" : "\u{1F4C1} Local only"} |`);
+    if (this.settings.includeTagsInMetadataCard)
+      rows.push(`> | **Tags** | ${tags || "None"} |`);
+    if (item.annotation)
+      rows.push(`> | **Annotation** | ${item.annotation} |`);
+    if (rows.length > 0) {
+      lines.push("> | Property | Value |", "> |----------|-------|", ...rows);
     }
-    linkSection += this.buildSourceLinks(resolvedSources, item.url);
-    return `> [!cmdspace-eagle] ${item.name}
-> 
-${imageSection}> | Property | Value |
-> |----------|-------|
-> | **Type** | ${item.ext.toUpperCase()} |
-> | **Size** | ${this.formatFileSize(item.size)} |
-> | **Dimensions** | ${dimensions} |
-> | **R2 Status** | ${isUploaded ? "\u2601\uFE0F Uploaded" : "\u{1F4C1} Local only"} |
-${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || "None"} |
-` : ""}${item.annotation ? `> | **Annotation** | ${item.annotation} |
-` : ""}${linkSection}
-
-`;
+    const links = [];
+    if (this.settings.includeEagleLinkInMetadataCard)
+      links.push(`[Open in Eagle](${linkUrl})`);
+    if (this.settings.includeCloudLinkInMetadataCard && cloudUrl)
+      links.push(`[Cloud URL](${cloudUrl})`);
+    links.push(...this.getSourceLinks(resolvedSources, item.url));
+    if (links.length > 0) {
+      lines.push(`> ${links.join(" | ")}`);
+    }
+    return lines.join("\n") + "\n\n";
   }
   getImageUrl(item) {
     const cloudUrl = this.api.getCloudUrl(item);
@@ -6261,7 +6438,7 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || "None"} |
       let markdownImage = `![${displayName}](${imageUrl})`;
       if (item && this.settings.insertThumbnail) {
         const sources = await this.resolveMetadataSources(item, sourceInfo, effectiveLocalPath);
-        markdownImage += "\n\n" + this.buildMetadataCard(item, sources, cloudUrl);
+        markdownImage = appendMetadataCard(markdownImage, this.buildMetadataCard(item, sources, cloudUrl));
       }
       this.replaceTextInDocument(editor, placeholderText, markdownImage);
       new import_obsidian6.Notice(`Uploaded to Eagle: ${displayName}`);
@@ -6297,7 +6474,7 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || "None"} |
       if (result.success && result.publicUrl) {
         let markdownImage = `![${file.name}](${result.publicUrl})`;
         if (this.settings.insertThumbnail) {
-          markdownImage += "\n\n" + await this.buildCloudMetadataCard(file, result.publicUrl, sourceInfo, localFilePath);
+          markdownImage = appendMetadataCard(markdownImage, await this.buildCloudMetadataCard(file, result.publicUrl, sourceInfo, localFilePath));
         }
         this.replaceTextInDocument(editor, placeholderText, markdownImage);
         new import_obsidian6.Notice(`Uploaded to ${providerName}: ${file.name}`);
@@ -6853,7 +7030,7 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || "None"} |
     if (url) {
       let markdown = `![${filename}](${url})`;
       if (this.settings.insertThumbnail) {
-        markdown += "\n\n" + this.buildMetadataCard(item, sources, cloudUrl);
+        markdown = appendMetadataCard(markdown, this.buildMetadataCard(item, sources, cloudUrl));
       }
       editor.replaceSelection(markdown);
       new import_obsidian6.Notice(`Embedded: ${filename}`);
@@ -6870,7 +7047,7 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || "None"} |
       const fileUrl = this.pathToFileUrl(filePath);
       let markdown = `![${filename}](${fileUrl})`;
       if (this.settings.insertThumbnail) {
-        markdown += "\n\n" + this.buildMetadataCard(item, sources);
+        markdown = appendMetadataCard(markdown, this.buildMetadataCard(item, sources));
       }
       editor.replaceSelection(markdown);
       new import_obsidian6.Notice(`Embedded: ${filename}`);
@@ -7209,7 +7386,7 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || "None"} |
     let card = null;
     if (withCard) {
       const sources = await this.resolveMetadataSources(item);
-      card = this.buildMetadataCard(item, sources, cloudUrl);
+      card = this.buildMetadataCard(item, sources, cloudUrl) || null;
     }
     void this.applyObsidianBacklink(item.id);
     return {
@@ -7239,7 +7416,7 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || "None"} |
         let card = null;
         if (withCard && item) {
           const sources = await this.resolveMetadataSources(item, sourceInfo, localPath);
-          card = this.buildMetadataCard(item, sources, cloudUrl);
+          card = this.buildMetadataCard(item, sources, cloudUrl) || null;
         }
         return { kind: "url", url, name: item ? `${item.name}.${item.ext}` : file.name, width, height, card };
       } catch (error) {
@@ -7259,7 +7436,7 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || "None"} |
         tempPath = await this.saveToTempLocation(file);
         const result = await provider.upload(tempPath, file.name, getMimeType2(getExtFromFilename(file.name)));
         if (result.success && result.publicUrl) {
-          const card = withCard ? await this.buildCloudMetadataCard(file, result.publicUrl, sourceInfo, localPath) : null;
+          const card = withCard ? await this.buildCloudMetadataCard(file, result.publicUrl, sourceInfo, localPath) || null : null;
           return { kind: "url", url: result.publicUrl, name: file.name, width, height, card };
         }
         console.error("[Eagle Bridge] Cloud upload failed:", result.error);

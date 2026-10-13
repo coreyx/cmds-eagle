@@ -27,6 +27,7 @@ import {
 	SUPPORTED_DOCUMENT_EXTENSIONS,
 } from './types';
 import { EagleApiService, buildEagleItemUrl, toObsidianTag } from './api';
+import { appendMetadataCard } from './metadata-card';
 
 type FileTypeCategory = 'images' | 'videos' | 'documents' | 'all';
 
@@ -288,7 +289,7 @@ export class EagleSearchModal extends FuzzySuggestModal<EagleItem> {
 			if (embedUrl) {
 				let output = `![${filename}](${embedUrl})`;
 				if (this.settings.insertThumbnail) {
-					output += '\n\n' + this.buildMetadataLine(item);
+					output = appendMetadataCard(output, this.buildMetadataLine(item));
 				}
 				editor.replaceSelection(output);
 				new Notice(`Embedded: ${item.name}`);
@@ -305,7 +306,7 @@ export class EagleSearchModal extends FuzzySuggestModal<EagleItem> {
 				let output = `![${filename}](${fileUrl})`;
 				
 				if (this.settings.insertThumbnail) {
-					output += '\n\n' + this.buildMetadataLine(item);
+					output = appendMetadataCard(output, this.buildMetadataLine(item));
 				}
 				
 				editor.replaceSelection(output);
@@ -354,6 +355,7 @@ export class EagleSearchModal extends FuzzySuggestModal<EagleItem> {
 		return `file://${encodedPath}`;
 	}
 
+	// The one-line card below an image embedded from search. Empty when every part is turned off.
 	private buildMetadataLine(item: EagleItem): string {
 		const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
 		const tags = item.tags
@@ -364,11 +366,17 @@ export class EagleSearchModal extends FuzzySuggestModal<EagleItem> {
 			.join(' ');
 		const dimensions = item.width && item.height ? `${item.width}×${item.height}` : '';
 
-		const tagSection = this.settings.includeTagsInMetadataCard ? ` | ${tags || 'No tags'}` : '';
+		const parts: string[] = [];
+		if (this.settings.includeTypeInMetadataCard) parts.push(`**${item.ext.toUpperCase()}**`);
+		if (this.settings.includeSizeInMetadataCard) parts.push(this.formatFileSize(item.size));
+		if (this.settings.includeDimensionsInMetadataCard && dimensions) parts.push(dimensions);
+		if (this.settings.includeTagsInMetadataCard) parts.push(tags || 'No tags');
+		if (this.settings.includeEagleLinkInMetadataCard) parts.push(`[Eagle](${linkUrl})`);
 
-		return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)}${dimensions ? ` | ${dimensions}` : ''}${tagSection} | [Eagle](${linkUrl})`;
+		return parts.length > 0 ? `> ${parts.join(' | ')}` : '';
 	}
 
+	// The larger card inserted with a link to an item. Its rows follow the same settings.
 	private buildLinkCard(item: EagleItem): string {
 		const linkUrl = buildEagleItemUrl(item.id, this.settings.eagleItemLinkFormat, this.settings.eagleApiBaseUrl);
 		const tags = item.tags
@@ -377,18 +385,25 @@ export class EagleSearchModal extends FuzzySuggestModal<EagleItem> {
 			.map(t => `#${t}`)
 			.join(' ');
 		const dimensions = item.width && item.height ? `${item.width}×${item.height}` : 'N/A';
-		
-		return `> [!cmdspace-eagle] ${item.name}
-> 
-> | Property | Value |
-> |----------|-------|
-> | **Type** | ${item.ext.toUpperCase()} |
-> | **Size** | ${this.formatFileSize(item.size)} |
-> | **Dimensions** | ${dimensions} |
-${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\n` : ''}> ${item.annotation ? `> **Annotation**: ${item.annotation}\n` : ''}
-> [Open in Eagle](${linkUrl})
 
-`;
+		const lines: string[] = [`> [!cmdspace-eagle] ${item.name}`, '> '];
+
+		const rows: string[] = [];
+		if (this.settings.includeTypeInMetadataCard) rows.push(`> | **Type** | ${item.ext.toUpperCase()} |`);
+		if (this.settings.includeSizeInMetadataCard) rows.push(`> | **Size** | ${this.formatFileSize(item.size)} |`);
+		if (this.settings.includeDimensionsInMetadataCard) rows.push(`> | **Dimensions** | ${dimensions} |`);
+		if (this.settings.includeTagsInMetadataCard) rows.push(`> | **Tags** | ${tags || 'None'} |`);
+		if (rows.length > 0) {
+			lines.push('> | Property | Value |', '> |----------|-------|', ...rows);
+		}
+		if (item.annotation) {
+			lines.push('> ', `> **Annotation**: ${item.annotation}`);
+		}
+		if (this.settings.includeEagleLinkInMetadataCard) {
+			lines.push('> ', `> [Open in Eagle](${linkUrl})`);
+		}
+
+		return lines.join('\n') + '\n\n';
 	}
 
 	// The Eagle tag as an Obsidian tag without its #, or '' if no valid tag can be made of it

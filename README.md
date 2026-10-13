@@ -94,6 +94,31 @@ Each Eagle item gets one cloud copy. It is recorded on the item as a **Cloud Cop
 ![Search Modal](assets/CMDS-eagle2.gif)
 ![Search Results](assets/CMDS-eagle3.png)
 
+### Metadata Card
+
+Below each embedded image, Eagle Bridge can add a short card with facts about the image and links for it:
+
+```
+> **PNG** | 3.4 MB | 1920×1080 | ☁️ | #topic/ai #type/illustration
+> [Open in Eagle](…) | [Cloud](…) | [Source: example.com](…)
+```
+
+Turn the whole card on or off with **Settings → Embedding → Include metadata card**. Each part has its own setting below that, and a preview shows the card as you have it set:
+
+| Setting | Part of the card |
+|---------|------------------|
+| **File type in the card** | The format, such as `PNG` |
+| **File size in the card** | Such as `3.4 MB` |
+| **Dimensions in the card** | Width and height in pixels |
+| **Cloud or local icon in the card** | ☁️ when the image has a cloud copy, 📁 when it does not |
+| **Tags in the card** | The item's Eagle tags, written as Obsidian tags |
+| **"Open in Eagle" link in the card** | Opens the item in Eagle on this computer |
+| **Cloud link in the card** | Links to the image's cloud copy, when it has one |
+| **Source links in the card** | The web page the image came from, the image file on that page, both, or none |
+| **Local file link in the card** | The original file, for images dragged or pasted from your computer |
+
+A row with nothing left in it is dropped, and with every part off no card is added. The same settings apply to the larger card inserted with a link to an item, and to the card added by search. Cards already in your notes keep their text.
+
 ### Target Folder Routing
 
 Control where newly added images are stored in your Eagle library with 4 workflow options under **Settings → Adding images → When adding an item to Eagle**:

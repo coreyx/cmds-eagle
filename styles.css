@@ -1056,6 +1056,26 @@ select.cmdspace-eagle-hint-templates {
 	margin: 0 0 4px;
 }
 
+.cmdspace-eagle-card-preview {
+	margin: 4px 0 12px;
+	padding: 8px 12px;
+	border-left: 2px solid var(--interactive-accent);
+	background: var(--background-secondary);
+	border-radius: 4px;
+}
+
+.cmdspace-eagle-card-preview-label {
+	font-size: var(--font-ui-smaller);
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	margin-bottom: 4px;
+}
+
+.cmdspace-eagle-card-preview-row {
+	color: var(--text-normal);
+	overflow-wrap: anywhere;
+}
+
 .cmdspace-eagle-count-input {
 	width: 72px;
 }

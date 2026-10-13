@@ -351,7 +351,15 @@ export interface CMDSPACEEagleSettings {
 	enableImageSourceUrl: boolean;
 	imageSourceUrlPriority: ImageSourceUrlPriority;
 	extraLinksImageSource: ExtraLinksImageSource;
+	// One setting per part of the metadata card
+	includeTypeInMetadataCard: boolean;
+	includeSizeInMetadataCard: boolean;
+	includeDimensionsInMetadataCard: boolean;
+	// The cloud or folder icon saying whether the image has a cloud copy
+	includeStorageInMetadataCard: boolean;
 	includeTagsInMetadataCard: boolean;
+	includeEagleLinkInMetadataCard: boolean;
+	includeCloudLinkInMetadataCard: boolean;
 	includeSourceInMetadataCard: MetadataCardImageSource;
 	includeLocalSourceInMetadataCard: boolean;
 	r2WorkerUrl: string;
@@ -429,7 +437,13 @@ export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
 	enableImageSourceUrl: true,
 	imageSourceUrlPriority: 'page-first',
 	extraLinksImageSource: 'none',
+	includeTypeInMetadataCard: true,
+	includeSizeInMetadataCard: true,
+	includeDimensionsInMetadataCard: true,
+	includeStorageInMetadataCard: true,
 	includeTagsInMetadataCard: true,
+	includeEagleLinkInMetadataCard: true,
+	includeCloudLinkInMetadataCard: true,
 	includeSourceInMetadataCard: 'page',
 	includeLocalSourceInMetadataCard: false,
 	r2WorkerUrl: '',

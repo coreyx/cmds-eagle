@@ -37,6 +37,7 @@ import {
 } from './api';
 import { EagleSearchModal, ImagePasteChoiceModal, EagleLinkChoiceModal, EagleFolderPickerModal, CanvasNodeChoiceModal } from './modals';
 import { CMDSPACEEagleSettingTab } from './settings';
+import { formatMetadataCard, appendMetadataCard } from './metadata-card';
 import { createCloudProvider, isCloudProviderConfigured, isPublicUrlGone, getMimeType, getExtFromFilename, CloudProvider } from './cloud-providers';
 import { ClipboardSourceService, extractDomain, cleanUrl, isValidHttpUrl, isDirectImageUrl } from './clipboard-source';
 import { AiAssistant } from './ai-providers';
@@ -303,7 +304,7 @@ export default class CMDSPACELinkEagle extends Plugin {
 				let output = `![${filename}](${fileUrl})`;
 				
 				if (this.settings.insertThumbnail) {
-					output += '\n\n' + this.buildMetadataCard(item, sources);
+					output = appendMetadataCard(output, this.buildMetadataCard(item, sources));
 				}
 				
 				editor.replaceSelection(output);
@@ -448,6 +449,7 @@ export default class CMDSPACELinkEagle extends Plugin {
 		return sources.pageUrl || sources.imageUrl || sources.webUrl;
 	}
 
+	// The card inserted below an embedded Eagle image. Empty when every part is turned off.
 	private buildMetadataCard(
 		item: EagleItem,
 		resolvedSources?: { pageUrl?: string | null; imageUrl?: string | null; webUrl?: string | null; localFileUrl?: string | null } | string | null,
@@ -460,20 +462,18 @@ export default class CMDSPACELinkEagle extends Plugin {
 			.filter(t => t.length > 0)
 			.map(t => `#${t}`)
 			.join(' ');
-		const dimensions = item.width && item.height ? `${item.width}×${item.height}` : 'N/A';
 		const cloudUrl = cloudCopyUrl || this.api.getCloudUrl(item);
-		const isUploaded = hasR2Upload(item) || !!cloudCopyUrl;
 
-		let linkSection = `[Open in Eagle](${linkUrl})`;
-		if (cloudUrl) {
-			linkSection += ` | [Cloud](${cloudUrl})`;
-		}
-		linkSection += this.buildSourceLinks(resolvedSources, item.url);
-
-		const tagSection = this.settings.includeTagsInMetadataCard ? ` | ${tags || 'No tags'}` : '';
-
-		return `> **${item.ext.toUpperCase()}** | ${this.formatFileSize(item.size)} | ${dimensions} | ${isUploaded ? '☁️' : '📁'}${tagSection}
-> ${linkSection}`;
+		return formatMetadataCard(this.settings, {
+			ext: item.ext,
+			size: this.formatFileSize(item.size),
+			dimensions: item.width && item.height ? `${item.width}×${item.height}` : 'N/A',
+			inCloud: hasR2Upload(item) || !!cloudCopyUrl,
+			tags,
+			eagleLink: `[Open in Eagle](${linkUrl})`,
+			cloudLink: cloudUrl ? `[Cloud](${cloudUrl})` : undefined,
+			sourceLinks: this.getSourceLinks(resolvedSources, item.url),
+		});
 	}
 
 	// Metadata card for an image uploaded straight to the cloud provider (no Eagle item).
@@ -485,12 +485,16 @@ export default class CMDSPACELinkEagle extends Plugin {
 	): Promise<string> {
 		const ext = getExtFromFilename(file.name) || file.type.split('/')[1] || 'file';
 		const size = await this.getImageDimensions(file);
-		const dimensions = size ? `${size.width}×${size.height}` : 'N/A';
 		const sources = await this.resolveMetadataSources(null, sourceInfo, localFilePath);
-		const linkSection = `[Cloud](${publicUrl})` + this.buildSourceLinks(sources);
 
-		return `> **${ext.toUpperCase()}** | ${this.formatFileSize(file.size)} | ${dimensions} | ☁️
-> ${linkSection}`;
+		return formatMetadataCard(this.settings, {
+			ext,
+			size: this.formatFileSize(file.size),
+			dimensions: size ? `${size.width}×${size.height}` : 'N/A',
+			inCloud: true,
+			cloudLink: `[Cloud](${publicUrl})`,
+			sourceLinks: this.getSourceLinks(sources),
+		});
 	}
 
 	private async getImageDimensions(file: File): Promise<{ width: number; height: number } | null> {
@@ -504,11 +508,12 @@ export default class CMDSPACELinkEagle extends Plugin {
 		}
 	}
 
-	// Source links (" | [Source: …] | [Direct: …] | [Source: File]") appended to a card's link row.
-	private buildSourceLinks(
+	// Source links for a card's link row ("[Source: …]", "[Direct: …]", "[Source: File]"), as
+	// chosen by the two source link settings.
+	private getSourceLinks(
 		resolvedSources?: { pageUrl?: string | null; imageUrl?: string | null; webUrl?: string | null; localFileUrl?: string | null } | string | null,
 		itemUrl?: string
-	): string {
+	): string[] {
 		const sources: { pageUrl?: string | null; imageUrl?: string | null; webUrl?: string | null; localFileUrl?: string | null } =
 			typeof resolvedSources === 'string'
 				? { webUrl: resolvedSources, pageUrl: resolvedSources }
@@ -525,35 +530,37 @@ export default class CMDSPACELinkEagle extends Plugin {
 			? cleanUrl(sources.localFileUrl)
 			: (itemUrl && /^file:\/\//i.test(cleanUrl(itemUrl)) ? cleanUrl(itemUrl) : null);
 
-		let links = '';
+		const links: string[] = [];
 
 		if (mode === 'page' || mode === 'both') {
 			if (effectivePageUrl) {
 				const domain = extractDomain(effectivePageUrl);
-				links += ` | [Source: ${domain || 'Web'}](${effectivePageUrl})`;
+				links.push(`[Source: ${domain || 'Web'}](${effectivePageUrl})`);
 			} else if (mode === 'page' && sources.webUrl) {
 				const domain = extractDomain(sources.webUrl);
-				links += ` | [Source: ${domain || 'Web'}](${sources.webUrl})`;
+				links.push(`[Source: ${domain || 'Web'}](${sources.webUrl})`);
 			}
 		}
 
 		if (mode === 'image' || mode === 'both') {
 			if (effectiveImageUrl && (mode === 'image' || effectiveImageUrl !== effectivePageUrl)) {
 				const domain = extractDomain(effectiveImageUrl);
-				links += ` | [Direct: ${domain || 'Image'}](${effectiveImageUrl})`;
+				links.push(`[Direct: ${domain || 'Image'}](${effectiveImageUrl})`);
 			} else if (mode === 'image' && sources.webUrl) {
 				const domain = extractDomain(sources.webUrl);
-				links += ` | [Direct: ${domain || 'Image'}](${sources.webUrl})`;
+				links.push(`[Direct: ${domain || 'Image'}](${sources.webUrl})`);
 			}
 		}
 
 		if (this.settings.includeLocalSourceInMetadataCard && localFileUrl) {
-			links += ` | [Source: File](${localFileUrl})`;
+			links.push(`[Source: File](${localFileUrl})`);
 		}
 
 		return links;
 	}
 
+	// The larger card inserted with a link to an item (rather than an embed of it). Its rows
+	// and links follow the same per-part settings as the metadata card.
 	private buildLinkCard(
 		item: EagleItem,
 		resolvedSources?: { pageUrl?: string | null; imageUrl?: string | null; webUrl?: string | null; localFileUrl?: string | null } | string | null
@@ -566,33 +573,36 @@ export default class CMDSPACELinkEagle extends Plugin {
 			.map(t => `#${t}`)
 			.join(' ');
 		const dimensions = item.width && item.height ? `${item.width}×${item.height}` : 'N/A';
-		
+
 		const imageUrl = this.getImageUrl(item);
 		const cloudUrl = this.api.getCloudUrl(item);
 		const isUploaded = hasR2Upload(item);
 
-		let imageSection = '';
+		const lines: string[] = [`> [!cmdspace-eagle] ${item.name}`, '> '];
 		if (this.settings.embedImageInCard && imageUrl) {
-			imageSection = `> ![${item.name}](${imageUrl})\n>\n`;
+			lines.push(`> ![${item.name}](${imageUrl})`, '>');
 		}
 
-		let linkSection = `> [Open in Eagle](${linkUrl})`;
-		if (cloudUrl) {
-			linkSection += ` | [Cloud URL](${cloudUrl})`;
+		const rows: string[] = [];
+		if (this.settings.includeTypeInMetadataCard) rows.push(`> | **Type** | ${item.ext.toUpperCase()} |`);
+		if (this.settings.includeSizeInMetadataCard) rows.push(`> | **Size** | ${this.formatFileSize(item.size)} |`);
+		if (this.settings.includeDimensionsInMetadataCard) rows.push(`> | **Dimensions** | ${dimensions} |`);
+		if (this.settings.includeStorageInMetadataCard) rows.push(`> | **R2 Status** | ${isUploaded ? '☁️ Uploaded' : '📁 Local only'} |`);
+		if (this.settings.includeTagsInMetadataCard) rows.push(`> | **Tags** | ${tags || 'None'} |`);
+		if (item.annotation) rows.push(`> | **Annotation** | ${item.annotation} |`);
+		if (rows.length > 0) {
+			lines.push('> | Property | Value |', '> |----------|-------|', ...rows);
 		}
-		linkSection += this.buildSourceLinks(resolvedSources, item.url);
 
-		return `> [!cmdspace-eagle] ${item.name}
-> 
-${imageSection}> | Property | Value |
-> |----------|-------|
-> | **Type** | ${item.ext.toUpperCase()} |
-> | **Size** | ${this.formatFileSize(item.size)} |
-> | **Dimensions** | ${dimensions} |
-> | **R2 Status** | ${isUploaded ? '☁️ Uploaded' : '📁 Local only'} |
-${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\n` : ''}${item.annotation ? `> | **Annotation** | ${item.annotation} |\n` : ''}${linkSection}
+		const links: string[] = [];
+		if (this.settings.includeEagleLinkInMetadataCard) links.push(`[Open in Eagle](${linkUrl})`);
+		if (this.settings.includeCloudLinkInMetadataCard && cloudUrl) links.push(`[Cloud URL](${cloudUrl})`);
+		links.push(...this.getSourceLinks(resolvedSources, item.url));
+		if (links.length > 0) {
+			lines.push(`> ${links.join(' | ')}`);
+		}
 
-`;
+		return lines.join('\n') + '\n\n';
 	}
 
 	private getImageUrl(item: EagleItem): string | null {
@@ -1383,7 +1393,7 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 
 			if (item && this.settings.insertThumbnail) {
 				const sources = await this.resolveMetadataSources(item, sourceInfo, effectiveLocalPath);
-				markdownImage += '\n\n' + this.buildMetadataCard(item, sources, cloudUrl);
+				markdownImage = appendMetadataCard(markdownImage, this.buildMetadataCard(item, sources, cloudUrl));
 			}
 
 			this.replaceTextInDocument(editor, placeholderText, markdownImage);
@@ -1432,7 +1442,7 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 				let markdownImage = `![${file.name}](${result.publicUrl})`;
 
 				if (this.settings.insertThumbnail) {
-					markdownImage += '\n\n' + await this.buildCloudMetadataCard(file, result.publicUrl, sourceInfo, localFilePath);
+					markdownImage = appendMetadataCard(markdownImage, await this.buildCloudMetadataCard(file, result.publicUrl, sourceInfo, localFilePath));
 				}
 
 				this.replaceTextInDocument(editor, placeholderText, markdownImage);
@@ -2100,7 +2110,7 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 		if (url) {
 			let markdown = `![${filename}](${url})`;
 			if (this.settings.insertThumbnail) {
-				markdown += '\n\n' + this.buildMetadataCard(item, sources, cloudUrl);
+				markdown = appendMetadataCard(markdown, this.buildMetadataCard(item, sources, cloudUrl));
 			}
 			editor.replaceSelection(markdown);
 			new Notice(`Embedded: ${filename}`);
@@ -2120,7 +2130,7 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 			const fileUrl = this.pathToFileUrl(filePath);
 			let markdown = `![${filename}](${fileUrl})`;
 			if (this.settings.insertThumbnail) {
-				markdown += '\n\n' + this.buildMetadataCard(item, sources);
+				markdown = appendMetadataCard(markdown, this.buildMetadataCard(item, sources));
 			}
 			editor.replaceSelection(markdown);
 			new Notice(`Embedded: ${filename}`);
@@ -2516,7 +2526,7 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 		let card: string | null = null;
 		if (withCard) {
 			const sources = await this.resolveMetadataSources(item);
-			card = this.buildMetadataCard(item, sources, cloudUrl);
+			card = this.buildMetadataCard(item, sources, cloudUrl) || null;
 		}
 
 		void this.applyObsidianBacklink(item.id);
@@ -2554,7 +2564,7 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 				let card: string | null = null;
 				if (withCard && item) {
 					const sources = await this.resolveMetadataSources(item, sourceInfo, localPath);
-					card = this.buildMetadataCard(item, sources, cloudUrl);
+					card = this.buildMetadataCard(item, sources, cloudUrl) || null;
 				}
 				return { kind: 'url', url, name: item ? `${item.name}.${item.ext}` : file.name, width, height, card };
 			} catch (error) {
@@ -2577,7 +2587,7 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || 'None'} |\
 				const result = await provider.upload(tempPath, file.name, getMimeType(getExtFromFilename(file.name)));
 				if (result.success && result.publicUrl) {
 					const card = withCard
-						? await this.buildCloudMetadataCard(file, result.publicUrl, sourceInfo, localPath)
+						? (await this.buildCloudMetadataCard(file, result.publicUrl, sourceInfo, localPath)) || null
 						: null;
 					return { kind: 'url', url: result.publicUrl, name: file.name, width, height, card };
 				}
