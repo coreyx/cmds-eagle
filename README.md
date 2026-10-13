@@ -72,6 +72,19 @@ Below the choices is an **Also upload to the cloud** toggle (shown with your pro
 2. **Your Custom URL prefix** (**Settings → Embedding**), when it has no cloud copy: the image is loaded from the Eagle library through your own HTTP/WebDAV server.
 3. **The file path on this computer**, when no Custom URL prefix is set. Such a link only displays on this computer, so the dialog says so before you choose, settings shows a warning while the prefix is empty, and a notice appears the first time it happens in a session.
 
+**Custom URL address format** (shown once a prefix is set) decides how an item's address under your prefix is written:
+
+| Format | Address | Works with |
+|--------|---------|------------|
+| **Item ID** (default) | `https://eagle.example.com/item/<ID>/<name>.png` | A server that looks items up by their ID, such as Eagle Serve with item addresses turned on. The link keeps working when the item or the library is renamed; the file name on the end is only there for readability. |
+| **Library path** | `https://eagle.example.com/Main.library/images/<ID>.info/<name>.png` | Any web or WebDAV server that serves the library folder. The link breaks if the item or the library is renamed. |
+
+With **Item ID**, **Include the file name** (on by default) decides whether the address ends with the item's file name. Turned off, the address is just `https://eagle.example.com/item/<ID>`. The server ignores the name, so the link works either way. The name makes the link readable and gives it an extension, which some programs use to tell what a link is; a name in a link does not follow later renames in Eagle.
+
+If you already had a Custom URL prefix before this setting existed, it stays on **Library path** so your links keep working; switch it to **Item ID** once your server supports it. Links already in your notes are not rewritten.
+
+**Embedded image size** chooses between the **full-size image** (default) and the **thumbnail**, the small preview Eagle keeps beside an item. It applies to links that use your Custom URL prefix or a file path; a cloud copy is always the full-size image. Eagle makes no thumbnail for images that are already small, and those are embedded full size. The "Paste Eagle item" dialog shows the same choice as an **Embed thumbnail** toggle, so you can decide differently for one item.
+
 **Always use Custom URL prefix** (shown once a prefix is set) links to your own server even when an image has a cloud copy. Use it with **Also upload to the cloud** on when you want every image to have a cloud copy, as a share link listed in the metadata card and in Eagle Extra Links, while all your notes load images from your own server. If you do not want cloud copies at all, turn **Also upload to the cloud** off instead.
 
 The same rule applies when you embed an existing Eagle item from search or by pasting an Eagle link or library file path. Without a dialog, **Also upload to the cloud** follows the setting.

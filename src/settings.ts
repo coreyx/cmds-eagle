@@ -8,6 +8,7 @@ import {
 	ImagePasteBehavior,
 	BacklinkMode,
 	EagleLinkPasteMode,
+	EagleCustomUrlFormat,
 	CanvasNodeType,
 	AiProviderType,
 	AiEffort,
@@ -312,6 +313,31 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 			});
 		} else {
 			new Setting(containerEl)
+				.setName('Custom URL address format')
+				.setDesc('How an item\'s address under the prefix is written. Item ID (<prefix>/item/<ID>/<name>.png) keeps working when the item or the library is renamed, and needs a server that looks items up by ID, such as Eagle Serve with item addresses turned on. Library path (<prefix>/Main.library/images/<ID>.info/<name>.png) works with any web or WebDAV server that serves the library folder, but breaks on a rename.')
+				.addDropdown(dropdown => dropdown
+					.addOption('item-id', 'Item ID')
+					.addOption('library-path', 'Library path')
+					.setValue(this.plugin.settings.eagleCustomUrlFormat === 'library-path' ? 'library-path' : 'item-id')
+					.onChange(async (value: EagleCustomUrlFormat) => {
+						this.plugin.settings.eagleCustomUrlFormat = value;
+						await this.plugin.saveSettings();
+						this.display();
+					}));
+
+			if (this.plugin.settings.eagleCustomUrlFormat !== 'library-path') {
+				new Setting(containerEl)
+					.setName('Include the file name')
+					.setDesc('End an item ID address with the item\'s file name: <prefix>/item/<ID>/<name>.png instead of <prefix>/item/<ID>. The server ignores the name, so the link works either way; it makes the link readable and gives it an extension, which some programs use to tell what a link is. A name in a link does not follow later renames in Eagle.')
+					.addToggle(toggle => toggle
+						.setValue(this.plugin.settings.eagleCustomUrlIncludeName)
+						.onChange(async (value) => {
+							this.plugin.settings.eagleCustomUrlIncludeName = value;
+							await this.plugin.saveSettings();
+						}));
+			}
+
+			new Setting(containerEl)
 				.setName('Always use Custom URL prefix')
 				.setDesc('Link to your own server even when an image has a cloud copy. With "Also upload to the cloud" on, the copy is still made and listed in the metadata card and in Eagle Extra Links, but the embed does not use it.')
 				.addToggle(toggle => toggle
@@ -321,6 +347,18 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}));
 		}
+
+		new Setting(containerEl)
+			.setName('Embedded image size')
+			.setDesc('Whether an embed loads the full-size image or the small preview Eagle keeps beside it. Applies to links that use your Custom URL prefix or a file path; a cloud copy is always the full-size image. An item Eagle made no preview for is embedded full size. The "Paste Eagle item" dialog shows this as a toggle, so you can decide differently for one item.')
+			.addDropdown(dropdown => dropdown
+				.addOption('full', 'Full-size image')
+				.addOption('thumbnail', 'Thumbnail')
+				.setValue(this.plugin.settings.eagleEmbedThumbnail ? 'thumbnail' : 'full')
+				.onChange(async (value) => {
+					this.plugin.settings.eagleEmbedThumbnail = value === 'thumbnail';
+					await this.plugin.saveSettings();
+				}));
 
 		new Setting(containerEl)
 			.setName('When pasting an Eagle item')

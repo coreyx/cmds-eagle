@@ -295,7 +295,11 @@ export class EagleSearchModal extends FuzzySuggestModal<EagleItem> {
 				return;
 			}
 
-			const filePath = await this.api.getOriginalFilePath(item);
+			// The local file: its thumbnail when the "Embedded image size" setting asks for one
+			const thumbnailPath = this.settings.eagleEmbedThumbnail && item.noThumbnail !== true
+				? await this.api.getThumbnailPath(item.id)
+				: null;
+			const filePath = thumbnailPath || await this.api.getOriginalFilePath(item);
 			if (filePath) {
 				const fileUrl = this.pathToFileUrl(filePath);
 				let output = `![${filename}](${fileUrl})`;
@@ -1799,10 +1803,17 @@ export class EagleLinkChoiceModal extends Modal {
 	// no provider is set up (the toggle is then left out)
 	private cloud: { providerName: string; alsoCloud: boolean } | null;
 
-	constructor(app: App, item: EagleItem, cloud: { providerName: string; alsoCloud: boolean } | null = null) {
+	constructor(
+		app: App,
+		item: EagleItem,
+		cloud: { providerName: string; alsoCloud: boolean } | null = null,
+		// Starting state of "Embed thumbnail"
+		useThumbnail = false
+	) {
 		super(app);
 		this.item = item;
 		this.cloud = cloud;
+		this.response.useThumbnail = useThumbnail;
 		this.response.alsoCloud = !!cloud && cloud.alsoCloud;
 	}
 
@@ -1830,12 +1841,14 @@ export class EagleLinkChoiceModal extends Modal {
 
 		const optionsContainer = contentEl.createDiv();
 
-		const hasThumbnail = this.item.noThumbnail === false;
+		// Eagle sets noThumbnail to true for an item it made no thumbnail for, and leaves the
+		// field out otherwise
+		const hasThumbnail = this.item.noThumbnail !== true;
 
 		if (hasThumbnail) {
 			const thumbnailSetting = new Setting(optionsContainer)
 				.setName('Embed thumbnail')
-				.setDesc('Embed the thumbnail image instead of the original asset')
+				.setDesc('Embed the small preview instead of the full-size image. A cloud copy is always full size.')
 				.addToggle((toggle) => {
 					toggle.setValue(this.response.useThumbnail).onChange((value) => {
 						this.response.useThumbnail = value;

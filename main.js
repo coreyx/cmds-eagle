@@ -85,6 +85,9 @@ var init_types = __esm({
       eagleAlsoUploadToCloud: true,
       eagleCustomUrlPrefix: "",
       eagleAlwaysUseCustomUrl: false,
+      eagleCustomUrlFormat: "item-id",
+      eagleCustomUrlIncludeName: true,
+      eagleEmbedThumbnail: false,
       eagleItemLinkFormat: "http",
       enableImageSourceUrl: true,
       imageSourceUrlPriority: "page-first",
@@ -243,6 +246,15 @@ function buildEagleCustomEmbedUrl(prefix, libraryName, itemId, filenameWithoutEx
   const cleanExt = ext.replace(/^\./, "");
   const targetFile = isThumbnail ? `${encodeURIComponent(filenameWithoutExt)}_thumbnail.png` : `${encodeURIComponent(filenameWithoutExt)}.${cleanExt}`;
   return `${cleanPrefix}/${libDir}/images/${itemId}.info/${targetFile}`;
+}
+function buildEagleItemIdEmbedUrl(prefix, itemId, filenameWithoutExt, ext, isThumbnail, includeName = true) {
+  const cleanPrefix = prefix.replace(/\/+$/, "");
+  if (!includeName) {
+    return `${cleanPrefix}/${isThumbnail ? "thumbnail" : "item"}/${itemId}`;
+  }
+  const cleanExt = ext.replace(/^\./, "");
+  const name = encodeURIComponent(filenameWithoutExt);
+  return isThumbnail ? `${cleanPrefix}/thumbnail/${itemId}/${name}_thumbnail.png` : `${cleanPrefix}/item/${itemId}/${name}.${cleanExt}`;
 }
 function getR2KeyFromItem(item) {
   const r2Tag = item.tags.find((t) => t.startsWith("r2:"));
@@ -1105,7 +1117,8 @@ var init_modals = __esm({
             new import_obsidian2.Notice(`Embedded: ${item.name}`);
             return;
           }
-          const filePath = await this.api.getOriginalFilePath(item);
+          const thumbnailPath = this.settings.eagleEmbedThumbnail && item.noThumbnail !== true ? await this.api.getThumbnailPath(item.id) : null;
+          const filePath = thumbnailPath || await this.api.getOriginalFilePath(item);
           if (filePath) {
             const fileUrl = this.pathToFileUrl(filePath);
             let output = `![${filename}](${fileUrl})`;
@@ -2272,7 +2285,7 @@ ${template.text}` : template.text;
       }
     };
     EagleLinkChoiceModal = class extends import_obsidian2.Modal {
-      constructor(app, item, cloud = null) {
+      constructor(app, item, cloud = null, useThumbnail = false) {
         super(app);
         this.response = {
           choice: "embed",
@@ -2284,6 +2297,7 @@ ${template.text}` : template.text;
         this.cloudSettingEl = null;
         this.item = item;
         this.cloud = cloud;
+        this.response.useThumbnail = useThumbnail;
         this.response.alsoCloud = !!cloud && cloud.alsoCloud;
       }
       onOpen() {
@@ -2304,9 +2318,9 @@ ${template.text}` : template.text;
           text: "Inline Link"
         });
         const optionsContainer = contentEl.createDiv();
-        const hasThumbnail = this.item.noThumbnail === false;
+        const hasThumbnail = this.item.noThumbnail !== true;
         if (hasThumbnail) {
-          const thumbnailSetting = new import_obsidian2.Setting(optionsContainer).setName("Embed thumbnail").setDesc("Embed the thumbnail image instead of the original asset").addToggle((toggle) => {
+          const thumbnailSetting = new import_obsidian2.Setting(optionsContainer).setName("Embed thumbnail").setDesc("Embed the small preview instead of the full-size image. A cloud copy is always full size.").addToggle((toggle) => {
             toggle.setValue(this.response.useThumbnail).onChange((value) => {
               this.response.useThumbnail = value;
             });
@@ -3893,11 +3907,26 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian5.PluginSettingTab {
         cls: "setting-item-description cmdspace-eagle-setting-required"
       });
     } else {
+      new import_obsidian5.Setting(containerEl).setName("Custom URL address format").setDesc("How an item's address under the prefix is written. Item ID (<prefix>/item/<ID>/<name>.png) keeps working when the item or the library is renamed, and needs a server that looks items up by ID, such as Eagle Serve with item addresses turned on. Library path (<prefix>/Main.library/images/<ID>.info/<name>.png) works with any web or WebDAV server that serves the library folder, but breaks on a rename.").addDropdown((dropdown) => dropdown.addOption("item-id", "Item ID").addOption("library-path", "Library path").setValue(this.plugin.settings.eagleCustomUrlFormat === "library-path" ? "library-path" : "item-id").onChange(async (value) => {
+        this.plugin.settings.eagleCustomUrlFormat = value;
+        await this.plugin.saveSettings();
+        this.display();
+      }));
+      if (this.plugin.settings.eagleCustomUrlFormat !== "library-path") {
+        new import_obsidian5.Setting(containerEl).setName("Include the file name").setDesc("End an item ID address with the item's file name: <prefix>/item/<ID>/<name>.png instead of <prefix>/item/<ID>. The server ignores the name, so the link works either way; it makes the link readable and gives it an extension, which some programs use to tell what a link is. A name in a link does not follow later renames in Eagle.").addToggle((toggle) => toggle.setValue(this.plugin.settings.eagleCustomUrlIncludeName).onChange(async (value) => {
+          this.plugin.settings.eagleCustomUrlIncludeName = value;
+          await this.plugin.saveSettings();
+        }));
+      }
       new import_obsidian5.Setting(containerEl).setName("Always use Custom URL prefix").setDesc('Link to your own server even when an image has a cloud copy. With "Also upload to the cloud" on, the copy is still made and listed in the metadata card and in Eagle Extra Links, but the embed does not use it.').addToggle((toggle) => toggle.setValue(this.plugin.settings.eagleAlwaysUseCustomUrl).onChange(async (value) => {
         this.plugin.settings.eagleAlwaysUseCustomUrl = value;
         await this.plugin.saveSettings();
       }));
     }
+    new import_obsidian5.Setting(containerEl).setName("Embedded image size").setDesc('Whether an embed loads the full-size image or the small preview Eagle keeps beside it. Applies to links that use your Custom URL prefix or a file path; a cloud copy is always the full-size image. An item Eagle made no preview for is embedded full size. The "Paste Eagle item" dialog shows this as a toggle, so you can decide differently for one item.').addDropdown((dropdown) => dropdown.addOption("full", "Full-size image").addOption("thumbnail", "Thumbnail").setValue(this.plugin.settings.eagleEmbedThumbnail ? "thumbnail" : "full").onChange(async (value) => {
+      this.plugin.settings.eagleEmbedThumbnail = value === "thumbnail";
+      await this.plugin.saveSettings();
+    }));
     new import_obsidian5.Setting(containerEl).setName("When pasting an Eagle item").setDesc("What to insert when you paste an Eagle item link, or an image copied inside Eagle.").addDropdown((dropdown) => dropdown.addOption("ask", "Ask every time").addOption("embed", "Embed the image").addOption("inline", "Insert a link").setValue(this.plugin.settings.eagleLinkPasteMode).onChange(async (value) => {
       this.plugin.settings.eagleLinkPasteMode = value;
       await this.plugin.saveSettings();
@@ -5292,6 +5321,10 @@ var CMDSPACELinkEagle = class extends import_obsidian6.Plugin {
       this.settings.addFolderMode = this.settings.enableDefaultFolder ? "target" : "target";
       await this.saveSettings();
     }
+    if (saved && saved.eagleCustomUrlFormat === void 0 && (saved.eagleCustomUrlPrefix || "").trim() !== "" && saved.eagleCustomUrlPrefix !== "https://localhost:8080") {
+      this.settings.eagleCustomUrlFormat = "library-path";
+      await this.saveSettings();
+    }
     if (saved && saved.enableVaultDestination === void 0 && this.settings.imagePasteBehavior === "local") {
       this.settings.enableVaultDestination = true;
       await this.saveSettings();
@@ -6402,9 +6435,12 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || "None"} |
    * prefix" on, the link is the prefix address even when there is a cloud copy.
    * `portable` is for surfaces that cannot use a file path at all: with no prefix set, a
    * cloud copy is uploaded whatever `alsoCloud` says, as the only link that can work.
+   *
+   * Under the prefix, the address is the item's thumbnail when `useThumbnail` says so, which
+   * defaults to the "Embedded image size" setting. A cloud copy is always the full-size image.
    */
   async resolveEagleEmbedUrl(item, getFilePath, options = {}) {
-    var _a;
+    var _a, _b;
     const alsoCloud = (_a = options.alsoCloud) != null ? _a : this.settings.eagleAlsoUploadToCloud;
     const hasPrefix = this.hasCustomUrlPrefix();
     const preferPrefix = hasPrefix && this.settings.eagleAlwaysUseCustomUrl;
@@ -6418,14 +6454,28 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || "None"} |
     if (cloudUrl && !preferPrefix)
       return { url: cloudUrl, cloudUrl };
     if (hasPrefix) {
+      const prefix = this.settings.eagleCustomUrlPrefix.trim();
+      const wantThumbnail = (_b = options.useThumbnail) != null ? _b : this.settings.eagleEmbedThumbnail;
+      if (this.settings.eagleCustomUrlFormat !== "library-path") {
+        const url2 = buildEagleItemIdEmbedUrl(
+          prefix,
+          item.id,
+          item.name,
+          item.ext,
+          wantThumbnail && item.noThumbnail !== true,
+          this.settings.eagleCustomUrlIncludeName
+        );
+        return { url: url2, cloudUrl };
+      }
       const libraryName = await this.api.getLibraryName() || "Main";
       const url = buildEagleCustomEmbedUrl(
-        this.settings.eagleCustomUrlPrefix.trim(),
+        prefix,
         libraryName,
         item.id,
         item.name,
         item.ext,
-        !!options.useThumbnail
+        // A plain file server has nothing at the thumbnail address when Eagle made none
+        wantThumbnail && item.noThumbnail !== true
       );
       return { url, cloudUrl };
     }
@@ -6628,12 +6678,14 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || "None"} |
       const ext = item ? item.ext : file.extension;
       const name = item ? item.name : filenameWithoutExt;
       let { url: imageUrl } = await this.resolveEagleEmbedUrl(
-        { id: result.itemId, name, ext, tags: item == null ? void 0 : item.tags },
+        { id: result.itemId, name, ext, tags: item == null ? void 0 : item.tags, noThumbnail: item ? item.noThumbnail : true },
         async () => absolutePath,
         { after: backlinkDone, isNew: true }
       );
       if (!imageUrl) {
-        imageUrl = thumbnailPath ? this.pathToFileUrl(thumbnailPath) : `eagle://item/${result.itemId}`;
+        const originalPath = this.settings.eagleEmbedThumbnail ? null : await this.getEagleItemFilePath(result.itemId, name, ext);
+        const localPath = originalPath || thumbnailPath;
+        imageUrl = localPath ? this.pathToFileUrl(localPath) : `eagle://item/${result.itemId}`;
         this.warnLocalOnlyLink();
       }
       const markdownImage = `![${file.basename}](${imageUrl})`;
@@ -6753,33 +6805,35 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || "None"} |
   // links and pasted library file paths so both behave the same.
   async pasteEagleItem(item, editor) {
     let action = "embed";
-    let useThumbnail = false;
+    let useThumbnail;
     let alsoCloud;
     if (this.settings.eagleLinkPasteMode === "ask") {
       const hasProvider = !!this.getActiveCloudProvider();
-      const modal = new EagleLinkChoiceModal(this.app, item, hasProvider ? { providerName: this.getActiveCloudProviderName(), alsoCloud: this.settings.eagleAlsoUploadToCloud } : null);
+      const modal = new EagleLinkChoiceModal(this.app, item, hasProvider ? { providerName: this.getActiveCloudProviderName(), alsoCloud: this.settings.eagleAlsoUploadToCloud } : null, this.settings.eagleEmbedThumbnail);
       modal.open();
       const response = await modal.getResponse();
       if (response.choice === "cancel") {
         return;
       }
       const answeredCloud = response.choice === "embed" && hasProvider;
+      const answeredThumbnail = response.choice === "embed" && item.noThumbnail !== true;
       if (response.rememberChoice) {
         this.settings.eagleLinkPasteMode = response.choice;
         if (answeredCloud)
           this.settings.eagleAlsoUploadToCloud = response.alsoCloud;
+        if (answeredThumbnail)
+          this.settings.eagleEmbedThumbnail = response.useThumbnail;
         await this.saveSettings();
       }
       action = response.choice;
-      useThumbnail = response.useThumbnail;
+      if (answeredThumbnail)
+        useThumbnail = response.useThumbnail;
       if (answeredCloud)
         alsoCloud = response.alsoCloud;
     } else if (this.settings.eagleLinkPasteMode === "embed") {
       action = "embed";
-      useThumbnail = false;
     } else if (this.settings.eagleLinkPasteMode === "inline") {
       action = "inline";
-      useThumbnail = false;
     }
     if (action === "embed") {
       await this.insertEagleEmbed(editor, item, useThumbnail, alsoCloud);
@@ -6806,7 +6860,7 @@ ${this.settings.includeTagsInMetadataCard ? `> | **Tags** | ${tags || "None"} |
       return;
     }
     let filePath = null;
-    if (useThumbnail) {
+    if ((useThumbnail != null ? useThumbnail : this.settings.eagleEmbedThumbnail) && item.noThumbnail !== true) {
       filePath = await this.api.getThumbnailPath(item.id);
     }
     if (!filePath) {
@@ -7605,7 +7659,9 @@ ${updates.annotation}`;
         lastModified: Date.now(),
         width: 0,
         height: 0,
-        palettes: []
+        palettes: [],
+        // Unknown, so no thumbnail is assumed
+        noThumbnail: true
       };
     }
     const extraLinksDone = (async () => {
@@ -7618,7 +7674,7 @@ ${updates.annotation}`;
     const ext = item ? item.ext : getExtFromFilename(file.name);
     const nameWithoutExt = item ? item.name : filenameWithoutExt;
     const resolved = await this.resolveEagleEmbedUrl(
-      { id: itemId, name: nameWithoutExt, ext, tags: item == null ? void 0 : item.tags },
+      { id: itemId, name: nameWithoutExt, ext, tags: item == null ? void 0 : item.tags, noThumbnail: item == null ? void 0 : item.noThumbnail },
       async () => tempPath,
       {
         alsoCloud: options.alsoCloud,
@@ -7634,7 +7690,8 @@ ${updates.annotation}`;
       if (options.portable) {
         throw new Error(PORTABLE_URL_FAILED);
       }
-      const localPath = thumbnailPath || (item ? await this.api.getOriginalFilePath(item) : null) || tempPath;
+      const originalPath = item ? await this.api.getOriginalFilePath(item) : null;
+      const localPath = (this.settings.eagleEmbedThumbnail ? thumbnailPath : null) || originalPath || thumbnailPath || tempPath;
       embedUrl = this.pathToFileUrl(localPath);
       this.warnLocalOnlyLink();
     }

@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Custom URL Address Format**: A setting under **Settings → Embedding**, shown once a Custom URL prefix is set. **Item ID** (the default) writes an item's address as `<prefix>/item/<ID>/<name>.<ext>`, which keeps working when the item or the library is renamed and needs a server that looks items up by ID, such as Eagle Serve. **Library path** writes `<prefix>/<Library>.library/images/<ID>.info/<name>.<ext>` as before, for any web or WebDAV server. A prefix saved before this setting existed stays on Library path.
+- **Include the File Name**: With the Item ID format, a toggle (on by default) for whether the address ends with the item's file name. Off, the address is just `<prefix>/item/<ID>`.
+- **Embedded Image Size**: Choose between the full-size image (default) and the thumbnail Eagle keeps beside an item. It applies to Custom URL prefix and file path links; a cloud copy is always full size, and an item Eagle made no thumbnail for is embedded full size. The "Embed thumbnail" toggle in the "Paste Eagle item" dialog starts from this setting.
+
+### Fixed
+- **"Embed Thumbnail" Toggle Never Appeared**: The "Paste Eagle item" dialog only offered the toggle when Eagle reported `noThumbnail: false`, but Eagle leaves that field out for items that have a thumbnail. The toggle is now offered for every item except those Eagle made no thumbnail for.
+
 ## [1.11.0] - 2026-10-12
 
 ### Added

@@ -18,6 +18,7 @@ export interface EagleItem {
 	lastModified: number;
 	width: number;
 	height: number;
+	// True when Eagle made no thumbnail (the image is already small); absent otherwise
 	noThumbnail?: boolean;
 	palettes: EaglePalette[];
 	star?: number;
@@ -89,6 +90,11 @@ export type ImagePasteBehavior = 'eagle' | 'local' | 'cloud' | 'ask';
 export type BacklinkMode = 'extra-links' | 'legacy';
 
 export type EagleLinkPasteMode = 'ask' | 'embed' | 'inline';
+
+// How an item's address under the Custom URL prefix is written: by its ID (the default; it
+// survives renames, and needs a server that looks items up, such as Eagle Serve), or by its
+// place in the library folder (any web or WebDAV server)
+export type EagleCustomUrlFormat = 'item-id' | 'library-path';
 
 export type CanvasNodeType = 'text' | 'link' | 'ask';
 
@@ -335,6 +341,12 @@ export interface CMDSPACEEagleSettings {
 	eagleCustomUrlPrefix: string;
 	// Link to the Custom URL prefix even for an image that has a cloud copy
 	eagleAlwaysUseCustomUrl: boolean;
+	eagleCustomUrlFormat: EagleCustomUrlFormat;
+	// For the item ID format: end the address with the item's file name
+	eagleCustomUrlIncludeName: boolean;
+	// Embed the small preview Eagle keeps beside an item instead of the full-size image.
+	// Applies to Custom URL prefix and file path links; a cloud copy is always full size.
+	eagleEmbedThumbnail: boolean;
 	eagleItemLinkFormat: EagleItemLinkFormat;
 	enableImageSourceUrl: boolean;
 	imageSourceUrlPriority: ImageSourceUrlPriority;
@@ -410,6 +422,9 @@ export const DEFAULT_SETTINGS: CMDSPACEEagleSettings = {
 	eagleAlsoUploadToCloud: true,
 	eagleCustomUrlPrefix: '',
 	eagleAlwaysUseCustomUrl: false,
+	eagleCustomUrlFormat: 'item-id',
+	eagleCustomUrlIncludeName: true,
+	eagleEmbedThumbnail: false,
 	eagleItemLinkFormat: 'http',
 	enableImageSourceUrl: true,
 	imageSourceUrlPriority: 'page-first',

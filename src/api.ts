@@ -702,6 +702,32 @@ export function buildEagleCustomEmbedUrl(
 	return `${cleanPrefix}/${libDir}/images/${itemId}.info/${targetFile}`;
 }
 
+/**
+ * Address of an Eagle item on a server that finds items by their ID alone, such as Eagle
+ * Serve: `<prefix>/item/<ID>/<name>.<ext>`, or `<prefix>/thumbnail/<ID>/<name>_thumbnail.png`
+ * for its preview. The server ignores the file name; it is there for people reading the link
+ * and for programs that go by the extension, and `includeName` false leaves it off. Unlike the
+ * library path form, the address keeps working when the item or the library is renamed.
+ */
+export function buildEagleItemIdEmbedUrl(
+	prefix: string,
+	itemId: string,
+	filenameWithoutExt: string,
+	ext: string,
+	isThumbnail: boolean,
+	includeName = true
+): string {
+	const cleanPrefix = prefix.replace(/\/+$/, '');
+	if (!includeName) {
+		return `${cleanPrefix}/${isThumbnail ? 'thumbnail' : 'item'}/${itemId}`;
+	}
+	const cleanExt = ext.replace(/^\./, '');
+	const name = encodeURIComponent(filenameWithoutExt);
+	return isThumbnail
+		? `${cleanPrefix}/thumbnail/${itemId}/${name}_thumbnail.png`
+		: `${cleanPrefix}/item/${itemId}/${name}.${cleanExt}`;
+}
+
 export function buildEagleLocalhostThumbnailUrl(baseUrl: string, id: string): string {
 	return `${baseUrl}/api/item/thumbnail?id=${id}`;
 }
