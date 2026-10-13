@@ -1,5 +1,31 @@
 # Release Notes
 
+## 1.12.0 - 2026-10-12
+
+This release also contains everything listed under 1.11.0 below, which was not published on its own.
+
+### Links to Your Own Server That Survive Renames
+
+A link through your Custom URL prefix used to spell out the library name and the item's file name, so renaming either one in Eagle broke it. A new **Custom URL address format** setting (under **Settings → Embedding**, shown once a prefix is set) offers a second form built from the item's ID alone.
+
+* **Item ID** (the default): `https://eagle.example.com/item/<ID>/<name>.png`. It keeps working when the item or the library is renamed. It needs a server that looks items up by their ID, such as Eagle Serve with item addresses turned on.
+* **Library path**: `https://eagle.example.com/Main.library/images/<ID>.info/<name>.png`, as before. It works with any web or WebDAV server that serves the library folder.
+* **Include the file name** (on by default, for Item ID): turn it off for the shortest form, `https://eagle.example.com/item/<ID>`. The server ignores the name, so the link works either way.
+
+If you already had a Custom URL prefix, it stays on **Library path** so your links keep working; switch it to **Item ID** once your server supports it. Links already in your notes are not rewritten.
+
+### Embed the Thumbnail or the Full-Size Image
+
+A new **Embedded image size** setting chooses between the **full-size image** (the default) and the **thumbnail**, the small preview Eagle keeps beside an item.
+
+* **It applies to** links that use your Custom URL prefix or a file path. A cloud copy is always the full-size image.
+* **Images Eagle made no thumbnail for,** because they are already small, are embedded full size.
+* **Per item:** the "Paste Eagle item" dialog has an **Embed thumbnail** toggle that starts from this setting.
+
+### Fixes
+
+* **The "Embed thumbnail" toggle now appears.** It was meant to show in the "Paste Eagle item" dialog for any item with a thumbnail, but never did.
+
 ## 1.11.0 - 2026-10-12
 
 This release requires Obsidian 1.5.7 or later.
