@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.14.0] - 2026-10-12
+
 ### Added
 - **Export and Import Settings**: Under **Settings → Extras**, save every setting to a `.json` file or the clipboard, and load one again. Passwords and API keys are left out of an export unless "Include passwords and API keys" is turned on. An import first shows the name of each setting that would change and waits for confirmation; it only replaces what the file contains, so a file without credentials keeps the ones already saved. Settings the running version does not know are skipped and listed, and a plain copy of `data.json` can be imported too.
 

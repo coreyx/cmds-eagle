@@ -1,5 +1,17 @@
 # Release Notes
 
+## 1.14.0 - 2026-10-12
+
+### Export and Import Your Settings
+
+Eagle Bridge has a lot of settings. You can now save all of them to a file and load them again, as a backup or to carry your setup to another vault or computer. Find it under **Settings → Extras → Export and import settings**.
+
+* **Export:** **Save to file** writes a `.json` file where you choose, and **Copy** puts the same text on the clipboard.
+* **Passwords and API keys stay out by default.** An export leaves out your cloud storage and AI credentials but keeps server addresses, user names and model names. Turn on **Include passwords and API keys** to carry them too; the file then holds them as readable text, so keep it somewhere private.
+* **Import:** **Choose file** or **Paste**. You are shown the name of every setting that would change, and nothing changes until you confirm.
+* **An import only replaces what the file contains.** A file exported without credentials leaves the ones already saved in place, so loading it on a computer that is already set up does not sign you out of anything.
+* **Files from other versions still load.** Entries this version does not know are skipped and listed. A plain copy of the plugin's `data.json` can be imported the same way.
+
 ## 1.13.0 - 2026-10-12
 
 ### Choose What the Metadata Card Shows
