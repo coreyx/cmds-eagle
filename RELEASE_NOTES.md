@@ -1,5 +1,26 @@
 # Release Notes
 
+## 1.13.0 - 2026-10-12
+
+### Choose What the Metadata Card Shows
+
+The card added below an embedded image has a setting for each of its parts, under **Settings → Embedding → Metadata card**. Six are new:
+
+* **File type**, such as `PNG`
+* **File size**, such as `3.4 MB`
+* **Dimensions**, the width and height in pixels
+* **Cloud or local icon**, ☁️ when the image has a cloud copy and 📁 when it does not
+* **"Open in Eagle" link**
+* **Cloud link**, to the image's cloud copy
+
+They join the existing settings for tags, source links and the local file link. Everything is on by default, so your cards look the same until you change something.
+
+* **A preview** above the settings shows the card as you have it set, and updates as you turn parts on and off.
+* **Empty rows are dropped.** Turn off every fact and the card is just its row of links; turn off every part and no card is added.
+* **The same settings apply** to the larger card inserted with a link to an item, and to the card added by search.
+
+Cards already in your notes keep their text.
+
 ## 1.12.0 - 2026-10-12
 
 This release also contains everything listed under 1.11.0 below, which was not published on its own.

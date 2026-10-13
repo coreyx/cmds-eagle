@@ -1,7 +1,7 @@
 {
 	"id": "eagle-bridge",
 	"name": "Eagle Bridge",
-	"version": "1.12.0",
+	"version": "1.13.0",
 	"minAppVersion": "1.5.7",
 	"description": "Connect Eagle asset library to your vault. Search, embed, and upload images to cloud (ImgHippo, R2, S3, WebDAV).",
 	"author": "Corey Struzan",

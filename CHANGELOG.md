@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-10-12
+
 ### Added
 - **A Setting for Each Part of the Metadata Card**: Under **Settings → Embedding → Metadata card**, the file type, file size, dimensions, cloud or local icon, "Open in Eagle" link and cloud link can each be turned off, alongside the existing settings for tags, source links and the local file link. All are on by default, so existing cards are unchanged. A row with nothing left in it is dropped, and with every part off no card is added.
 - **Metadata Card Preview**: The settings show the card as it is currently set up, updating as parts are turned on and off.

@@ -1,6 +1,6 @@
 {
 	"name": "eagle-bridge",
-	"version": "1.12.0",
+	"version": "1.13.0",
 	"description": "Eagle Bridge - Obsidian plugin for Eagle integration",
 	"main": "main.js",
 	"scripts": {

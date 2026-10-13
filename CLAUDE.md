@@ -32,7 +32,7 @@ src/
 ## Key Info
 
 - **ID**: `eagle-bridge`
-- **Version**: 1.12.0
+- **Version**: 1.13.0
 - **Desktop only**: yes (Eagle REST API is local)
 - **GitHub**: `coreyx/obsidian-eagle-bridge`
 - **Distribution**: GitHub releases installed via BRAT (not in Community Plugins)
