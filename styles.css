@@ -1056,6 +1056,23 @@ select.cmdspace-eagle-hint-templates {
 	margin: 0 0 4px;
 }
 
+.cmdspace-eagle-import-list {
+	max-height: 220px;
+	overflow-y: auto;
+	margin: 0 0 12px;
+	padding: 8px 12px 8px 28px;
+	background: var(--background-secondary);
+	border-radius: 4px;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+}
+
+.cmdspace-eagle-import-skipped {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	overflow-wrap: anywhere;
+}
+
 .cmdspace-eagle-card-preview {
 	margin: 4px 0 12px;
 	padding: 8px 12px;

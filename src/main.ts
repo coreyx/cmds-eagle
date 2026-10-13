@@ -264,6 +264,18 @@ export default class CMDSPACELinkEagle extends Plugin {
 		}
 	}
 
+	// Replaces every setting with an imported set, then reloads them the way startup does so
+	// the same checks and conversions apply.
+	async applyImportedSettings(settings: CMDSPACEEagleSettings): Promise<void> {
+		await this.saveData(settings);
+		await this.loadSettings();
+		// Also hands the new settings to the Eagle API client
+		await this.saveSettings();
+		this.extraLinksWarningShown = false;
+		this.localLinkWarningShown = false;
+		this.scanAndAttachSurfaces();
+	}
+
 	async saveSettings(): Promise<void> {
 		// Keep each provider's stored `enabled` flag in sync with its credentials
 		for (const config of Object.values(this.settings.cloudProviders)) {

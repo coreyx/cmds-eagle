@@ -1,8 +1,10 @@
-import { App, FuzzySuggestModal, PluginSettingTab, Setting, Notice } from 'obsidian';
+import { App, FuzzySuggestModal, Modal, PluginSettingTab, Setting, Notice } from 'obsidian';
+import { promises } from 'fs';
 import CMDSPACELinkEagle from './main';
 import { EagleApiService } from './api';
 import { WebDAVProvider, isCloudProviderConfigured } from './cloud-providers';
 import { getMetadataCardRows } from './metadata-card';
+import { SettingsImportPlan, buildSettingsExport, isNewerVersion, planSettingsImport, settingsExportFileName } from './settings-transfer';
 import { AI_MAX_TAGS_LIMIT, AI_PROVIDER_LABELS, LM_STUDIO_DEFAULT_URL, detectLmStudio, listAiModels, resolveAiTagLimits, resolveNewTagFormat } from './ai-providers';
 import { 
 	CloudProviderType, 
@@ -55,12 +57,14 @@ const SETTINGS_TABS: Array<{ id: SettingsTabId; label: string; description: stri
 	{ id: 'adding', label: 'Adding images', description: 'What happens when you paste or drop a new image into a note.' },
 	{ id: 'embedding', label: 'Embedding', description: 'How images that are in Eagle appear in your notes.' },
 	{ id: 'ai', label: 'AI', description: 'Optional AI help for naming, describing and tagging images as you add them to Eagle.' },
-	{ id: 'extras', label: 'Extras', description: 'Excalidraw and Canvas support.' },
+	{ id: 'extras', label: 'Extras', description: 'Excalidraw and Canvas support, and exporting or importing these settings.' },
 ];
 
 export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 	plugin: CMDSPACELinkEagle;
 	private activeTab: SettingsTabId = 'connections';
+	// Whether the next export carries passwords and API keys. Asked each time, never saved.
+	private exportIncludesSecrets = false;
 
 	constructor(app: App, plugin: CMDSPACELinkEagle) {
 		super(app, plugin);
@@ -101,6 +105,7 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 			case 'extras':
 				this.renderExcalidrawSection(containerEl);
 				this.renderCanvasSection(containerEl);
+				this.renderSettingsTransferSection(containerEl);
 				break;
 		}
 
@@ -1099,6 +1104,137 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 		})();
 	}
 
+	// ── Export and import ──
+
+	private renderSettingsTransferSection(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName('Export and import settings').setHeading();
+
+		new Setting(containerEl)
+			.setName('Include passwords and API keys')
+			.setDesc('Off: an export leaves out your cloud storage and AI credentials, and importing it keeps whatever credentials are already saved here. On: the file contains them as readable text, so keep it somewhere private.')
+			.addToggle(toggle => toggle
+				.setValue(this.exportIncludesSecrets)
+				.onChange((value) => {
+					this.exportIncludesSecrets = value;
+				}));
+
+		new Setting(containerEl)
+			.setName('Export settings')
+			.setDesc('Save every Eagle Bridge setting to a file, as a backup or to load in another vault or on another computer.')
+			.addButton(button => button
+				.setButtonText('Save to file')
+				.setCta()
+				.onClick(() => { void this.exportSettingsToFile(); }))
+			.addButton(button => button
+				.setButtonText('Copy')
+				.setTooltip('Copy the settings to the clipboard instead')
+				.onClick(async () => {
+					await navigator.clipboard.writeText(this.buildExportText());
+					new Notice(this.exportIncludesSecrets
+						? 'Settings copied, including passwords and API keys'
+						: 'Settings copied, without passwords and API keys');
+				}));
+
+		new Setting(containerEl)
+			.setName('Import settings')
+			.setDesc('Load settings from an exported file. You are shown what would change, and nothing changes until you confirm.')
+			.addButton(button => button
+				.setButtonText('Choose file')
+				.onClick(() => { void this.importSettingsFromFile(); }))
+			.addButton(button => button
+				.setButtonText('Paste')
+				.setTooltip('Read settings copied to the clipboard instead')
+				.onClick(async () => {
+					this.reviewSettingsImport(await navigator.clipboard.readText());
+				}));
+	}
+
+	private buildExportText(): string {
+		const file = buildSettingsExport(this.plugin.settings, this.plugin.manifest.version, this.exportIncludesSecrets);
+		return JSON.stringify(file, null, '\t') + '\n';
+	}
+
+	// Obsidian's own save and open dialogs, as it uses for exporting a PDF. Null if unavailable.
+	private getFileDialog(): { showSaveDialog: (options: unknown) => Promise<{ canceled: boolean; filePath?: string }>; showOpenDialog: (options: unknown) => Promise<{ canceled: boolean; filePaths: string[] }> } | null {
+		try {
+			const electron = (window as any).electron || (window as any).require?.('electron');
+			return electron?.remote?.dialog || null;
+		} catch {
+			return null;
+		}
+	}
+
+	private async exportSettingsToFile(): Promise<void> {
+		const text = this.buildExportText();
+		const fileName = settingsExportFileName();
+		const filters = [{ name: 'Settings files', extensions: ['json'] }];
+
+		try {
+			const dialog = this.getFileDialog();
+			if (dialog) {
+				const result = await dialog.showSaveDialog({ defaultPath: fileName, filters, properties: ['showOverwriteConfirmation'] });
+				if (result.canceled || !result.filePath) return;
+				await promises.writeFile(result.filePath, text, 'utf8');
+				new Notice(`Settings saved to ${result.filePath}`);
+				return;
+			}
+
+			// No dialog to ask with: hand the file to the browser's own download
+			const link = document.createElement('a');
+			link.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+			link.download = fileName;
+			link.click();
+			URL.revokeObjectURL(link.href);
+		} catch (error) {
+			console.error('[Eagle Bridge] Could not export settings:', error);
+			new Notice(`Could not save the settings file: ${error instanceof Error ? error.message : 'unknown error'}`);
+		}
+	}
+
+	private async importSettingsFromFile(): Promise<void> {
+		const filters = [{ name: 'Settings files', extensions: ['json'] }];
+
+		try {
+			const dialog = this.getFileDialog();
+			if (dialog) {
+				const result = await dialog.showOpenDialog({ filters, properties: ['openFile'] });
+				if (result.canceled || result.filePaths.length === 0) return;
+				this.reviewSettingsImport(await promises.readFile(result.filePaths[0], 'utf8'));
+				return;
+			}
+
+			// No dialog to ask with: use a file input
+			const input = document.createElement('input');
+			input.type = 'file';
+			input.accept = '.json,application/json';
+			input.addEventListener('change', () => {
+				const file = input.files?.[0];
+				if (file) void file.text().then(text => this.reviewSettingsImport(text));
+			});
+			input.click();
+		} catch (error) {
+			console.error('[Eagle Bridge] Could not read the settings file:', error);
+			new Notice(`Could not read the settings file: ${error instanceof Error ? error.message : 'unknown error'}`);
+		}
+	}
+
+	// Works out what importing `text` would change and asks before doing it.
+	private reviewSettingsImport(text: string): void {
+		let plan: SettingsImportPlan;
+		try {
+			plan = planSettingsImport(text, this.plugin.settings);
+		} catch (error) {
+			new Notice(error instanceof Error ? error.message : 'This is not an Eagle Bridge settings file.');
+			return;
+		}
+
+		new SettingsImportModal(this.app, plan, this.plugin.manifest.version, async () => {
+			await this.plugin.applyImportedSettings(plan.settings);
+			this.display();
+			new Notice(`Imported settings: ${plan.changed.length} changed`);
+		}).open();
+	}
+
 	private renderCanvasSection(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName('Canvas').setHeading();
 
@@ -1734,5 +1870,80 @@ export class CMDSPACEEagleSettingTab extends PluginSettingTab {
 						this.display();
 					}));
 		}
+	}
+}
+
+// Shows what importing a settings file would change, and imports it only on confirmation.
+class SettingsImportModal extends Modal {
+	constructor(
+		app: App,
+		private plan: SettingsImportPlan,
+		private currentVersion: string,
+		private onConfirm: () => Promise<void>
+	) {
+		super(app);
+	}
+
+	onOpen(): void {
+		const { contentEl, plan } = this;
+		contentEl.empty();
+		contentEl.addClass('cmdspace-eagle-import-modal');
+		contentEl.createEl('h2', { text: 'Import settings?' });
+
+		const exported = plan.exportedAt ? new Date(plan.exportedAt) : null;
+		const when = exported && !isNaN(exported.getTime()) ? `, exported ${exported.toLocaleDateString()}` : '';
+		contentEl.createEl('p', {
+			text: plan.pluginVersion
+				? `This file is from Eagle Bridge ${plan.pluginVersion}${when}.`
+				: 'This file has no export details. It looks like a copy of the plugin\'s data file.',
+		});
+
+		if (plan.pluginVersion && isNewerVersion(plan.pluginVersion, this.currentVersion)) {
+			contentEl.createEl('p', {
+				text: `It was made by a newer version than this one (${this.currentVersion}), so it may hold settings this version does not have. Those are skipped.`,
+				cls: 'cmdspace-eagle-setting-required',
+			});
+		}
+
+		if (plan.changed.length === 0) {
+			contentEl.createEl('p', { text: 'It matches your current settings, so there is nothing to import.' });
+		} else {
+			contentEl.createEl('p', {
+				text: `${plan.changed.length} ${plan.changed.length === 1 ? 'setting' : 'settings'} will change:`,
+			});
+			const list = contentEl.createEl('ul', { cls: 'cmdspace-eagle-import-list' });
+			for (const path of plan.changed) {
+				// Names only: values may be passwords or keys
+				list.createEl('li', { text: path });
+			}
+		}
+
+		contentEl.createEl('p', {
+			text: plan.includesSecrets
+				? 'This file includes passwords or API keys. They replace the ones saved here.'
+				: 'This file has no passwords or API keys. The ones saved here are kept.',
+		});
+
+		if (plan.ignored.length > 0) {
+			contentEl.createEl('p', {
+				text: `Skipped, because this version has no such setting or the value is the wrong kind: ${plan.ignored.join(', ')}.`,
+				cls: 'cmdspace-eagle-import-skipped',
+			});
+		}
+
+		const buttons = contentEl.createDiv({ cls: 'modal-button-container' });
+		if (plan.changed.length > 0) {
+			const importButton = buttons.createEl('button', { text: 'Import', cls: 'mod-cta' });
+			importButton.addEventListener('click', () => {
+				importButton.disabled = true;
+				void this.onConfirm().then(() => this.close());
+			});
+		}
+		buttons.createEl('button', { text: plan.changed.length > 0 ? 'Cancel' : 'Close' })
+			.addEventListener('click', () => this.close());
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
 	}
 }

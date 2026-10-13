@@ -252,10 +252,20 @@ The settings are organized into six tabs:
 | **Adding images** | Where pasted or dropped images go, the Eagle folder and tags they get, source capture, and backlinks to your notes |
 | **Embedding** | What embedded Eagle images link to, the metadata card, and search defaults |
 | **AI** | The AI provider and model behind the name, description and tag wands |
-| **Extras** | Excalidraw and Canvas support |
+| **Extras** | Excalidraw and Canvas support, and exporting or importing these settings |
 
 
 ![Settings](assets/CMDS-eagle6.png)
+
+### Export and Import
+
+**Settings → Extras → Export and import settings** saves every Eagle Bridge setting to a file and loads it again, as a backup or to carry your setup to another vault or computer.
+
+- **Export settings**: **Save to file** writes a `.json` file where you choose; **Copy** puts the same text on the clipboard.
+- **Include passwords and API keys** is off by default. The export then leaves out your cloud storage and AI credentials (API keys, the WebDAV password, S3 keys and custom upload headers) but keeps server addresses, user names and model names. Turn it on to carry the credentials too; the file then holds them as readable text, so keep it somewhere private.
+- **Import settings**: **Choose file** or **Paste**. You are shown the name of every setting that would change, and nothing changes until you confirm.
+
+An import only replaces what the file contains. A file exported without credentials leaves the credentials already saved in place, so loading it on a computer that is already set up does not sign you out of anything. Entries the file has that this version does not know are skipped and listed. A plain copy of the plugin's `data.json` can be imported the same way.
 
 ## Cloud Providers
 

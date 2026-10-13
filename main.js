@@ -2481,6 +2481,7 @@ init_modals();
 
 // src/settings.ts
 var import_obsidian5 = require("obsidian");
+var import_fs2 = require("fs");
 init_api();
 
 // src/cloud-providers.ts
@@ -3101,6 +3102,139 @@ function getExtFromFilename(filename) {
 
 // src/settings.ts
 init_metadata_card();
+
+// src/settings-transfer.ts
+init_types();
+var SETTINGS_EXPORT_FORMAT = "eagle-bridge-settings";
+var isPlainObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+function isSecretSettingName(name) {
+  return /key|secret|password|token/i.test(name) || name === "headers";
+}
+function withoutSecrets(value) {
+  if (!isPlainObject(value))
+    return value;
+  const result = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (isSecretSettingName(key))
+      continue;
+    result[key] = withoutSecrets(child);
+  }
+  return result;
+}
+function hasSecret(value) {
+  if (!isPlainObject(value))
+    return false;
+  return Object.entries(value).some(([key, child]) => {
+    if (isSecretSettingName(key)) {
+      return isPlainObject(child) ? Object.keys(child).length > 0 : child !== "" && child != null;
+    }
+    return hasSecret(child);
+  });
+}
+function buildSettingsExport(settings, pluginVersion, includeSecrets, now = new Date()) {
+  const known = {};
+  for (const key of Object.keys(DEFAULT_SETTINGS)) {
+    known[key] = settings[key];
+  }
+  const copy = JSON.parse(JSON.stringify(known));
+  const exported = includeSecrets ? copy : withoutSecrets(copy);
+  return {
+    format: SETTINGS_EXPORT_FORMAT,
+    formatVersion: 1,
+    pluginVersion,
+    exportedAt: now.toISOString(),
+    includesSecrets: includeSecrets && hasSecret(exported),
+    settings: exported
+  };
+}
+function settingsExportFileName(now = new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `eagle-bridge-settings-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.json`;
+}
+function sameKind(incoming, existing) {
+  if (Array.isArray(existing))
+    return Array.isArray(incoming);
+  if (isPlainObject(existing))
+    return isPlainObject(incoming);
+  return typeof incoming === typeof existing && !Array.isArray(incoming) && incoming !== null;
+}
+function mergeOver(existing, incoming, known, path, ignored) {
+  const result = { ...existing };
+  for (const [key, value] of Object.entries(incoming)) {
+    const here = path ? `${path}.${key}` : key;
+    if (known && !(key in known)) {
+      ignored.push(here);
+      continue;
+    }
+    const current = existing[key];
+    const template = known ? known[key] : current;
+    if (template !== void 0 && !sameKind(value, template)) {
+      ignored.push(here);
+      continue;
+    }
+    const names = path === "" && isPlainObject(template) && Object.keys(template).length > 0 ? template : null;
+    result[key] = isPlainObject(value) && isPlainObject(current) && key !== "headers" ? mergeOver(current, value, names, here, ignored) : value;
+  }
+  return result;
+}
+function listChanges(before, after, path, changed) {
+  if (isPlainObject(before) && isPlainObject(after) && !path.endsWith(".headers")) {
+    for (const key of /* @__PURE__ */ new Set([...Object.keys(before), ...Object.keys(after)])) {
+      listChanges(before[key], after[key], path ? `${path}.${key}` : key, changed);
+    }
+    return;
+  }
+  if (JSON.stringify(before) !== JSON.stringify(after))
+    changed.push(path);
+}
+function planSettingsImport(text, current) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text.replace(/^﻿/, ""));
+  } catch (e) {
+    throw new Error("This is not a settings file: it could not be read as JSON.");
+  }
+  if (!isPlainObject(parsed)) {
+    throw new Error("This is not an Eagle Bridge settings file.");
+  }
+  let source;
+  let pluginVersion = null;
+  let exportedAt = null;
+  if (parsed.format === SETTINGS_EXPORT_FORMAT) {
+    if (!isPlainObject(parsed.settings)) {
+      throw new Error("This settings file is damaged: it has no settings in it.");
+    }
+    source = parsed.settings;
+    pluginVersion = typeof parsed.pluginVersion === "string" ? parsed.pluginVersion : null;
+    exportedAt = typeof parsed.exportedAt === "string" ? parsed.exportedAt : null;
+  } else if (Object.keys(parsed).some((key) => key in DEFAULT_SETTINGS)) {
+    source = parsed;
+  } else {
+    throw new Error("This is not an Eagle Bridge settings file.");
+  }
+  const ignored = [];
+  const before = JSON.parse(JSON.stringify(current));
+  const after = mergeOver(before, source, DEFAULT_SETTINGS, "", ignored);
+  const changed = [];
+  listChanges(before, after, "", changed);
+  return {
+    settings: after,
+    changed,
+    ignored,
+    includesSecrets: hasSecret(source),
+    pluginVersion,
+    exportedAt
+  };
+}
+function isNewerVersion(a, b) {
+  const parts = (version) => version.split(".").map((part) => parseInt(part, 10) || 0);
+  const [x, y] = [parts(a), parts(b)];
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    if ((x[i] || 0) !== (y[i] || 0))
+      return (x[i] || 0) > (y[i] || 0);
+  }
+  return false;
+}
 
 // src/ai-providers.ts
 var import_obsidian4 = require("obsidian");
@@ -3806,12 +3940,14 @@ var SETTINGS_TABS = [
   { id: "adding", label: "Adding images", description: "What happens when you paste or drop a new image into a note." },
   { id: "embedding", label: "Embedding", description: "How images that are in Eagle appear in your notes." },
   { id: "ai", label: "AI", description: "Optional AI help for naming, describing and tagging images as you add them to Eagle." },
-  { id: "extras", label: "Extras", description: "Excalidraw and Canvas support." }
+  { id: "extras", label: "Extras", description: "Excalidraw and Canvas support, and exporting or importing these settings." }
 ];
 var CMDSPACEEagleSettingTab = class extends import_obsidian5.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.activeTab = "connections";
+    // Whether the next export carries passwords and API keys. Asked each time, never saved.
+    this.exportIncludesSecrets = false;
     this.plugin = plugin;
   }
   display() {
@@ -3845,6 +3981,7 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian5.PluginSettingTab {
       case "extras":
         this.renderExcalidrawSection(containerEl);
         this.renderCanvasSection(containerEl);
+        this.renderSettingsTransferSection(containerEl);
         break;
     }
     this.renderFooter(containerEl);
@@ -4488,6 +4625,103 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian5.PluginSettingTab {
       }));
     })();
   }
+  // ── Export and import ──
+  renderSettingsTransferSection(containerEl) {
+    new import_obsidian5.Setting(containerEl).setName("Export and import settings").setHeading();
+    new import_obsidian5.Setting(containerEl).setName("Include passwords and API keys").setDesc("Off: an export leaves out your cloud storage and AI credentials, and importing it keeps whatever credentials are already saved here. On: the file contains them as readable text, so keep it somewhere private.").addToggle((toggle) => toggle.setValue(this.exportIncludesSecrets).onChange((value) => {
+      this.exportIncludesSecrets = value;
+    }));
+    new import_obsidian5.Setting(containerEl).setName("Export settings").setDesc("Save every Eagle Bridge setting to a file, as a backup or to load in another vault or on another computer.").addButton((button) => button.setButtonText("Save to file").setCta().onClick(() => {
+      void this.exportSettingsToFile();
+    })).addButton((button) => button.setButtonText("Copy").setTooltip("Copy the settings to the clipboard instead").onClick(async () => {
+      await navigator.clipboard.writeText(this.buildExportText());
+      new import_obsidian5.Notice(this.exportIncludesSecrets ? "Settings copied, including passwords and API keys" : "Settings copied, without passwords and API keys");
+    }));
+    new import_obsidian5.Setting(containerEl).setName("Import settings").setDesc("Load settings from an exported file. You are shown what would change, and nothing changes until you confirm.").addButton((button) => button.setButtonText("Choose file").onClick(() => {
+      void this.importSettingsFromFile();
+    })).addButton((button) => button.setButtonText("Paste").setTooltip("Read settings copied to the clipboard instead").onClick(async () => {
+      this.reviewSettingsImport(await navigator.clipboard.readText());
+    }));
+  }
+  buildExportText() {
+    const file = buildSettingsExport(this.plugin.settings, this.plugin.manifest.version, this.exportIncludesSecrets);
+    return JSON.stringify(file, null, "	") + "\n";
+  }
+  // Obsidian's own save and open dialogs, as it uses for exporting a PDF. Null if unavailable.
+  getFileDialog() {
+    var _a, _b;
+    try {
+      const electron = window.electron || ((_a = window.require) == null ? void 0 : _a.call(window, "electron"));
+      return ((_b = electron == null ? void 0 : electron.remote) == null ? void 0 : _b.dialog) || null;
+    } catch (e) {
+      return null;
+    }
+  }
+  async exportSettingsToFile() {
+    const text = this.buildExportText();
+    const fileName = settingsExportFileName();
+    const filters = [{ name: "Settings files", extensions: ["json"] }];
+    try {
+      const dialog = this.getFileDialog();
+      if (dialog) {
+        const result = await dialog.showSaveDialog({ defaultPath: fileName, filters, properties: ["showOverwriteConfirmation"] });
+        if (result.canceled || !result.filePath)
+          return;
+        await import_fs2.promises.writeFile(result.filePath, text, "utf8");
+        new import_obsidian5.Notice(`Settings saved to ${result.filePath}`);
+        return;
+      }
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+      link.download = fileName;
+      link.click();
+      URL.revokeObjectURL(link.href);
+    } catch (error) {
+      console.error("[Eagle Bridge] Could not export settings:", error);
+      new import_obsidian5.Notice(`Could not save the settings file: ${error instanceof Error ? error.message : "unknown error"}`);
+    }
+  }
+  async importSettingsFromFile() {
+    const filters = [{ name: "Settings files", extensions: ["json"] }];
+    try {
+      const dialog = this.getFileDialog();
+      if (dialog) {
+        const result = await dialog.showOpenDialog({ filters, properties: ["openFile"] });
+        if (result.canceled || result.filePaths.length === 0)
+          return;
+        this.reviewSettingsImport(await import_fs2.promises.readFile(result.filePaths[0], "utf8"));
+        return;
+      }
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = ".json,application/json";
+      input.addEventListener("change", () => {
+        var _a;
+        const file = (_a = input.files) == null ? void 0 : _a[0];
+        if (file)
+          void file.text().then((text) => this.reviewSettingsImport(text));
+      });
+      input.click();
+    } catch (error) {
+      console.error("[Eagle Bridge] Could not read the settings file:", error);
+      new import_obsidian5.Notice(`Could not read the settings file: ${error instanceof Error ? error.message : "unknown error"}`);
+    }
+  }
+  // Works out what importing `text` would change and asks before doing it.
+  reviewSettingsImport(text) {
+    let plan;
+    try {
+      plan = planSettingsImport(text, this.plugin.settings);
+    } catch (error) {
+      new import_obsidian5.Notice(error instanceof Error ? error.message : "This is not an Eagle Bridge settings file.");
+      return;
+    }
+    new SettingsImportModal(this.app, plan, this.plugin.manifest.version, async () => {
+      await this.plugin.applyImportedSettings(plan.settings);
+      this.display();
+      new import_obsidian5.Notice(`Imported settings: ${plan.changed.length} changed`);
+    }).open();
+  }
   renderCanvasSection(containerEl) {
     new import_obsidian5.Setting(containerEl).setName("Canvas").setHeading();
     new import_obsidian5.Setting(containerEl).setName("Embed images in Canvas by URL").setDesc("When you paste or drop an image or an Eagle item onto an Obsidian Canvas, add it as a card that loads the image from a URL that works on your other devices, instead of saving a vault attachment. Without a way to make such a URL, Canvas handles the paste as usual.").addToggle((toggle) => toggle.setValue(this.plugin.settings.canvasIntegration).onChange(async (value) => {
@@ -4896,6 +5130,63 @@ var CMDSPACEEagleSettingTab = class extends import_obsidian5.PluginSettingTab {
         this.display();
       }));
     }
+  }
+};
+var SettingsImportModal = class extends import_obsidian5.Modal {
+  constructor(app, plan, currentVersion, onConfirm) {
+    super(app);
+    this.plan = plan;
+    this.currentVersion = currentVersion;
+    this.onConfirm = onConfirm;
+  }
+  onOpen() {
+    const { contentEl, plan } = this;
+    contentEl.empty();
+    contentEl.addClass("cmdspace-eagle-import-modal");
+    contentEl.createEl("h2", { text: "Import settings?" });
+    const exported = plan.exportedAt ? new Date(plan.exportedAt) : null;
+    const when = exported && !isNaN(exported.getTime()) ? `, exported ${exported.toLocaleDateString()}` : "";
+    contentEl.createEl("p", {
+      text: plan.pluginVersion ? `This file is from Eagle Bridge ${plan.pluginVersion}${when}.` : "This file has no export details. It looks like a copy of the plugin's data file."
+    });
+    if (plan.pluginVersion && isNewerVersion(plan.pluginVersion, this.currentVersion)) {
+      contentEl.createEl("p", {
+        text: `It was made by a newer version than this one (${this.currentVersion}), so it may hold settings this version does not have. Those are skipped.`,
+        cls: "cmdspace-eagle-setting-required"
+      });
+    }
+    if (plan.changed.length === 0) {
+      contentEl.createEl("p", { text: "It matches your current settings, so there is nothing to import." });
+    } else {
+      contentEl.createEl("p", {
+        text: `${plan.changed.length} ${plan.changed.length === 1 ? "setting" : "settings"} will change:`
+      });
+      const list = contentEl.createEl("ul", { cls: "cmdspace-eagle-import-list" });
+      for (const path of plan.changed) {
+        list.createEl("li", { text: path });
+      }
+    }
+    contentEl.createEl("p", {
+      text: plan.includesSecrets ? "This file includes passwords or API keys. They replace the ones saved here." : "This file has no passwords or API keys. The ones saved here are kept."
+    });
+    if (plan.ignored.length > 0) {
+      contentEl.createEl("p", {
+        text: `Skipped, because this version has no such setting or the value is the wrong kind: ${plan.ignored.join(", ")}.`,
+        cls: "cmdspace-eagle-import-skipped"
+      });
+    }
+    const buttons = contentEl.createDiv({ cls: "modal-button-container" });
+    if (plan.changed.length > 0) {
+      const importButton = buttons.createEl("button", { text: "Import", cls: "mod-cta" });
+      importButton.addEventListener("click", () => {
+        importButton.disabled = true;
+        void this.onConfirm().then(() => this.close());
+      });
+    }
+    buttons.createEl("button", { text: plan.changed.length > 0 ? "Cancel" : "Close" }).addEventListener("click", () => this.close());
+  }
+  onClose() {
+    this.contentEl.empty();
   }
 };
 
@@ -5509,6 +5800,16 @@ var CMDSPACELinkEagle = class extends import_obsidian6.Plugin {
       delete legacy.eagleEmbedUrlMode;
       await this.saveSettings();
     }
+  }
+  // Replaces every setting with an imported set, then reloads them the way startup does so
+  // the same checks and conversions apply.
+  async applyImportedSettings(settings) {
+    await this.saveData(settings);
+    await this.loadSettings();
+    await this.saveSettings();
+    this.extraLinksWarningShown = false;
+    this.localLinkWarningShown = false;
+    this.scanAndAttachSurfaces();
   }
   async saveSettings() {
     for (const config of Object.values(this.settings.cloudProviders)) {
